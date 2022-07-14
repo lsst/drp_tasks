@@ -22,7 +22,6 @@
 import numpy as np
 import astropy.time
 import astropy.units as u
-import sip_tpv
 import yaml
 import wcsfit
 import pandas as pd
@@ -111,8 +110,7 @@ def convertToAstPolyMapCoefficients(coefficients):
                 polyArray[vectorIndex, 2] = i
                 polyArray[vectorIndex, 3] = j
 
-    # TODO: add inverse coefficients, see jointcal for how to compute
-    astPoly = astshim.PolyMap(polyArray, 2, options="IterInverse=1,NIterInverse=10")
+    astPoly = astshim.PolyMap(polyArray, 2, options="IterInverse=1,NIterInverse=10,TolInverse=1e-7")
     return astPoly
 
 
@@ -269,7 +267,8 @@ class GblsstConfig(pipeBase.PipelineTaskConfig,
     )
 
     def setDefaults(self):
-        # Use only stars because aperture fluxes of galaxies are biased and depend on seeing.
+        # Use only stars because aperture fluxes of galaxies are biased and
+        # depend on seeing.
         self.sourceSelector["science"].doUnresolved = True
         self.sourceSelector["science"].unresolved.name = "extendedness"
 
@@ -332,11 +331,11 @@ class GblsstTask(pipeBase.PipelineTask):
             config=self.config.astrometryRefObjLoader,
             log=self.log)
 
-        outputCatalogs = self.run(**inputs, tract=tract, instrumentName=instrumentName)
+        output = self.run(**inputs, tract=tract, instrumentName=instrumentName)
 
         for outputRef in outputRefs.outputWcs:
             visit = outputRef.dataId['visit']
-            butlerQC.put(outputCatalogs[visit], outputRef)
+            butlerQC.put(output.outputCatalogs[visit], outputRef)
 
     def run(self, inputSourceTableVisitRefs, inputVisitSummary, skyMap, tract=None, instrumentName=None):
         """Run the WCS fit for a given set of visits
@@ -357,9 +356,12 @@ class GblsstTask(pipeBase.PipelineTask):
 
         Returns
         -------
-        outputCatalog : `list` of `lsst.afw.table.ExposureCatalog`
-            List of exposure catalogs (one per visit) with the WCS for each
-            detector set by the new fitted WCS
+        result : `lsst.pipe.base.Struct`
+            ``outputCatalog`` : `list` of `lsst.afw.table.ExposureCatalog`
+                List of exposure catalogs (one per visit) with the WCS for each
+                detector set by the new fitted WCS
+            ``fitModel`` : `wcsfit.WCSFit`
+                Model-fitting object with final model parameters
         """
         # Set up an instrument object
         instrument = wcsfit.Instrument(instrumentName)
@@ -368,9 +370,10 @@ class GblsstTask(pipeBase.PipelineTask):
         exposuresHelper, medianEpoch = self._get_exposure_info(inputVisitSummary, instrument)
 
         # Get information about the extent of the input visits
-        fields, fieldCenter, fieldRadius = self._prep_sky(tract, skyMap, epoch=medianEpoch)
+        fields, fieldCenter, fieldRadius = self._prep_sky(tract, skyMap, medianEpoch)
 
-        # Set up class to associate sources into matches using a friends-of-friends algorithm
+        # Set up class to associate sources into matches using a
+        # friends-of-friends algorithm
         associations = wcsfit.FoFClass(fields, [instrument], exposuresHelper,
                                        [fieldRadius.asDegrees()],
                                        (self.config.matchRadius * u.arcsec).to(u.degree).value)
@@ -381,7 +384,8 @@ class GblsstTask(pipeBase.PipelineTask):
         # Add the science catalogs and associate new sources as they are added
         self._load_catalogs_and_associate(associations, inputSourceTableVisitRefs)
 
-        # Set up a YAML-type string using the config variables and a sample visit
+        # Set up a YAML-type string using the config variables and a sample
+        # visit
         inputYAML = self.makeYAML(inputVisitSummary[0])
 
         # Set up the WCS-fitting class using the results of the FOF associator
@@ -409,10 +413,11 @@ class GblsstTask(pipeBase.PipelineTask):
                          f'tmp_output/wcscat_{time_str}.fits',
                          f'tmp_output/starcat_{time_str}.fits')
         outputCatalogs = self._makeOutputs(wcsf, inputVisitSummary[0])
-        import ipdb; ipdb.set_trace()
-        return outputCatalogs
 
-    def _prep_sky(self, tract, skyMap, epoch=None):
+        return pipeBase.Struct(outputCatalogs=outputCatalogs,
+                               fitModel=wcsf)
+
+    def _prep_sky(self, tract, skyMap, epoch):
         """Get center and radius of the input tract. This assumes that all
         visits will be put into the same `wcsfit.Field` and fit together.
 
@@ -486,9 +491,7 @@ class GblsstTask(pipeBase.PipelineTask):
         devices = []
         # Get information for all the science visits
         for v, visitSummary in enumerate(visitSummaryTables):
-
             visitInfo = visitSummary[0].getVisitInfo()
-
             visit = visitSummary[0]['visit']
             if visit not in self.visits:
                 self.visits.append(visit)
@@ -783,6 +786,79 @@ class GblsstTask(pipeBase.PipelineTask):
 
         wcsf.setObjects(extensionIndex, self.refObjects, 'ra', 'dec', ['raCov', 'decCov', 'raDecCov'])
 
+    def _makeAfwWcs(self, mapDict, centerRA, centerDec, doNormalizePixels=False, xScale=1, yScale=1):
+        """Make an `lsst.afw.geom.SkyWcs` from a dictionary of mappings
+
+        Parameters
+        ----------
+        mapDict : `dict`
+            Dictionary of mapping parameters
+        centerRA : `lsst.geom.Angle`
+            RA of the tangent point
+        centerDec : `lsst.geom.Angle`
+            Declination of the tangent point
+        doNormalizePixels : `bool`
+            Whether to normalize pixels so that range is [-1,1]
+        xScale : `float`
+            Factor by which to normalize x-dimension. Corresponds to width of
+            detector
+        yScale : `float`
+            Factor by which to normalize y-dimension. Corresponds to height of
+            detector
+
+        Returns
+        -------
+        outWCS : `lsst.afw.geom.SkyWcs`
+            WCS constructed from the input mappings
+        """
+        # Set up pixel frames
+        pixelFrame = astshim.Frame(2, "Domain=PIXELS")
+        normedPixelFrame = astshim.Frame(2, "Domain=NORMEDPIXELS")
+
+        if doNormalizePixels:
+            # Pixels will need to be rescaled before going into the mappings
+            normCoefficients = [-1.0, 2.0/xScale, 0,
+                                -1.0, 0, 2.0/yScale]
+            normMap = convertToAstPolyMapCoefficients(normCoefficients)
+        else:
+            normMap = astshim.UnitMap(2)
+
+        # All of the detectors for one visit map to the same tangent plane
+        tangentPoint = lsst.geom.SpherePoint(centerRA, centerDec)
+        cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0 * lsst.geom.degrees, True)
+        iwcToSkyWcs = afwgeom.makeSkyWcs(lsst.geom.Point2D(0, 0), tangentPoint, cdMatrix)
+        iwcToSkyMap = iwcToSkyWcs.getFrameDict().getMapping("PIXELS", "SKY")
+        skyFrame = iwcToSkyWcs.getFrameDict().getFrame("SKY")
+
+        frameDict = astshim.FrameDict(pixelFrame)
+        frameDict.addFrame("PIXELS", normMap, normedPixelFrame)
+
+        currentFrameName = "NORMEDPIXELS"
+
+        # Assume python 3.7+ so dict is ordered:
+        for m, mapElement in enumerate(mapDict.values()):
+            mapType = mapElement['Type']
+
+            if mapType == 'Poly':
+                mapCoefficients = mapElement['Coefficients']
+                astMap = convertToAstPolyMapCoefficients(mapCoefficients)
+            elif mapType == 'Identity':
+                astMap = astshim.UnitMap(2)
+            else:
+                raise ValueError(f"Converting map type {mapType} to WCS is not supported")
+
+            if m == len(mapDict) - 1:
+                newFrameName = "IWC"
+            else:
+                newFrameName = "INTERMEDIATE" + str(m)
+            newFrame = astshim.Frame(2, f"Domain={newFrameName}")
+            frameDict.addFrame(currentFrameName, astMap, newFrame)
+            currentFrameName = newFrameName
+        frameDict.addFrame("IWC", iwcToSkyMap, skyFrame)
+
+        outWCS = afwgeom.SkyWcs(frameDict)
+        return outWCS
+
     def _makeOutputs(self, wcsf, inputVisitSummary):
         """Make a WCS object out of the WCS models.
 
@@ -807,17 +883,9 @@ class GblsstTask(pipeBase.PipelineTask):
         schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
         schema.addField('visit', type='L', doc='Visit number')
 
-        # Set up pixel frames
-        pixelFrame = astshim.Frame(2, "Domain=PIXELS")
-        normedPixelFrame = astshim.Frame(2, "Domain=NORMEDPIXELS")
-
         # Pixels will need to be rescaled before going into the mappings
         xscale = inputVisitSummary[0]['bbox_max_x'] - inputVisitSummary[0]['bbox_min_x']
         yscale = inputVisitSummary[0]['bbox_max_y'] - inputVisitSummary[0]['bbox_min_y']
-        normCoefficients = [-1.0, 2.0/xscale, 0,
-                            -1.0, 0, 2.0/yscale]
-
-        normMap = convertToAstPolyMapCoefficients(normCoefficients)
 
         catalogs = {}
         for v, visit in enumerate(self.visits):
@@ -827,44 +895,25 @@ class GblsstTask(pipeBase.PipelineTask):
             catalog.resize(len(self.devices))
             catalog['visit'] = visit
 
-            # All of the detectors for one visit map to the same tangent plane
-            tangentPoint = lsst.geom.SpherePoint(self.ras[v], self.decs[v], lsst.geom.radians)
-            cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0 * lsst.geom.degrees, True)
-            iwcToSkyWcs = afwgeom.makeSkyWcs(lsst.geom.Point2D(0, 0), tangentPoint, cdMatrix)
-            iwcToSkyMap = iwcToSkyWcs.getFrameDict().getMapping("PIXELS", "SKY")
-            skyFrame = iwcToSkyWcs.getFrameDict().getFrame("SKY")
-
             for d, detector in enumerate(self.devices):
                 mapName = f"{visit}/{detector}"
 
-                frameDict = astshim.FrameDict(pixelFrame)
-
-                frameDict.addFrame("PIXELS", normMap, normedPixelFrame)
-
                 mapElements = wcsf.mapCollection.orderAtoms(f"{mapName}/base")
-
-                currentFrameName = "NORMEDPIXELS"
+                mapDict = {}
                 for m, mapElement in enumerate(mapElements):
                     mapType = wcsf.mapCollection.getMapType(mapElement)
+                    mapDict[mapElement] = {'Type': mapType}
 
                     if mapType == 'Poly':
                         mapCoefficients = mapParams[mapElement]
-                        astMap = convertToAstPolyMapCoefficients(mapCoefficients)
-                    elif mapType == 'Identity':
-                        astMap = astshim.UnitMap(2)
-                    else:
-                        raise ValueError(f"Converting map type {mapType} to WCS is not supported")
+                        mapDict[mapElement]['Coefficients'] = mapCoefficients
 
-                    if m == len(mapElements) - 1:
-                        newFrameName = "IWC"
-                    else:
-                        newFrameName = "INTERMEDIATE" + str(m)
-                    newFrame = astshim.Frame(2, f"Domain={newFrameName}")
-                    frameDict.addFrame(currentFrameName, astMap, newFrame)
-                    currentFrameName = newFrameName
-                frameDict.addFrame("IWC", iwcToSkyMap, skyFrame)
-
-                outWCS = afwgeom.SkyWcs(frameDict)
+                # The RA and Dec of the visit are needed for the last step of
+                # the mapping from the visit tangent plane to RA and Dec
+                outWCS = self._makeAfwWcs(mapDict, self.ras[v] * lsst.geom.radians,
+                                          self.decs[v] * lsst.geom.radians,
+                                          doNormalizePixels=True,
+                                          xScale=xscale, yScale=yscale)
 
                 catalog[d].setId(detector)
                 catalog[d].setWcs(outWCS)
