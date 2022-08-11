@@ -30,7 +30,7 @@ import wcsfit
 import lsst.utils
 import lsst.afw.table as afwTable
 import lsst.afw.geom as afwgeom
-import lsst.drp.tasks.gblsst as gblsst
+import lsst.drp.tasks.wcsfit as lsst_wcsfit
 from lsst.daf.base import PropertyList
 from lsst.daf.butler import DimensionUniverse, DatasetType, DatasetRef, StorageClass
 from lsst.meas.algorithms import ReferenceObjectLoader
@@ -48,11 +48,11 @@ class MockInputVisitSummary():
         schema.addField('visit', type='L', doc='Visit number')
 
         catalog = afwTable.ExposureCatalog(schema)
-        catalog.resize(len(self.devices))
+        catalog.resize(len(self.detectors))
         catalog['visit'] = visit
 
 
-class MockSourceTableRef():
+class MockInputCatalogRef():
 
     def __init__(self, source_table, ref=None, dataId=None):
         self.source_table = source_table
@@ -77,7 +77,7 @@ class MockSourceTableRef():
             return self.source_table.copy()
 
 
-class MockDataId():
+class MockRefCatDataId():
 
     def __init__(self, region):
         self.region = region
@@ -87,7 +87,7 @@ class MockDataId():
         self.ref = DatasetRef(datasetType, {'htm7': "mockRefCat"})
 
 
-class TestGblsst(lsst.utils.tests.TestCase):
+class TestWCSFit(lsst.utils.tests.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -97,15 +97,11 @@ class TestGblsst(lsst.utils.tests.TestCase):
         inReferenceFraction = 1
         inScienceFraction = 1
 
-        # Make skymap
-        cls.skymap = cls._make_skymap()
-
         # Make fake data
         packageDir = lsst.utils.getPackageDir('drp_tasks')
         cls.datadir = os.path.join(packageDir, 'tests', "data")
 
         cls.fieldNumber = 0
-        cls.tract = 9813
         cls.instrumentName = 'HSC'
         cls.instrument = wcsfit.Instrument(cls.instrumentName)
 
@@ -118,12 +114,12 @@ class TestGblsst(lsst.utils.tests.TestCase):
                                                                     f'visitSummary_{testVisit}.fits'))
             cls.inputVisitSummary.append(visSum)
 
-        cls.gblssttask = gblsst.GblsstTask()
+        cls.WCSFitTask = lsst_wcsfit.WCSFitTask()
 
-        cls.exposuresHelper, cls.medianEpoch = cls.gblssttask._get_exposure_info(cls.inputVisitSummary,
+        cls.exposuresHelper, cls.medianEpoch = cls.WCSFitTask._get_exposure_info(cls.inputVisitSummary,
                                                                                  cls.instrument)
 
-        cls.fields, cls.fieldCenter, cls.fieldRadius = cls.gblssttask._prep_sky(cls.tract, cls.skymap,
+        cls.fields, cls.fieldCenter, cls.fieldRadius = cls.WCSFitTask._prep_sky(cls.inputVisitSummary,
                                                                                 cls.medianEpoch)
 
         # Bounding box of observations:
@@ -158,7 +154,7 @@ class TestGblsst(lsst.utils.tests.TestCase):
         cls.refObjectLoader.config.requireProperMotion = False
         cls.refObjectLoader.config.anyFilterMapsToThis = 'test_filter'
 
-        cls.gblssttask.astrometryRefObjLoader = cls.refObjectLoader
+        cls.WCSFitTask.refObjectLoader = cls.refObjectLoader
 
         # Get True WCS for stars:
         with open(os.path.join(cls.datadir, 'sample_wcs.yaml'), 'r') as f:
@@ -167,24 +163,8 @@ class TestGblsst(lsst.utils.tests.TestCase):
         trueWCSs = cls._make_wcs(cls.trueModel, cls.inputVisitSummary)
 
         # Make source catalogs:
-        cls.inputSourceTableVisitRefs = cls._make_sourceCat(starIds, starRAs, starDecs, trueWCSs,
-                                                            inScienceFraction)
-
-    @classmethod
-    def _make_skymap(cls):
-        """Make a testing skymap.
-
-        Returns
-        -------
-        `lsst.skymap.ringsSkyMap.RingsSkyMap`
-            Skymap that mimics the "hsc_rings_v1" skymap
-        """
-        skymap_config = lsst.skymap.ringsSkyMap.RingsSkyMapConfig()
-        skymap_config.numRings = 120
-        skymap_config.projection = "TAN"
-        skymap_config.tractOverlap = 1.0/60
-        skymap_config.pixelScale = 0.168
-        return lsst.skymap.ringsSkyMap.RingsSkyMap(skymap_config)
+        cls.inputCatalogRefs = cls._make_sourceCat(starIds, starRAs, starDecs, trueWCSs,
+                                                   inScienceFraction)
 
     @classmethod
     def _make_refCat(cls, starIds, starRas, starDecs, inReferenceFraction):
@@ -203,9 +183,9 @@ class TestGblsst(lsst.utils.tests.TestCase):
 
         Returns
         -------
-        refDataId : MockDataId
+        refDataId : MockRefCatDataId
             Object that replicates the functionality of a dataId
-        deferredRefCat : MockSourceTableRef
+        deferredRefCat : MockInputCatalogRef
             Object that replicates the functionality of a `DeferredDatasetRef`
         """
         nRefs = int(cls.nStars * inReferenceFraction)
@@ -229,8 +209,8 @@ class TestGblsst(lsst.utils.tests.TestCase):
             record.set(fluxKey, 1)
             record.set(raErrKey, 0.00001)
             record.set(decErrKey, 0.00001)
-        refDataId = MockDataId(cls.boundingPolygon)
-        deferredRefCat = MockSourceTableRef(refCat, ref=refDataId.ref)
+        refDataId = MockRefCatDataId(cls.boundingPolygon)
+        deferredRefCat = MockInputCatalogRef(refCat, ref=refDataId.ref)
 
         return refDataId, deferredRefCat
 
@@ -254,10 +234,10 @@ class TestGblsst(lsst.utils.tests.TestCase):
 
         Returns
         -------
-        sourceCat : `list` of `MockSourceTableRef`
+        sourceCat : `list` of `MockInputCatalogRef`
             List of mock reference to source catalogs.
         """
-        inputSourceTableVisitRefs = []
+        inputCatalogRefs = []
         # Take a subset of the simulated data
         # Use true wcs objects to put simulated data into ccds
         bbox = lsst.geom.BoxD(lsst.geom.Point2D(cls.inputVisitSummary[0][0]['bbox_min_x'],
@@ -265,7 +245,7 @@ class TestGblsst(lsst.utils.tests.TestCase):
                               lsst.geom.Point2D(cls.inputVisitSummary[0][0]['bbox_max_x'],
                                                 cls.inputVisitSummary[0][0]['bbox_max_y']))
         bboxCorners = bbox.getCorners()
-        cls.sourceTableRefs = []
+        cls.inputCatalogRefs = []
         for v, visit in enumerate(cls.testVisits):
             nVisStars = int(cls.nStars * inScienceFraction)
             visitStarIndices = np.random.choice(cls.nStars, nVisStars, replace=False)
@@ -317,11 +297,11 @@ class TestGblsst(lsst.utils.tests.TestCase):
 
             visitSourceTable = pd.concat(sourceCats)
 
-            sourceTableRef = MockSourceTableRef(visitSourceTable, dataId={"visit": visit})
+            inputCatalogRef = MockInputCatalogRef(visitSourceTable, dataId={"visit": visit})
 
-            inputSourceTableVisitRefs.append(sourceTableRef)
+            inputCatalogRefs.append(inputCatalogRef)
 
-        return inputSourceTableVisitRefs
+        return inputCatalogRefs
 
     @classmethod
     def _make_wcs(cls, model, inputVisitSummaries):
@@ -377,7 +357,7 @@ class TestGblsst(lsst.utils.tests.TestCase):
                                        + detectorModel['YPoly']['Coefficients'])
                     mapDict[detectorMapName]['Coefficients'] = mapCoefficients
 
-                outWCS = cls.gblssttask._makeAfwWcs(mapDict, raDec.getRa(), raDec.getDec(),
+                outWCS = cls.WCSFitTask._makeAfwWcs(mapDict, raDec.getRa(), raDec.getDec(),
                                                     doNormalizePixels=True, xScale=xscale,
                                                     yScale=yscale)
                 catalog[d].setId(detectorId)
@@ -398,9 +378,9 @@ class TestGblsst(lsst.utils.tests.TestCase):
         # visit plus one for the reference catalog
         totalExtensions = sum([len(visSum) for visSum in self.inputVisitSummary]) + 1
 
-        self.assertEqual(totalExtensions, len(self.gblssttask.extensionInfo))
+        self.assertEqual(totalExtensions, len(self.WCSFitTask.extensionInfo))
 
-        taskVisits = set(self.gblssttask.extensionInfo['visit'])
+        taskVisits = set(self.WCSFitTask.extensionInfo['visit'])
         self.assertEqual(taskVisits, set(self.testVisits + [-1]))
 
         xx = np.linspace(0, 2000, 3)
@@ -410,14 +390,14 @@ class TestGblsst(lsst.utils.tests.TestCase):
             visit = visSum[0]['visit']
             for detectorInfo in visSum:
                 detector = detectorInfo['id']
-                visDetMatch = ((self.gblssttask.extensionInfo['visit'] == visit)
-                               & (self.gblssttask.extensionInfo['device'] == detector))
-                extensionIndex = self.gblssttask.extensionInfo[visDetMatch].index[0]
-                gblsstWcs = self.gblssttask.extensionInfo.iloc[extensionIndex]['wcs']
+                visDetMatch = ((self.WCSFitTask.extensionInfo['visit'] == visit)
+                               & (self.WCSFitTask.extensionInfo['detector'] == detector))
+                extensionIndex = self.WCSFitTask.extensionInfo[visDetMatch].index[0]
+                fitWcs = self.WCSFitTask.extensionInfo.iloc[extensionIndex]['wcs']
                 calexpWcs = detectorInfo.getWcs()
 
-                tanPlaneXY = np.array([gblsstWcs.toWorld(x, y) for (x, y) in zip(xgrid.ravel(),
-                                                                                 ygrid.ravel())])
+                tanPlaneXY = np.array([fitWcs.toWorld(x, y) for (x, y) in zip(xgrid.ravel(),
+                                                                              ygrid.ravel())])
 
                 calexpra, calexpdec = calexpWcs.pixelToSkyArray(xgrid.ravel(), ygrid.ravel(), degrees=True)
 
@@ -444,9 +424,9 @@ class TestGblsst(lsst.utils.tests.TestCase):
 
         tmpAssociations = wcsfit.FoFClass(self.fields, [self.instrument], self.exposuresHelper,
                                           [self.fieldRadius.asDegrees()],
-                                          (self.gblssttask.config.matchRadius * u.arcsec).to(u.degree).value)
+                                          (self.WCSFitTask.config.matchRadius * u.arcsec).to(u.degree).value)
 
-        self.gblssttask._load_refCat(tmpAssociations, self.fieldCenter, self.fieldRadius, epoch=2015)
+        self.WCSFitTask._load_refCat(tmpAssociations, self.fieldCenter, self.fieldRadius, epoch=2015)
 
         # We have only loaded one catalog, so getting the 'matches' should just
         # return the same objects we put in, except some random objects that
@@ -462,19 +442,19 @@ class TestGblsst(lsst.utils.tests.TestCase):
 
         tmpAssociations = wcsfit.FoFClass(self.fields, [self.instrument], self.exposuresHelper,
                                           [self.fieldRadius.asDegrees()],
-                                          (self.gblssttask.config.matchRadius * u.arcsec).to(u.degree).value)
-        self.gblssttask._load_catalogs_and_associate(tmpAssociations, self.inputSourceTableVisitRefs)
+                                          (self.WCSFitTask.config.matchRadius * u.arcsec).to(u.degree).value)
+        self.WCSFitTask._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs)
 
         tmpAssociations.sortMatches(self.fieldNumber, minMatches=2)
 
         matchIds = []
         correctMatches = []
         for (s, e, o) in zip(tmpAssociations.sequence, tmpAssociations.extn, tmpAssociations.obj):
-            objExtension = self.gblssttask.extensionInfo.iloc[e]
+            objExtension = self.WCSFitTask.extensionInfo.iloc[e]
             objVisitInd = objExtension['visitIndex']
-            objDet = objExtension['device']
-            ExtnInds = self.inputSourceTableVisitRefs[objVisitInd].get()['detector'] == objDet
-            objInfo = self.inputSourceTableVisitRefs[objVisitInd].get()[ExtnInds].iloc[o]
+            objDet = objExtension['detector']
+            ExtnInds = self.inputCatalogRefs[objVisitInd].get()['detector'] == objDet
+            objInfo = self.inputCatalogRefs[objVisitInd].get()[ExtnInds].iloc[o]
             if s == 0:
                 if len(matchIds) > 0:
                     correctMatches.append(len(set(matchIds)) == 1)
@@ -489,16 +469,16 @@ class TestGblsst(lsst.utils.tests.TestCase):
     def test_make_outputs(self):
         """Test that the run method recovers the input model parameters.
         """
-        gbdesTask = gblsst.GblsstTask()
-        gbdesTask.astrometryRefObjLoader = self.refObjectLoader
+        WCSFitTask = lsst_wcsfit.WCSFitTask()
+        WCSFitTask.refObjectLoader = self.refObjectLoader
 
-        outputs = gbdesTask.run(self.inputSourceTableVisitRefs, self.inputVisitSummary, self.skymap,
-                                tract=self.tract, instrumentName=self.instrumentName)
+        outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
+                                 instrumentName=self.instrumentName)
 
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
-            outputWcsCatalog = outputs.outputCatalogs[visit]
-            visitSources = self.inputSourceTableVisitRefs[v].get()
+            outputWcsCatalog = outputs.outputWCSs[visit]
+            visitSources = self.inputCatalogRefs[v].get()
             for d, detectorRow in enumerate(visitSummary):
                 detectorId = detectorRow['id']
                 fitwcs = outputWcsCatalog[d].getWcs()
@@ -515,11 +495,11 @@ class TestGblsst(lsst.utils.tests.TestCase):
     def test_run(self):
         """Test that run method recovers the input model parameters
         """
-        gbdesTask = gblsst.GblsstTask()
-        gbdesTask.astrometryRefObjLoader = self.refObjectLoader
+        WCSFitTask = lsst_wcsfit.WCSFitTask()
+        WCSFitTask.refObjectLoader = self.refObjectLoader
 
-        outputs = gbdesTask.run(self.inputSourceTableVisitRefs, self.inputVisitSummary, self.skymap,
-                                tract=self.tract, instrumentName=self.instrumentName)
+        outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
+                                 instrumentName=self.instrumentName)
 
         outputMaps = outputs.fitModel.mapCollection.getParamDict()
 
