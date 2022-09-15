@@ -298,7 +298,7 @@ class WCSFitConfig(pipeBase.PipelineTaskConfig,
     )
     exposureModel = pexConfig.ListField(
         dtype=str,
-        doc="List of mappyings to apply to transform from intermediate frame to sky coordinates",
+        doc="List of mappings to apply to transform from intermediate frame to sky coordinates",
         default=["EXPOSURE/poly"]
     )
     devicePolyOrder = pexConfig.Field(
