@@ -464,9 +464,6 @@ class WCSFitTask(pipeBase.PipelineTask):
 
         outputWCSs = self._makeOutputs(wcsf, inputVisitSummary[0])
         outputCatalog = pd.DataFrame(wcsf.getOutputCatalog())
-        outputCatalog[["clip", "reserve", "hasPM"]] = outputCatalog[["clip", "reserve", "hasPM"]].astype(bool)
-        intFields = ["matchID", "catalogNumber", "objectNumber"]
-        outputCatalog[intFields] = outputCatalog[intFields.astype(int)]
 
         return pipeBase.Struct(outputWCSs=outputWCSs,
                                fitModel=wcsf,
