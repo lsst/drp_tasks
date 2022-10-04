@@ -22,6 +22,7 @@
 import numpy as np
 import astropy.time
 import astropy.units as u
+import astropy.coordinates
 import yaml
 import wcsfit
 import pandas as pd
@@ -278,12 +279,12 @@ class WCSFitConfig(pipeBase.PipelineTaskConfig,
     )
     systematicError = pexConfig.Field(
         dtype=float,
-        doc="Systematic error padding for the science images (arcsec)",
+        doc="Systematic error padding for the science images (marcsec)",
         default=0.0
     )
     referenceSystematicError = pexConfig.Field(
         dtype=float,
-        doc="Systematic error padding for the reference catalog (arcsec)",
+        doc="Systematic error padding for the reference catalog (marcsec)",
         default=0.0
     )
     modelComponents = pexConfig.ListField(
@@ -378,6 +379,9 @@ class WCSFitTask(pipeBase.PipelineTask):
 
         instrumentName = butlerQC.quantum.dataId['instrument']
 
+        sampleRefCat = inputs['referenceCatalog'][0].get()
+        refEpoch = sampleRefCat[0]['epoch']
+
         self.refObjectLoader = ReferenceObjectLoader(
             dataIds=[ref.datasetRef.dataId
                      for ref in inputRefs.referenceCatalog],
@@ -386,14 +390,14 @@ class WCSFitTask(pipeBase.PipelineTask):
         self.refObjectLoader.config.requireProperMotion = self.config.requireProperMotion
         self.refObjectLoader.config.anyFilterMapsToThis = self.config.anyFilterMapsToThis
 
-        output = self.run(**inputs, instrumentName=instrumentName)
+        output = self.run(**inputs, instrumentName=instrumentName, refEpoch=refEpoch)
 
         for outputRef in outputRefs.outputWcs:
             visit = outputRef.dataId['visit']
             butlerQC.put(output.outputWCSs[visit], outputRef)
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
 
-    def run(self, inputCatalogRefs, inputVisitSummary, instrumentName=None):
+    def run(self, inputCatalogRefs, inputVisitSummary, instrumentName=None, refEpoch=None):
         """Run the WCS fit for a given set of visits
 
         Parameters
@@ -422,7 +426,8 @@ class WCSFitTask(pipeBase.PipelineTask):
         instrument = wcsfit.Instrument(instrumentName)
 
         # Get RA, Dec, MJD, etc., for the input visits
-        exposuresHelper, medianEpoch = self._get_exposure_info(inputVisitSummary, instrument)
+        exposuresHelper, medianEpoch = self._get_exposure_info(inputVisitSummary, instrument,
+                                                               refEpoch=refEpoch)
 
         # Get information about the extent of the input visits
         fields, fieldCenter, fieldRadius = self._prep_sky(inputVisitSummary, medianEpoch)
@@ -435,7 +440,7 @@ class WCSFitTask(pipeBase.PipelineTask):
                                        (self.config.matchRadius * u.arcsec).to(u.degree).value)
 
         # Add the reference catalog to the associator
-        self._load_refCat(associations, fieldCenter, fieldRadius, epoch=medianEpoch)
+        self._load_refCat(associations, fieldCenter, fieldRadius, epoch=refEpoch)
 
         # Add the science catalogs and associate new sources as they are added
         self._load_catalogs_and_associate(associations, inputCatalogRefs)
@@ -508,7 +513,8 @@ class WCSFitTask(pipeBase.PipelineTask):
 
         return fields, center, radius
 
-    def _get_exposure_info(self, visitSummaryTables, instrument, fieldNumber=0, instrumentNumber=0):
+    def _get_exposure_info(self, visitSummaryTables, instrument, fieldNumber=0, instrumentNumber=0,
+                           refEpoch=None):
         """Get various information about the input visits to feed to the
         fitting routines.
 
@@ -538,6 +544,7 @@ class WCSFitTask(pipeBase.PipelineTask):
         airmasses = []
         exposureTimes = []
         mjds = []
+        observatories = []
         wcss = []
 
         extensionType = []
@@ -558,7 +565,17 @@ class WCSFitTask(pipeBase.PipelineTask):
             airmasses.append(visitInfo.getBoresightAirmass())
             exposureTimes.append(visitInfo.getExposureTime())
             obsDate = visitInfo.getDate()
-            mjds.append(obsDate.get(obsDate.MJD))
+            obsMJD = obsDate.get(obsDate.MJD)
+            mjds.append(obsMJD)
+            # Get the observatory ICRS position for use in fitting parallax
+            obsLon = visitInfo.observatory.getLongitude().asDegrees()
+            obsLat = visitInfo.observatory.getLatitude().asDegrees()
+            obsElev = visitInfo.observatory.getElevation()
+            earthLocation = astropy.coordinates.EarthLocation.from_geodetic(obsLon, obsLat, obsElev)
+            observatory_gcrs = earthLocation.get_gcrs(astropy.time.Time(obsMJD, format='mjd'))
+            observatory_icrs = observatory_gcrs.transform_to(astropy.coordinates.ICRS())
+            # We want the position in AU in Cartesian coordinates
+            observatories.append(observatory_icrs.cartesian.xyz.to(u.AU).value)
 
             for row in visitSummary:
                 detector = row['id']
@@ -583,7 +600,7 @@ class WCSFitTask(pipeBase.PipelineTask):
 
         # Set the reference epoch to be the median of the science visits.
         # The reference catalog will be shifted to this date.
-        medianEpoch = np.median(mjds)
+        medianEpoch = astropy.time.Time(np.median(mjds), format='mjd').decimalyear
 
         # Add information for the reference catalog. Most of the values are
         # not used.
@@ -598,7 +615,8 @@ class WCSFitTask(pipeBase.PipelineTask):
         self.decs.append(0.0)
         airmasses.append(0.0)
         exposureTimes.append(0)
-        mjds.append(medianEpoch)
+        mjds.append((refEpoch if (refEpoch is not None) else medianEpoch))
+        observatories.append(np.array([0, 0, 0]))
         identity = wcsfit.IdentityMap()
         icrs = wcsfit.SphericalICRS()
         refWcs = wcsfit.Wcs(identity, icrs, "Identity", np.pi / 180.)
@@ -624,7 +642,8 @@ class WCSFitTask(pipeBase.PipelineTask):
                                                  self.decs,
                                                  airmasses,
                                                  exposureTimes,
-                                                 mjds)
+                                                 mjds,
+                                                 observatories)
 
         return exposuresHelper, medianEpoch
 
@@ -684,7 +703,6 @@ class WCSFitTask(pipeBase.PipelineTask):
         detectorIndex = self.extensionInfo.iloc[extensionIndex]['detectorIndex']
         refWcs = self.extensionInfo.iloc[extensionIndex]['wcs']
 
-        # TODO: Any way to include the proper motion information here?
         associations.addCatalog(refWcs, "STELLAR", visitIndex, fieldIndex, instrumentIndex, detectorIndex,
                                 extensionIndex, np.ones(len(refCat), dtype=bool),
                                 ra, dec, np.arange(len(ra)))

@@ -104,6 +104,7 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         cls.fieldNumber = 0
         cls.instrumentName = 'HSC'
         cls.instrument = wcsfit.Instrument(cls.instrumentName)
+        cls.refEpoch = 57205.5
 
         # Make test inputVisitSummary. VisitSummaryTables are taken from
         # collection HSC/runs/RC2/w_2022_20/DM-34794
@@ -473,7 +474,7 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         WCSFitTask.refObjectLoader = self.refObjectLoader
 
         outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
-                                 instrumentName=self.instrumentName)
+                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch)
 
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
@@ -499,7 +500,7 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         WCSFitTask.refObjectLoader = self.refObjectLoader
 
         outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
-                                 instrumentName=self.instrumentName)
+                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch)
 
         outputMaps = outputs.fitModel.mapCollection.getParamDict()
 
