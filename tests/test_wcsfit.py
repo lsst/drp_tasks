@@ -379,7 +379,7 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         # visit plus one for the reference catalog
         totalExtensions = sum([len(visSum) for visSum in self.inputVisitSummary]) + 1
 
-        self.assertEqual(totalExtensions, len(self.WCSFitTask.extensionInfo))
+        self.assertEqual(totalExtensions, len(self.WCSFitTask.extensionInfo['visit']))
 
         taskVisits = set(self.WCSFitTask.extensionInfo['visit'])
         self.assertEqual(taskVisits, set(self.testVisits + [-1]))
@@ -391,10 +391,9 @@ class TestWCSFit(lsst.utils.tests.TestCase):
             visit = visSum[0]['visit']
             for detectorInfo in visSum:
                 detector = detectorInfo['id']
-                visDetMatch = ((self.WCSFitTask.extensionInfo['visit'] == visit)
-                               & (self.WCSFitTask.extensionInfo['detector'] == detector))
-                extensionIndex = self.WCSFitTask.extensionInfo[visDetMatch].index[0]
-                fitWcs = self.WCSFitTask.extensionInfo.iloc[extensionIndex]['wcs']
+                extensionIndex = np.flatnonzero((self.WCSFitTask.extensionInfo['visit'] == visit)
+                                                & (self.WCSFitTask.extensionInfo['detector'] == detector))[0]
+                fitWcs = self.WCSFitTask.extensionInfo['wcs'][extensionIndex]
                 calexpWcs = detectorInfo.getWcs()
 
                 tanPlaneXY = np.array([fitWcs.toWorld(x, y) for (x, y) in zip(xgrid.ravel(),
@@ -451,9 +450,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         matchIds = []
         correctMatches = []
         for (s, e, o) in zip(tmpAssociations.sequence, tmpAssociations.extn, tmpAssociations.obj):
-            objExtension = self.WCSFitTask.extensionInfo.iloc[e]
-            objVisitInd = objExtension['visitIndex']
-            objDet = objExtension['detector']
+            objVisitInd = self.WCSFitTask.extensionInfo['visitIndex'][e]
+            objDet = self.WCSFitTask.extensionInfo['detector'][e]
             ExtnInds = self.inputCatalogRefs[objVisitInd].get()['detector'] == objDet
             objInfo = self.inputCatalogRefs[objVisitInd].get()[ExtnInds].iloc[o]
             if s == 0:

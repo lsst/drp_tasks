@@ -629,10 +629,11 @@ class WCSFitTask(pipeBase.PipelineTask):
         extensionType.append('REFERENCE')
 
         # Make a table of information to use elsewhere in the class
-        self.extensionInfo = pd.DataFrame({'visit': visits, 'detector': detectors,
-                                           'visitIndex': extensionVisits,
-                                           'detectorIndex': extensionDetectors,
-                                           'wcs': wcss, 'extensionType': extensionType})
+        self.extensionInfo = {'visit': np.array(visits), 'detector': np.array(detectors),
+                              'visitIndex': np.array(extensionVisits),
+                              'detectorIndex': np.array(extensionDetectors),
+                              'wcs': np.array(wcss),
+                              'extensionType': np.array(extensionType)}
 
         # Make the exposureHelper object to use in the fitting routines
         exposuresHelper = wcsfit.ExposuresHelper(exposureNames,
@@ -698,10 +699,10 @@ class WCSFitTask(pipeBase.PipelineTask):
             self.refObjects.update(pmDict)
             self.refCovariance = cov
 
-        extensionIndex = self.extensionInfo[self.extensionInfo['extensionType'] == 'REFERENCE'].index[0]
-        visitIndex = self.extensionInfo.iloc[extensionIndex]['visitIndex']
-        detectorIndex = self.extensionInfo.iloc[extensionIndex]['detectorIndex']
-        refWcs = self.extensionInfo.iloc[extensionIndex]['wcs']
+        extensionIndex = np.flatnonzero(self.extensionInfo['extensionType'] == 'REFERENCE')[0]
+        visitIndex = self.extensionInfo['visitIndex'][extensionIndex]
+        detectorIndex = self.extensionInfo['detectorIndex'][extensionIndex]
+        refWcs = self.extensionInfo['wcs'][extensionIndex]
 
         associations.addCatalog(refWcs, "STELLAR", visitIndex, fieldIndex, instrumentIndex, detectorIndex,
                                 extensionIndex, np.ones(len(refCat), dtype=bool),
@@ -736,7 +737,7 @@ class WCSFitTask(pipeBase.PipelineTask):
             self.columns.append(self.sourceSelector.config.isolated.parentName)
             self.columns.append(self.sourceSelector.config.isolated.nChildName)
 
-        self.sourceIndices = [None] * len(self.extensionInfo)
+        self.sourceIndices = [None] * len(self.extensionInfo['visit'])
         for inputCatalogRef in inputCatalogRefs:
             visit = inputCatalogRef.dataId['visit']
             inputCatalog = inputCatalogRef.get(parameters={'columns': self.columns})
@@ -747,11 +748,10 @@ class WCSFitTask(pipeBase.PipelineTask):
                 selected = self.sourceSelector.run(detectorSources)
 
                 isStar = np.ones(len(selected.sourceCat))
-
-                extensionIndex = self.extensionInfo[(self.extensionInfo['visit'] == visit)
-                                                    & (self.extensionInfo['detector'] == detector)].index[0]
-                detectorIndex = self.extensionInfo.iloc[extensionIndex]['detectorIndex']
-                visitIndex = self.extensionInfo.iloc[extensionIndex]['visitIndex']
+                extensionIndex = np.flatnonzero((self.extensionInfo['visit'] == visit)
+                                                & (self.extensionInfo['detector'] == detector))[0]
+                detectorIndex = self.extensionInfo['detectorIndex'][extensionIndex]
+                visitIndex = self.extensionInfo['visitIndex'][extensionIndex]
 
                 self.sourceIndices[extensionIndex] = selected.selected
 
@@ -852,8 +852,8 @@ class WCSFitTask(pipeBase.PipelineTask):
             for detector in detectors:
                 detectorSources = inputCatalog[inputCatalog['detector'] == detector]
 
-                extensionIndex = self.extensionInfo[(self.extensionInfo['visit'] == visit)
-                                                    & (self.extensionInfo['detector'] == detector)].index[0]
+                extensionIndex = np.flatnonzero((self.extensionInfo['visit'] == visit)
+                                                & (self.extensionInfo['detector'] == detector))[0]
                 sourceCat = detectorSources[self.sourceIndices[extensionIndex]]
 
                 d = {"x": sourceCat['x'].to_numpy(),
@@ -873,7 +873,7 @@ class WCSFitTask(pipeBase.PipelineTask):
         wcsf : `wcsfit.WCSFit`
             WCS-fitting object
         """
-        extensionIndex = self.extensionInfo[self.extensionInfo['extensionType'] == 'REFERENCE'].index[0]
+        extensionIndex = np.flatnonzero(self.extensionInfo['extensionType'] == 'REFERENCE')[0]
 
         if self.config.useProperMotion:
             wcsf.setObjects(extensionIndex, self.refObjects, 'ra', 'dec', ['raCov', 'decCov', 'raDecCov'],
