@@ -34,47 +34,9 @@ import lsst.drp.tasks.wcsfit as lsst_wcsfit
 from lsst.daf.base import PropertyList
 from lsst.daf.butler import DimensionUniverse, DatasetType, DatasetRef, StorageClass
 from lsst.meas.algorithms import ReferenceObjectLoader
+from lsst.pipe.base import InMemoryDatasetHandle
 from lsst import sphgeom
 import lsst.geom
-
-
-class MockInputVisitSummary():
-    """Object that provides a minimal inputVisitSummary table
-    """
-    def __init__(self, visit):
-
-        # Set up the schema for the output catalogs
-        schema = afwTable.ExposureTable.makeMinimalSchema()
-        schema.addField('visit', type='L', doc='Visit number')
-
-        catalog = afwTable.ExposureCatalog(schema)
-        catalog.resize(len(self.detectors))
-        catalog['visit'] = visit
-
-
-class MockInputCatalogRef():
-
-    def __init__(self, source_table, ref=None, dataId=None):
-        self.source_table = source_table
-        self.ref = ref
-        self.dataId = dataId
-
-    def get(self, parameters={}, **kwargs):
-        """Retrieve the specified dataset using the API of the Gen3 Butler.
-        Parameters
-        ----------
-        parameters : `dict`, optional
-            Parameter dictionary.  Supported key is ``columns``.
-        Returns
-        -------
-        dataframe : `pandas.DataFrame`
-            dataframe, cut to the specified columns.
-        """
-        if 'columns' in parameters:
-            _columns = parameters['columns']
-            return self.source_table[_columns]
-        else:
-            return self.source_table.copy()
 
 
 class MockRefCatDataId():
@@ -115,13 +77,17 @@ class TestWCSFit(lsst.utils.tests.TestCase):
                                                                     f'visitSummary_{testVisit}.fits'))
             cls.inputVisitSummary.append(visSum)
 
-        cls.WCSFitTask = lsst_wcsfit.WCSFitTask()
+        cls.config = lsst_wcsfit.WCSFitConfig()
+        cls.config.systematicError = 0
+        cls.config.devicePolyOrder = 4
+        cls.config.exposurePolyOrder = 6
+        cls.WCSFitTask = lsst_wcsfit.WCSFitTask(config=cls.config)
 
-        cls.exposuresHelper, cls.medianEpoch = cls.WCSFitTask._get_exposure_info(cls.inputVisitSummary,
-                                                                                 cls.instrument)
+        cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.WCSFitTask._get_exposure_info(
+            cls.inputVisitSummary, cls.instrument, refEpoch=cls.refEpoch)
 
-        cls.fields, cls.fieldCenter, cls.fieldRadius = cls.WCSFitTask._prep_sky(cls.inputVisitSummary,
-                                                                                cls.medianEpoch)
+        cls.fields, cls.fieldCenter, cls.fieldRadius = cls.WCSFitTask._prep_sky(
+            cls.inputVisitSummary, cls.exposureInfo.medianEpoch)
 
         # Bounding box of observations:
         raMins, raMaxs = [], []
@@ -185,9 +151,9 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         Returns
         -------
         refDataId : MockRefCatDataId
-            Object that replicates the functionality of a dataId
-        deferredRefCat : MockInputCatalogRef
-            Object that replicates the functionality of a `DeferredDatasetRef`
+            Object that replicates the functionality of a dataId.
+        deferredRefCat : `lsst.pipe.base.InMemoryDatasetHandle`
+            Dataset handle for reference catalog.
         """
         nRefs = int(cls.nStars * inReferenceFraction)
         refStarIndices = np.random.choice(cls.nStars, nRefs, replace=False)
@@ -198,6 +164,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         fluxKey = refSchema.addField("test_filter_flux", units='nJy', type=np.float64)
         raErrKey = refSchema.addField("coord_raErr", type=np.float64)
         decErrKey = refSchema.addField("coord_decErr", type=np.float64)
+        pmraErrKey = refSchema.addField("pm_raErr", type=np.float64)
+        pmdecErrKey = refSchema.addField("pm_decErr", type=np.float64)
         refCat = afwTable.SimpleCatalog(refSchema)
         ref_md = PropertyList()
         ref_md.set("REFCAT_FORMAT_VERSION", 1)
@@ -210,8 +178,10 @@ class TestWCSFit(lsst.utils.tests.TestCase):
             record.set(fluxKey, 1)
             record.set(raErrKey, 0.00001)
             record.set(decErrKey, 0.00001)
+            record.set(pmraErrKey, 1e-9)
+            record.set(pmdecErrKey, 1e-9)
         refDataId = MockRefCatDataId(cls.boundingPolygon)
-        deferredRefCat = MockInputCatalogRef(refCat, ref=refDataId.ref)
+        deferredRefCat = InMemoryDatasetHandle(refCat, storageClass="SourceCatalog")
 
         return refDataId, deferredRefCat
 
@@ -235,8 +205,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
 
         Returns
         -------
-        sourceCat : `list` of `MockInputCatalogRef`
-            List of mock reference to source catalogs.
+        sourceCat : `list` of `lsst.pipe.base.InMemoryDatasetHandle`
+            List of reference to source catalogs.
         """
         inputCatalogRefs = []
         # Take a subset of the simulated data
@@ -298,7 +268,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
 
             visitSourceTable = pd.concat(sourceCats)
 
-            inputCatalogRef = MockInputCatalogRef(visitSourceTable, dataId={"visit": visit})
+            inputCatalogRef = InMemoryDatasetHandle(visitSourceTable, storageClass="DataFrame",
+                                                    dataId={"visit": visit})
 
             inputCatalogRefs.append(inputCatalogRef)
 
@@ -358,9 +329,9 @@ class TestWCSFit(lsst.utils.tests.TestCase):
                                        + detectorModel['YPoly']['Coefficients'])
                     mapDict[detectorMapName]['Coefficients'] = mapCoefficients
 
-                outWCS = cls.WCSFitTask._makeAfwWcs(mapDict, raDec.getRa(), raDec.getDec(),
-                                                    doNormalizePixels=True, xScale=xscale,
-                                                    yScale=yscale)
+                outWCS = cls.WCSFitTask._make_afw_wcs(mapDict, raDec.getRa(), raDec.getDec(),
+                                                      doNormalizePixels=True, xScale=xscale,
+                                                      yScale=yscale)
                 catalog[d].setId(detectorId)
                 catalog[d].setWcs(outWCS)
 
@@ -379,9 +350,9 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         # visit plus one for the reference catalog
         totalExtensions = sum([len(visSum) for visSum in self.inputVisitSummary]) + 1
 
-        self.assertEqual(totalExtensions, len(self.WCSFitTask.extensionInfo['visit']))
+        self.assertEqual(totalExtensions, len(self.extensionInfo.visit))
 
-        taskVisits = set(self.WCSFitTask.extensionInfo['visit'])
+        taskVisits = set(self.extensionInfo.visit)
         self.assertEqual(taskVisits, set(self.testVisits + [-1]))
 
         xx = np.linspace(0, 2000, 3)
@@ -391,9 +362,9 @@ class TestWCSFit(lsst.utils.tests.TestCase):
             visit = visSum[0]['visit']
             for detectorInfo in visSum:
                 detector = detectorInfo['id']
-                extensionIndex = np.flatnonzero((self.WCSFitTask.extensionInfo['visit'] == visit)
-                                                & (self.WCSFitTask.extensionInfo['detector'] == detector))[0]
-                fitWcs = self.WCSFitTask.extensionInfo['wcs'][extensionIndex]
+                extensionIndex = np.flatnonzero((self.extensionInfo.visit == visit)
+                                                & (self.extensionInfo.detector == detector))[0]
+                fitWcs = self.extensionInfo.wcs[extensionIndex]
                 calexpWcs = detectorInfo.getWcs()
 
                 tanPlaneXY = np.array([fitWcs.toWorld(x, y) for (x, y) in zip(xgrid.ravel(),
@@ -401,8 +372,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
 
                 calexpra, calexpdec = calexpWcs.pixelToSkyArray(xgrid.ravel(), ygrid.ravel(), degrees=True)
 
-                tangentPoint = calexpWcs.pixelToSky(calexpWcs.getPixelOrigin().getX() + 1,
-                                                    calexpWcs.getPixelOrigin().getY() + 1)
+                tangentPoint = calexpWcs.pixelToSky(calexpWcs.getPixelOrigin().getX(),
+                                                    calexpWcs.getPixelOrigin().getY())
                 cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0 * lsst.geom.degrees, True)
                 iwcToSkyWcs = afwgeom.makeSkyWcs(lsst.geom.Point2D(0, 0), tangentPoint, cdMatrix)
                 newRAdeg, newDecdeg = iwcToSkyWcs.pixelToSkyArray(tanPlaneXY[:, 0], tanPlaneXY[:, 1],
@@ -426,7 +397,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
                                           [self.fieldRadius.asDegrees()],
                                           (self.WCSFitTask.config.matchRadius * u.arcsec).to(u.degree).value)
 
-        self.WCSFitTask._load_refCat(tmpAssociations, self.fieldCenter, self.fieldRadius, epoch=2015)
+        self.WCSFitTask._load_refcat(tmpAssociations, self.refObjectLoader, self.fieldCenter,
+                                     self.fieldRadius, self.extensionInfo, epoch=2015)
 
         # We have only loaded one catalog, so getting the 'matches' should just
         # return the same objects we put in, except some random objects that
@@ -443,15 +415,16 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         tmpAssociations = wcsfit.FoFClass(self.fields, [self.instrument], self.exposuresHelper,
                                           [self.fieldRadius.asDegrees()],
                                           (self.WCSFitTask.config.matchRadius * u.arcsec).to(u.degree).value)
-        self.WCSFitTask._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs)
+        self.WCSFitTask._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs,
+                                                     self.extensionInfo)
 
         tmpAssociations.sortMatches(self.fieldNumber, minMatches=2)
 
         matchIds = []
         correctMatches = []
         for (s, e, o) in zip(tmpAssociations.sequence, tmpAssociations.extn, tmpAssociations.obj):
-            objVisitInd = self.WCSFitTask.extensionInfo['visitIndex'][e]
-            objDet = self.WCSFitTask.extensionInfo['detector'][e]
+            objVisitInd = self.extensionInfo.visitIndex[e]
+            objDet = self.extensionInfo.detector[e]
             ExtnInds = self.inputCatalogRefs[objVisitInd].get()['detector'] == objDet
             objInfo = self.inputCatalogRefs[objVisitInd].get()[ExtnInds].iloc[o]
             if s == 0:
@@ -468,11 +441,11 @@ class TestWCSFit(lsst.utils.tests.TestCase):
     def test_make_outputs(self):
         """Test that the run method recovers the input model parameters.
         """
-        WCSFitTask = lsst_wcsfit.WCSFitTask()
-        WCSFitTask.refObjectLoader = self.refObjectLoader
+        WCSFitTask = lsst_wcsfit.WCSFitTask(config=self.config)
 
         outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
-                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch)
+                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch,
+                                 refObjectLoader=self.refObjectLoader)
 
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
@@ -494,11 +467,11 @@ class TestWCSFit(lsst.utils.tests.TestCase):
     def test_run(self):
         """Test that run method recovers the input model parameters
         """
-        WCSFitTask = lsst_wcsfit.WCSFitTask()
-        WCSFitTask.refObjectLoader = self.refObjectLoader
+        WCSFitTask = lsst_wcsfit.WCSFitTask(config=self.config)
 
         outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
-                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch)
+                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch,
+                                 refObjectLoader=self.refObjectLoader)
 
         outputMaps = outputs.fitModel.mapCollection.getParamDict()
 
