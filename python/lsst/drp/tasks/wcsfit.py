@@ -258,9 +258,9 @@ class WCSFitConnections(pipeBase.PipelineTaskConnections,
     outputCatalog = pipeBase.connectionTypes.Output(
         doc=("Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
              "plane coordinates and chisq values."),
-        name="WCSFit_usedStars",
+        name="WCSFit_fitStars",
         storageClass="DataFrame",
-        dimensions=("instrument", "skymap", "tract"),
+        dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
 
 
@@ -324,16 +324,12 @@ class WCSFitConfig(pipeBase.PipelineTaskConfig,
     devicePolyOrder = pexConfig.Field(
         dtype=int,
         doc="Order of device polynomial model.",
-        default=1
+        default=4
     )
     exposurePolyOrder = pexConfig.Field(
         dtype=int,
         doc="Order of exposure polynomial model.",
-        default=7
-    )
-    refObjLoader = pexConfig.ConfigField(
-        dtype=LoadReferenceObjectsConfig,
-        doc="Configuration for reference object loader.",
+        default=6
     )
     fitProperMotion = pexConfig.Field(
         dtype=bool,
@@ -370,16 +366,8 @@ class WCSFitConfig(pipeBase.PipelineTaskConfig,
                     ]
         self.sourceSelector["science"].flags.bad = badFlags
 
-        # Always use this reference catalog filter
-        self.refObjLoader.anyFilterMapsToThis = "phot_g_mean"
-        self.refObjLoader.requireProperMotion = True
-
     def validate(self):
         super().validate()
-        if self.fitProperMotion and not self.refObjLoader.requireProperMotion:
-            raise pexConfig.FieldValidationError(WCSFitConfig.fitProperMotion, self,
-                                                 "refObjLoader.requireProperMotion must be True if"
-                                                 " fitProperMotion is True.")
 
         # Check if all components of the device and exposure models are
         # supported.
@@ -416,10 +404,13 @@ class WCSFitTask(pipeBase.PipelineTask):
         sampleRefCat = inputs['referenceCatalog'][0].get()
         refEpoch = sampleRefCat[0]['epoch']
 
+        refConfig = LoadReferenceObjectsConfig()
+        refConfig.anyFilterMapsToThis = "phot_g_mean"
+        refConfig.requireProperMotion = True
         refObjectLoader = ReferenceObjectLoader(dataIds=[ref.datasetRef.dataId
                                                          for ref in inputRefs.referenceCatalog],
                                                 refCats=inputs.pop('referenceCatalog'),
-                                                config=self.config.refObjLoader,
+                                                config=refConfig,
                                                 log=self.log)
 
         output = self.run(**inputs, instrumentName=instrumentName, refEpoch=refEpoch,
@@ -839,7 +830,7 @@ class WCSFitTask(pipeBase.PipelineTask):
         columns : `list` of `str`
             List of columns needed from source tables.
         """
-        columns = ['detector', 'sourceId', 'x', 'xErr', 'y', 'yErr',  # 'ixx', 'iyy', 'ixy',
+        columns = ['detector', 'sourceId', 'x', 'xErr', 'y', 'yErr', 'ixx', 'iyy', 'ixy',
                    f"{self.config.sourceFluxType}_instFlux", f"{self.config.sourceFluxType}_instFluxErr"]
         if self.sourceSelector.config.doFlags:
             columns.extend(self.sourceSelector.config.flags.bad)
@@ -857,23 +848,31 @@ class WCSFitTask(pipeBase.PipelineTask):
 
             for detector in detectors:
                 detectorSources = inputCatalog[inputCatalog['detector'] == detector]
+                xCov = detectorSources['xErr']**2
+                yCov = detectorSources['yErr']**2
+                xyCov = (detectorSources['ixy'] * (xCov + yCov)
+                         / (detectorSources['ixx'] + detectorSources['iyy']))
+                # Remove sources with bad shape measurements
+                goodShapes = xyCov**2 <= (xCov * yCov)
                 selected = self.sourceSelector.run(detectorSources)
+                goodInds = selected.selected & goodShapes
 
-                isStar = np.ones(len(selected.sourceCat))
+                isStar = np.ones(goodInds.sum())
                 extensionIndex = np.flatnonzero((extensionInfo.visit == visit)
                                                 & (extensionInfo.detector == detector))[0]
                 detectorIndex = extensionInfo.detectorIndex[extensionIndex]
                 visitIndex = extensionInfo.visitIndex[extensionIndex]
 
-                sourceIndices[extensionIndex] = selected.selected
+                sourceIndices[extensionIndex] = goodInds
 
                 wcs = extensionInfo.wcs[extensionIndex]
                 associations.reprojectWCS(wcs, fieldIndex)
 
                 associations.addCatalog(wcs, "STELLAR", visitIndex, fieldIndex,
                                         instrumentIndex, detectorIndex, extensionIndex, isStar,
-                                        selected.sourceCat['x'].to_list(), selected.sourceCat['y'].to_list(),
-                                        np.arange(len(selected.sourceCat)))
+                                        detectorSources[goodInds]['x'].to_list(),
+                                        detectorSources[goodInds]['y'].to_list(),
+                                        np.arange(goodInds.sum()))
 
         associations.sortMatches(fieldIndex, minMatches=self.config.minMatches,
                                  allowSelfMatches=self.config.allowSelfMatches)
@@ -975,12 +974,12 @@ class WCSFitTask(pipeBase.PipelineTask):
 
                 xCov = sourceCat['xErr']**2
                 yCov = sourceCat['yErr']**2
-                d = {"x": sourceCat['x'].to_numpy(),
-                     "y": sourceCat['y'].to_numpy(),
-                     "xCov": xCov.to_numpy(),
-                     "yCov": yCov.to_numpy(),
-                     "xyCov": np.zeros(len(sourceCat))}
+                xyCov = (sourceCat['ixy'] * (xCov + yCov)
+                         / (sourceCat['ixx'] + sourceCat['iyy']))
                 # TODO: add correct xyErr if DM-7101 is ever done.
+
+                d = {"x": sourceCat['x'].to_numpy(), "y": sourceCat['y'].to_numpy(),
+                     "xCov": xCov.to_numpy(), "yCov": yCov.to_numpy(), "xyCov": xyCov.to_numpy()}
 
                 wcsf.setObjects(extensionIndex, d, 'x', 'y', ['xCov', 'yCov', 'xyCov'])
 
