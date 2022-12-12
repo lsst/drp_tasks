@@ -25,8 +25,8 @@ import astropy.units as u
 import astropy.coordinates
 import yaml
 import wcsfit
-import pandas as pd
 import astshim
+import pyarrow as pa
 
 import lsst.geom
 import lsst.pex.config as pexConfig
@@ -38,10 +38,10 @@ from lsst.meas.algorithms import (LoadReferenceObjectsConfig, ReferenceObjectLoa
                                   ReferenceSourceSelectorTask)
 from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
 
-__all__ = ["WCSFitConnections", "WCSFitConfig", "WCSFitTask"]
+__all__ = ["GbdesAstrometricFitConnections", "GbdesAstrometricFitConfig", "GbdesAstrometricFitTask"]
 
 
-def lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
+def _lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
     """Lookup function that finds all refcats for all visits that overlap a
     tract, rather than just the refcats that directly overlap the tract.
     Borrowed from jointcal.
@@ -81,7 +81,8 @@ def lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
     yield from refs
 
 
-def make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.marcsec, outputPMUnit=u.marcsec):
+def _make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.marcsec,
+                                outputPMUnit=u.marcsec):
     """Make a covariance matrix for the reference catalog including proper
     motion and parallax.
 
@@ -145,7 +146,7 @@ def make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.mar
     return cov
 
 
-def convert_to_ast_polymap_coefficients(coefficients):
+def _convert_to_ast_polymap_coefficients(coefficients):
     """Convert vector of polynomial coefficients from the format used in
     `gbdes` into AST format (see Poly2d::vectorIndex(i, j) in
     gbdes/gbutil/src/Poly2d.cpp). This assumes two input and two output
@@ -184,7 +185,7 @@ def convert_to_ast_polymap_coefficients(coefficients):
     return astPoly
 
 
-def get_wcs_from_sip(butlerWcs):
+def _get_wcs_from_sip(butlerWcs):
     """Get wcsfit.Wcs in TPV format from the SIP-formatted input WCS.
 
     Parameters
@@ -217,8 +218,8 @@ def get_wcs_from_sip(butlerWcs):
     return wcs
 
 
-class WCSFitConnections(pipeBase.PipelineTaskConnections,
-                        dimensions=("skymap", "tract", "instrument", "physical_filter")):
+class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
+                                     dimensions=("skymap", "tract", "instrument", "physical_filter")):
     """Middleware input/output connections for task data."""
     inputCatalogRefs = pipeBase.connectionTypes.Input(
         doc="Source table in parquet format, per visit.",
@@ -244,13 +245,13 @@ class WCSFitConnections(pipeBase.PipelineTaskConnections,
         dimensions=("skypix",),
         deferLoad=True,
         multiple=True,
-        lookupFunction=lookup_visit_refcats,
+        lookupFunction=_lookup_visit_refcats,
     )
     outputWcs = pipeBase.connectionTypes.Output(
         doc=("Per-tract, per-visit world coordinate systems derived from the fitted model."
              " These catalogs only contain entries for detectors with an output, and use"
              " the detector id for the catalog id, sorted on id for fast lookups of a detector."),
-        name="WCSFitSkyWcsCatalog",
+        name="GbdesAstrometricFitSkyWcsCatalog",
         storageClass="ExposureCatalog",
         dimensions=("instrument", "visit", "skymap", "tract"),
         multiple=True
@@ -258,15 +259,15 @@ class WCSFitConnections(pipeBase.PipelineTaskConnections,
     outputCatalog = pipeBase.connectionTypes.Output(
         doc=("Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
              "plane coordinates and chisq values."),
-        name="WCSFit_fitStars",
-        storageClass="DataFrame",
+        name="GbdesAstrometricFit_fitStars",
+        storageClass="ArrowTable",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
 
 
-class WCSFitConfig(pipeBase.PipelineTaskConfig,
-                   pipelineConnections=WCSFitConnections):
-    """Configuration for WCSFitTask"""
+class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
+                                pipelineConnections=GbdesAstrometricFitConnections):
+    """Configuration for GbdesAstrometricFitTask"""
     sourceSelector = sourceSelectorRegistry.makeField(
         doc="How to select sources for cross-matching.",
         default="science"
@@ -308,17 +309,20 @@ class WCSFitConfig(pipeBase.PipelineTaskConfig,
     )
     modelComponents = pexConfig.ListField(
         dtype=str,
-        doc="List of mappings to apply to transform from pixels to sky, in order of their application.",
+        doc=("List of mappings to apply to transform from pixels to sky, in order of their application."
+             "Supported options are 'INSTRUMENT/DEVICE' and 'EXPOSURE'"),
         default=["INSTRUMENT/DEVICE", "EXPOSURE"]
     )
     deviceModel = pexConfig.ListField(
         dtype=str,
-        doc="List of mappings to apply to transform from detector pixels to intermediate frame.",
+        doc=("List of mappings to apply to transform from detector pixels to intermediate frame. Map names"
+             "should match the format 'BAND/DEVICE/<map name>'"),
         default=["BAND/DEVICE/poly"]
     )
     exposureModel = pexConfig.ListField(
         dtype=str,
-        doc="List of mappings to apply to transform from intermediate frame to sky coordinates.",
+        doc=("List of mappings to apply to transform from intermediate frame to sky coordinates. Map names"
+             "should match the format 'EXPOSURE/<map name>'"),
         default=["EXPOSURE/poly"]
     )
     devicePolyOrder = pexConfig.Field(
@@ -373,22 +377,22 @@ class WCSFitConfig(pipeBase.PipelineTaskConfig,
         # supported.
         for component in self.deviceModel:
             if not (('poly' in component.lower()) or ('identity' in component.lower())):
-                raise pexConfig.FieldValidationError(WCSFitConfig.deviceModel, self,
+                raise pexConfig.FieldValidationError(GbdesAstrometricFitConfig.deviceModel, self,
                                                      f"deviceModel component {component} is not supported.")
 
         for component in self.exposureModel:
             if not (('poly' in component.lower()) or ('identity' in component.lower())):
-                raise pexConfig.FieldValidationError(WCSFitConfig.exposureModel, self,
+                raise pexConfig.FieldValidationError(GbdesAstrometricFitConfig.exposureModel, self,
                                                      f"exposureModel component {component} is not supported.")
 
 
-class WCSFitTask(pipeBase.PipelineTask):
+class GbdesAstrometricFitTask(pipeBase.PipelineTask):
     """Calibrate the WCS across multiple visits of the same field using the
     GBDES package.
     """
 
-    ConfigClass = WCSFitConfig
-    _DefaultName = "wcsfit"
+    ConfigClass = GbdesAstrometricFitConfig
+    _DefaultName = "gbdesAstrometricFit"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -448,7 +452,7 @@ class WCSFitTask(pipeBase.PipelineTask):
                 detector set by the new fitted WCS.
             ``fitModel`` : `wcsfit.WCSFit`
                 Model-fitting object with final model parameters.
-            ``outputCatalog`` : `pd.DataFrame`
+            ``outputCatalog`` : `pyarrow.Table`
                 Catalog with fit residuals of all sources used.
         """
         self.log.info("Gathering instrument, exposure, and field info")
@@ -510,8 +514,8 @@ class WCSFitTask(pipeBase.PipelineTask):
         wcsf.fit()
         self.log.info("WCS fitting done")
 
-        outputWCSs = self._make_outputs(wcsf, inputVisitSummary[0], exposureInfo)
-        outputCatalog = pd.DataFrame(wcsf.getOutputCatalog())
+        outputWCSs = self._make_outputs(wcsf, inputVisitSummary, exposureInfo)
+        outputCatalog = pa.Table.from_pydict(wcsf.getOutputCatalog())
 
         return pipeBase.Struct(outputWCSs=outputWCSs,
                                fitModel=wcsf,
@@ -663,7 +667,7 @@ class WCSFitTask(pipeBase.PipelineTask):
                 extensionType.append('SCIENCE')
 
                 wcs = row.getWcs()
-                wcss.append(get_wcs_from_sip(wcs))
+                wcss.append(_get_wcs_from_sip(wcs))
 
         fieldNumbers = list(np.ones(len(exposureNames), dtype=int) * fieldNumber)
         instrumentNumbers = list(np.ones(len(exposureNames), dtype=int) * instrumentNumber)
@@ -776,7 +780,7 @@ class WCSFitTask(pipeBase.PipelineTask):
         raCov = ((refCat['coord_raErr'] * u.radian).to(u.degree).to_value()**2).tolist()
         decCov = ((refCat['coord_decErr'] * u.radian).to(u.degree).to_value()**2).tolist()
 
-        # TODO: DM-35130 we need the full gaia covariance here
+        # TODO: DM-37316 we need the full gaia covariance here
         refObjects = {'ra': ra, 'dec': dec, 'raCov': raCov, 'decCov': decCov,
                       'raDecCov': np.zeros(len(ra))}
         refCovariance = []
@@ -785,7 +789,7 @@ class WCSFitTask(pipeBase.PipelineTask):
             raPM = (refCat['pm_ra'] * u.radian).to(u.marcsec).to_value().tolist()
             decPM = (refCat['pm_dec'] * u.radian).to(u.marcsec).to_value().tolist()
             parallax = (refCat['parallax'] * u.radian).to(u.marcsec).to_value().tolist()
-            cov = make_ref_covariance_matrix(refCat)
+            cov = _make_ref_covariance_matrix(refCat)
             pmDict = {'raPM': raPM, 'decPM': decPM, 'parallax': parallax}
             refObjects.update(pmDict)
             refCovariance = cov
@@ -1039,7 +1043,7 @@ class WCSFitTask(pipeBase.PipelineTask):
             # Pixels will need to be rescaled before going into the mappings
             normCoefficients = [-1.0, 2.0/xScale, 0,
                                 -1.0, 0, 2.0/yScale]
-            normMap = convert_to_ast_polymap_coefficients(normCoefficients)
+            normMap = _convert_to_ast_polymap_coefficients(normCoefficients)
         else:
             normMap = astshim.UnitMap(2)
 
@@ -1061,7 +1065,7 @@ class WCSFitTask(pipeBase.PipelineTask):
 
             if mapType == 'Poly':
                 mapCoefficients = mapElement['Coefficients']
-                astMap = convert_to_ast_polymap_coefficients(mapCoefficients)
+                astMap = _convert_to_ast_polymap_coefficients(mapCoefficients)
             elif mapType == 'Identity':
                 astMap = astshim.UnitMap(2)
             else:
@@ -1079,14 +1083,14 @@ class WCSFitTask(pipeBase.PipelineTask):
         outWCS = afwgeom.SkyWcs(frameDict)
         return outWCS
 
-    def _make_outputs(self, wcsf, inputVisitSummary, exposureInfo):
+    def _make_outputs(self, wcsf, visitSummaryTables, exposureInfo):
         """Make a WCS object out of the WCS models.
 
         Parameters
         ----------
         wcsf : `wcsfit.WCSFit`
             WCSFit object, assumed to have fit model.
-        inputVisitSummary : `lsst.afw.table.ExposureCatalog`
+        visitSummaryTables : `list` of `lsst.afw.table.ExposureCatalog`
             Catalogs with per-detector summary information from which to grab
             detector information.
         extensionInfo : `lsst.pipe.base.Struct`
@@ -1106,18 +1110,19 @@ class WCSFitTask(pipeBase.PipelineTask):
         schema.addField('visit', type='L', doc='Visit number')
 
         # Pixels will need to be rescaled before going into the mappings
-        xscale = inputVisitSummary[0]['bbox_max_x'] - inputVisitSummary[0]['bbox_min_x']
-        yscale = inputVisitSummary[0]['bbox_max_y'] - inputVisitSummary[0]['bbox_min_y']
+        sampleDetector = visitSummaryTables[0][0]
+        xscale = sampleDetector['bbox_max_x'] - sampleDetector['bbox_min_x']
+        yscale = sampleDetector['bbox_max_y'] - sampleDetector['bbox_min_y']
 
         catalogs = {}
-        for v, visit in enumerate(exposureInfo.visits):
-            if visit == -1:
-                continue
+        for v, visitSummary in enumerate(visitSummaryTables):
+            visit = visitSummary[0]['visit']
+
             catalog = lsst.afw.table.ExposureCatalog(schema)
             catalog.resize(len(exposureInfo.detectors))
             catalog['visit'] = visit
 
-            for d, detector in enumerate(exposureInfo.detectors):
+            for d, detector in enumerate(visitSummary['id']):
                 mapName = f"{visit}/{detector}"
 
                 mapElements = wcsf.mapCollection.orderAtoms(f"{mapName}/base")

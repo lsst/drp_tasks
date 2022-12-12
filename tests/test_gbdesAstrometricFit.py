@@ -30,7 +30,7 @@ import wcsfit
 import lsst.utils
 import lsst.afw.table as afwTable
 import lsst.afw.geom as afwgeom
-import lsst.drp.tasks.wcsfit as lsst_wcsfit
+from lsst.drp.tasks import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
 from lsst.daf.base import PropertyList
 from lsst.daf.butler import DimensionUniverse, DatasetType, DatasetRef, StorageClass
 from lsst.meas.algorithms import ReferenceObjectLoader
@@ -49,7 +49,7 @@ class MockRefCatDataId():
         self.ref = DatasetRef(datasetType, {'htm7': "mockRefCat"})
 
 
-class TestWCSFit(lsst.utils.tests.TestCase):
+class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -77,16 +77,16 @@ class TestWCSFit(lsst.utils.tests.TestCase):
                                                                     f'visitSummary_{testVisit}.fits'))
             cls.inputVisitSummary.append(visSum)
 
-        cls.config = lsst_wcsfit.WCSFitConfig()
+        cls.config = GbdesAstrometricFitConfig()
         cls.config.systematicError = 0
         cls.config.devicePolyOrder = 4
         cls.config.exposurePolyOrder = 6
-        cls.WCSFitTask = lsst_wcsfit.WCSFitTask(config=cls.config)
+        cls.task = GbdesAstrometricFitTask(config=cls.config)
 
-        cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.WCSFitTask._get_exposure_info(
+        cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
             cls.inputVisitSummary, cls.instrument, refEpoch=cls.refEpoch)
 
-        cls.fields, cls.fieldCenter, cls.fieldRadius = cls.WCSFitTask._prep_sky(
+        cls.fields, cls.fieldCenter, cls.fieldRadius = cls.task._prep_sky(
             cls.inputVisitSummary, cls.exposureInfo.medianEpoch)
 
         # Bounding box of observations:
@@ -121,7 +121,7 @@ class TestWCSFit(lsst.utils.tests.TestCase):
         cls.refObjectLoader.config.requireProperMotion = False
         cls.refObjectLoader.config.anyFilterMapsToThis = 'test_filter'
 
-        cls.WCSFitTask.refObjectLoader = cls.refObjectLoader
+        cls.task.refObjectLoader = cls.refObjectLoader
 
         # Get True WCS for stars:
         with open(os.path.join(cls.datadir, 'sample_wcs.yaml'), 'r') as f:
@@ -254,12 +254,12 @@ class TestWCSFit(lsst.utils.tests.TestCase):
                 sourceDict['inputDec'] = inputDec
                 sourceDict['trueRA'] = visitStarRas[detectorIndices]
                 sourceDict['trueDec'] = visitStarDecs[detectorIndices]
-                for key in ['apFlux_12_0_flux', 'apFlux_12_0_instFlux']:
+                for key in ['apFlux_12_0_flux', 'apFlux_12_0_instFlux', 'ixx', 'iyy']:
                     sourceDict[key] = ones_like
                 for key in ['pixelFlags_edge', 'pixelFlags_saturated', 'pixelFlags_interpolatedCenter',
                             'pixelFlags_interpolated', 'pixelFlags_crCenter', 'pixelFlags_bad',
                             'hsmPsfMoments_flag', 'apFlux_12_0_flag', 'extendedness', 'parentSourceId',
-                            'deblend_nChild']:
+                            'deblend_nChild', 'ixy']:
                     sourceDict[key] = zeros_like
                 sourceDict['apFlux_12_0_instFluxErr'] = 1e-3 * ones_like
 
@@ -329,9 +329,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
                                        + detectorModel['YPoly']['Coefficients'])
                     mapDict[detectorMapName]['Coefficients'] = mapCoefficients
 
-                outWCS = cls.WCSFitTask._make_afw_wcs(mapDict, raDec.getRa(), raDec.getDec(),
-                                                      doNormalizePixels=True, xScale=xscale,
-                                                      yScale=yscale)
+                outWCS = cls.task._make_afw_wcs(mapDict, raDec.getRa(), raDec.getDec(),
+                                                doNormalizePixels=True, xScale=xscale, yScale=yscale)
                 catalog[d].setId(detectorId)
                 catalog[d].setWcs(outWCS)
 
@@ -395,10 +394,10 @@ class TestWCSFit(lsst.utils.tests.TestCase):
 
         tmpAssociations = wcsfit.FoFClass(self.fields, [self.instrument], self.exposuresHelper,
                                           [self.fieldRadius.asDegrees()],
-                                          (self.WCSFitTask.config.matchRadius * u.arcsec).to(u.degree).value)
+                                          (self.task.config.matchRadius * u.arcsec).to(u.degree).value)
 
-        self.WCSFitTask._load_refcat(tmpAssociations, self.refObjectLoader, self.fieldCenter,
-                                     self.fieldRadius, self.extensionInfo, epoch=2015)
+        self.task._load_refcat(tmpAssociations, self.refObjectLoader, self.fieldCenter, self.fieldRadius,
+                               self.extensionInfo, epoch=2015)
 
         # We have only loaded one catalog, so getting the 'matches' should just
         # return the same objects we put in, except some random objects that
@@ -414,9 +413,8 @@ class TestWCSFit(lsst.utils.tests.TestCase):
 
         tmpAssociations = wcsfit.FoFClass(self.fields, [self.instrument], self.exposuresHelper,
                                           [self.fieldRadius.asDegrees()],
-                                          (self.WCSFitTask.config.matchRadius * u.arcsec).to(u.degree).value)
-        self.WCSFitTask._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs,
-                                                     self.extensionInfo)
+                                          (self.task.config.matchRadius * u.arcsec).to(u.degree).value)
+        self.task._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs, self.extensionInfo)
 
         tmpAssociations.sortMatches(self.fieldNumber, minMatches=2)
 
@@ -441,11 +439,10 @@ class TestWCSFit(lsst.utils.tests.TestCase):
     def test_make_outputs(self):
         """Test that the run method recovers the input model parameters.
         """
-        WCSFitTask = lsst_wcsfit.WCSFitTask(config=self.config)
+        task = GbdesAstrometricFitTask(config=self.config)
 
-        outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
-                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch,
-                                 refObjectLoader=self.refObjectLoader)
+        outputs = task.run(self.inputCatalogRefs, self.inputVisitSummary, instrumentName=self.instrumentName,
+                           refEpoch=self.refEpoch, refObjectLoader=self.refObjectLoader)
 
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
@@ -467,11 +464,10 @@ class TestWCSFit(lsst.utils.tests.TestCase):
     def test_run(self):
         """Test that run method recovers the input model parameters
         """
-        WCSFitTask = lsst_wcsfit.WCSFitTask(config=self.config)
+        task = GbdesAstrometricFitTask(config=self.config)
 
-        outputs = WCSFitTask.run(self.inputCatalogRefs, self.inputVisitSummary,
-                                 instrumentName=self.instrumentName, refEpoch=self.refEpoch,
-                                 refObjectLoader=self.refObjectLoader)
+        outputs = task.run(self.inputCatalogRefs, self.inputVisitSummary, instrumentName=self.instrumentName,
+                           refEpoch=self.refEpoch, refObjectLoader=self.refObjectLoader)
 
         outputMaps = outputs.fitModel.mapCollection.getParamDict()
 
