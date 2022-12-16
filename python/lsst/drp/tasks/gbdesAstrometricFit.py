@@ -38,7 +38,7 @@ from lsst.meas.algorithms import (LoadReferenceObjectsConfig, ReferenceObjectLoa
                                   ReferenceSourceSelectorTask)
 from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
 
-__all__ = ["GbdesAstrometricFitConnections", "GbdesAstrometricFitConfig", "GbdesAstrometricFitTask"]
+__all__ = ['GbdesAstrometricFitConnections', 'GbdesAstrometricFitConfig', 'GbdesAstrometricFitTask']
 
 
 def _lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
@@ -69,7 +69,7 @@ def _lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
     # efficient) and in the data IDs of the DatasetRefs this function yields
     # (because the RefCatLoader relies on them to do some of its own
     # filtering).
-    for visit_data_id in set(registry.queryDataIds("visit", dataId=quantumDataId).expanded()):
+    for visit_data_id in set(registry.queryDataIds('visit', dataId=quantumDataId).expanded()):
         refs.update(
             registry.queryDatasets(
                 datasetType,
@@ -201,31 +201,31 @@ def _get_wcs_from_sip(butlerWcs):
     fits_metadata = butlerWcs.getFitsMetadata()
     if not ((fits_metadata.get('CTYPE1') == 'RA---TAN-SIP')
             and (fits_metadata.get('CTYPE2') == 'DEC--TAN-SIP')):
-        raise ValueError(f'CTYPES {fits_metadata.get("CTYPE1")} and {fits_metadata.get("CTYPE2")}'
-                         'do not match SIP convention')
+        raise ValueError(f"CTYPES {fits_metadata.get('CTYPE1')} and {fits_metadata.get('CTYPE2')}"
+                         "do not match SIP convention")
 
     # Correct CRPIX values to correspond to source table pixel indexing
     # convention
-    crpix1 = fits_metadata.get("CRPIX1")
-    crpix2 = fits_metadata.get("CRPIX2")
-    fits_metadata.set("CRPIX1", crpix1 - 1)
-    fits_metadata.set("CRPIX2", crpix2 - 1)
+    crpix1 = fits_metadata.get('CRPIX1')
+    crpix2 = fits_metadata.get('CRPIX2')
+    fits_metadata.set('CRPIX1', crpix1 - 1)
+    fits_metadata.set('CRPIX2', crpix2 - 1)
 
     floatDict = {k: fits_metadata[k] for k in fits_metadata if isinstance(fits_metadata[k], (int, float))}
 
-    wcs = wcsfit.readTPVFromSIP(floatDict, "SIP")
+    wcs = wcsfit.readTPVFromSIP(floatDict, 'SIP')
 
     return wcs
 
 
 class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
-                                     dimensions=("skymap", "tract", "instrument", "physical_filter")):
+                                     dimensions=('skymap', 'tract', 'instrument', 'physical_filter')):
     """Middleware input/output connections for task data."""
     inputCatalogRefs = pipeBase.connectionTypes.Input(
         doc="Source table in parquet format, per visit.",
-        name="preSourceTable_visit",
-        storageClass="DataFrame",
-        dimensions=("instrument", "visit"),
+        name='preSourceTable_visit',
+        storageClass='DataFrame',
+        dimensions=('instrument', 'visit'),
         deferLoad=True,
         multiple=True,
     )
@@ -233,16 +233,16 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         doc=("Per-visit consolidated exposure metadata built from calexps. "
              "These catalogs use detector id for the id and must be sorted for "
              "fast lookups of a detector."),
-        name="visitSummary",
-        storageClass="ExposureCatalog",
-        dimensions=("instrument", "visit"),
+        name='visitSummary',
+        storageClass='ExposureCatalog',
+        dimensions=('instrument', 'visit'),
         multiple=True,
     )
     referenceCatalog = pipeBase.connectionTypes.PrerequisiteInput(
         doc="The astrometry reference catalog to match to loaded input catalog sources.",
-        name="gaia_dr2_20200414",
-        storageClass="SimpleCatalog",
-        dimensions=("skypix",),
+        name='gaia_dr2_20200414',
+        storageClass='SimpleCatalog',
+        dimensions=('skypix',),
         deferLoad=True,
         multiple=True,
         lookupFunction=_lookup_visit_refcats,
@@ -251,17 +251,17 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         doc=("Per-tract, per-visit world coordinate systems derived from the fitted model."
              " These catalogs only contain entries for detectors with an output, and use"
              " the detector id for the catalog id, sorted on id for fast lookups of a detector."),
-        name="GbdesAstrometricFitSkyWcsCatalog",
-        storageClass="ExposureCatalog",
-        dimensions=("instrument", "visit", "skymap", "tract"),
+        name='GbdesAstrometricFitSkyWcsCatalog',
+        storageClass='ExposureCatalog',
+        dimensions=('instrument', 'visit', 'skymap', 'tract'),
         multiple=True
     )
     outputCatalog = pipeBase.connectionTypes.Output(
         doc=("Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
              "plane coordinates and chisq values."),
-        name="GbdesAstrometricFit_fitStars",
-        storageClass="ArrowTable",
-        dimensions=("instrument", "skymap", "tract", "physical_filter"),
+        name='GbdesAstrometricFit_fitStars',
+        storageClass='ArrowTable',
+        dimensions=('instrument', 'skymap', 'tract', 'physical_filter'),
     )
 
 
@@ -270,7 +270,7 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
     """Configuration for GbdesAstrometricFitTask"""
     sourceSelector = sourceSelectorRegistry.makeField(
         doc="How to select sources for cross-matching.",
-        default="science"
+        default='science'
     )
     referenceSelector = pexConfig.ConfigurableField(
         target=ReferenceSourceSelectorTask,
@@ -299,7 +299,7 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
     systematicError = pexConfig.Field(
         dtype=float,
         doc=("Systematic error padding added in quadrature for the science catalogs (marcsec). The default"
-             "value is equivalent to 0.02 pixels for HSC"),
+             "value is equivalent to 0.02 pixels for HSC."),
         default=0.0034
     )
     referenceSystematicError = pexConfig.Field(
@@ -310,20 +310,20 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
     modelComponents = pexConfig.ListField(
         dtype=str,
         doc=("List of mappings to apply to transform from pixels to sky, in order of their application."
-             "Supported options are 'INSTRUMENT/DEVICE' and 'EXPOSURE'"),
-        default=["INSTRUMENT/DEVICE", "EXPOSURE"]
+             "Supported options are 'INSTRUMENT/DEVICE' and 'EXPOSURE'."),
+        default=['INSTRUMENT/DEVICE', 'EXPOSURE']
     )
     deviceModel = pexConfig.ListField(
         dtype=str,
         doc=("List of mappings to apply to transform from detector pixels to intermediate frame. Map names"
-             "should match the format 'BAND/DEVICE/<map name>'"),
-        default=["BAND/DEVICE/poly"]
+             "should match the format 'BAND/DEVICE/<map name>'."),
+        default=['BAND/DEVICE/poly']
     )
     exposureModel = pexConfig.ListField(
         dtype=str,
         doc=("List of mappings to apply to transform from intermediate frame to sky coordinates. Map names"
-             "should match the format 'EXPOSURE/<map name>'"),
-        default=["EXPOSURE/poly"]
+             "should match the format 'EXPOSURE/<map name>'."),
+        default=['EXPOSURE/poly']
     )
     devicePolyOrder = pexConfig.Field(
         dtype=int,
@@ -349,26 +349,26 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
         # depend on seeing.
-        self.sourceSelector["science"].doUnresolved = True
-        self.sourceSelector["science"].unresolved.name = "extendedness"
+        self.sourceSelector['science'].doUnresolved = True
+        self.sourceSelector['science'].unresolved.name = 'extendedness'
 
         # Use only isolated sources.
-        self.sourceSelector["science"].doIsolated = True
-        self.sourceSelector["science"].isolated.parentName = "parentSourceId"
-        self.sourceSelector["science"].isolated.nChildName = "deblend_nChild"
+        self.sourceSelector['science'].doIsolated = True
+        self.sourceSelector['science'].isolated.parentName = 'parentSourceId'
+        self.sourceSelector['science'].isolated.nChildName = 'deblend_nChild'
         # Do not use either flux or centroid measurements with flags,
         # chosen from the usual QA flags for stars.
-        self.sourceSelector["science"].doFlags = True
-        badFlags = ["pixelFlags_edge",
-                    "pixelFlags_saturated",
-                    "pixelFlags_interpolatedCenter",
-                    "pixelFlags_interpolated",
-                    "pixelFlags_crCenter",
-                    "pixelFlags_bad",
-                    "hsmPsfMoments_flag",
-                    f"{self.sourceFluxType}_flag",
+        self.sourceSelector['science'].doFlags = True
+        badFlags = ['pixelFlags_edge',
+                    'pixelFlags_saturated',
+                    'pixelFlags_interpolatedCenter',
+                    'pixelFlags_interpolated',
+                    'pixelFlags_crCenter',
+                    'pixelFlags_bad',
+                    'hsmPsfMoments_flag',
+                    f'{self.sourceFluxType}_flag',
                     ]
-        self.sourceSelector["science"].flags.bad = badFlags
+        self.sourceSelector['science'].flags.bad = badFlags
 
     def validate(self):
         super().validate()
@@ -378,12 +378,12 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
         for component in self.deviceModel:
             if not (('poly' in component.lower()) or ('identity' in component.lower())):
                 raise pexConfig.FieldValidationError(GbdesAstrometricFitConfig.deviceModel, self,
-                                                     f"deviceModel component {component} is not supported.")
+                                                     f'deviceModel component {component} is not supported.')
 
         for component in self.exposureModel:
             if not (('poly' in component.lower()) or ('identity' in component.lower())):
                 raise pexConfig.FieldValidationError(GbdesAstrometricFitConfig.exposureModel, self,
-                                                     f"exposureModel component {component} is not supported.")
+                                                     f'exposureModel component {component} is not supported.')
 
 
 class GbdesAstrometricFitTask(pipeBase.PipelineTask):
@@ -392,12 +392,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
     """
 
     ConfigClass = GbdesAstrometricFitConfig
-    _DefaultName = "gbdesAstrometricFit"
+    _DefaultName = 'gbdesAstrometricFit'
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.makeSubtask("sourceSelector")
-        self.makeSubtask("referenceSelector")
+        self.makeSubtask('sourceSelector')
+        self.makeSubtask('referenceSelector')
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # We override runQuantum to set up the refObjLoaders
@@ -409,7 +409,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refEpoch = sampleRefCat[0]['epoch']
 
         refConfig = LoadReferenceObjectsConfig()
-        refConfig.anyFilterMapsToThis = "phot_g_mean"
+        refConfig.anyFilterMapsToThis = 'phot_g_mean'
         refConfig.requireProperMotion = True
         refObjectLoader = ReferenceObjectLoader(dataIds=[ref.datasetRef.dataId
                                                          for ref in inputRefs.referenceCatalog],
@@ -425,7 +425,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             butlerQC.put(output.outputWCSs[visit], outputRef)
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
 
-    def run(self, inputCatalogRefs, inputVisitSummary, instrumentName=None, refEpoch=None,
+    def run(self, inputCatalogRefs, inputVisitSummary, instrumentName="", refEpoch=None,
             refObjectLoader=None):
         """Run the WCS fit for a given set of visits
 
@@ -437,7 +437,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         inputVisitSummary : `list` of `lsst.afw.table.ExposureCatalog`
             List of catalogs with per-detector summary information.
         instrumentName : `str`, optional
-            Name of the instrument used.
+            Name of the instrument used. This is only used for labelling.
         refEpoch : `float`
             Epoch of the reference objects in MJD.
         refObjectLoader : instance of
@@ -484,7 +484,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self.log.info("Fit the WCSs")
         # Set up a YAML-type string using the config variables and a sample
         # visit
-        inputYAML = self.make_YAML(inputVisitSummary[0])
+        inputYAML = self.make_yaml(inputVisitSummary[0])
 
         # Set the verbosity level for WCSFit from the task log level.
         # TODO: DM-36850, Add lsst.log to gbdes so that log messages are
@@ -678,7 +678,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # Add information for the reference catalog. Most of the values are
         # not used.
-        exposureNames.append("REFERENCE")
+        exposureNames.append('REFERENCE')
         visits.append(-1)
         fieldNumbers.append(0)
         if self.config.fitProperMotion:
@@ -693,7 +693,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         observatories.append(np.array([0, 0, 0]))
         identity = wcsfit.IdentityMap()
         icrs = wcsfit.SphericalICRS()
-        refWcs = wcsfit.Wcs(identity, icrs, "Identity", np.pi / 180.)
+        refWcs = wcsfit.Wcs(identity, icrs, 'Identity', np.pi / 180.)
         wcss.append(refWcs)
 
         extensionVisitIndices.append(len(exposureNames) - 1)
@@ -800,7 +800,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         instrumentIndex = -1  # -1 indicates the reference catalog
         refWcs = extensionInfo.wcs[extensionIndex]
 
-        associations.addCatalog(refWcs, "STELLAR", visitIndex, fieldIndex, instrumentIndex, detectorIndex,
+        associations.addCatalog(refWcs, 'STELLAR', visitIndex, fieldIndex, instrumentIndex, detectorIndex,
                                 extensionIndex, np.ones(len(refCat), dtype=bool),
                                 ra, dec, np.arange(len(ra)))
 
@@ -835,7 +835,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             List of columns needed from source tables.
         """
         columns = ['detector', 'sourceId', 'x', 'xErr', 'y', 'yErr', 'ixx', 'iyy', 'ixy',
-                   f"{self.config.sourceFluxType}_instFlux", f"{self.config.sourceFluxType}_instFluxErr"]
+                   f'{self.config.sourceFluxType}_instFlux', f'{self.config.sourceFluxType}_instFluxErr']
         if self.sourceSelector.config.doFlags:
             columns.extend(self.sourceSelector.config.flags.bad)
         if self.sourceSelector.config.doUnresolved:
@@ -872,7 +872,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 wcs = extensionInfo.wcs[extensionIndex]
                 associations.reprojectWCS(wcs, fieldIndex)
 
-                associations.addCatalog(wcs, "STELLAR", visitIndex, fieldIndex,
+                associations.addCatalog(wcs, 'STELLAR', visitIndex, fieldIndex,
                                         instrumentIndex, detectorIndex, extensionIndex, isStar,
                                         detectorSources[goodInds]['x'].to_list(),
                                         detectorSources[goodInds]['y'].to_list(),
@@ -883,7 +883,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         return sourceIndices, columns
 
-    def make_YAML(self, inputVisitSummary, inputFile=None):
+    def make_yaml(self, inputVisitSummary, inputFile=None):
         """Make a YAML-type object that describes the parameters of the fit
         model.
 
@@ -900,50 +900,50 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             YAML object containing the model description.
         """
         if inputFile is not None:
-            inputYAML = wcsfit.YAMLCollector(inputFile, "PixelMapCollection")
+            inputYAML = wcsfit.YAMLCollector(inputFile, 'PixelMapCollection')
         else:
-            inputYAML = wcsfit.YAMLCollector("", "PixelMapCollection")
+            inputYAML = wcsfit.YAMLCollector('', 'PixelMapCollection')
         inputDict = {}
-        modelComponents = ["INSTRUMENT/DEVICE", "EXPOSURE"]
-        baseMap = {"Type": "Composite", "Elements": modelComponents}
-        inputDict["EXPOSURE/DEVICE/base"] = baseMap
+        modelComponents = ['INSTRUMENT/DEVICE', 'EXPOSURE']
+        baseMap = {'Type': 'Composite', 'Elements': modelComponents}
+        inputDict['EXPOSURE/DEVICE/base'] = baseMap
 
         xMin = str(inputVisitSummary['bbox_min_x'].min())
         xMax = str(inputVisitSummary['bbox_max_x'].max())
         yMin = str(inputVisitSummary['bbox_min_y'].min())
         yMax = str(inputVisitSummary['bbox_max_y'].max())
 
-        deviceModel = {"Type": "Composite", "Elements": self.config.deviceModel.list()}
-        inputDict["INSTRUMENT/DEVICE"] = deviceModel
+        deviceModel = {'Type': 'Composite', 'Elements': self.config.deviceModel.list()}
+        inputDict['INSTRUMENT/DEVICE'] = deviceModel
         for component in self.config.deviceModel:
-            if "poly" in component.lower():
-                componentDict = {"Type": "Poly",
-                                 "XPoly": {"OrderX": self.config.devicePolyOrder,
-                                           "SumOrder": True},
-                                 "YPoly": {"OrderX": self.config.devicePolyOrder,
-                                           "SumOrder": True},
-                                 "XMin": xMin, "XMax": xMax, "YMin": yMin, "YMax": yMax}
-            elif "identity" in component.lower():
-                componentDict = {"Type": "Identity"}
+            if 'poly' in component.lower():
+                componentDict = {'Type': 'Poly',
+                                 'XPoly': {'OrderX': self.config.devicePolyOrder,
+                                           'SumOrder': True},
+                                 'YPoly': {'OrderX': self.config.devicePolyOrder,
+                                           'SumOrder': True},
+                                 'XMin': xMin, 'XMax': xMax, 'YMin': yMin, 'YMax': yMax}
+            elif 'identity' in component.lower():
+                componentDict = {'Type': 'Identity'}
 
             inputDict[component] = componentDict
 
-        exposureModel = {"Type": "Composite", "Elements": self.config.exposureModel.list()}
-        inputDict["EXPOSURE"] = exposureModel
+        exposureModel = {'Type': 'Composite', 'Elements': self.config.exposureModel.list()}
+        inputDict['EXPOSURE'] = exposureModel
         for component in self.config.exposureModel:
-            if "poly" in component.lower():
-                componentDict = {"Type": "Poly",
-                                 "XPoly": {"OrderX": self.config.exposurePolyOrder,
-                                           "SumOrder": "true"},
-                                 "YPoly": {"OrderX": self.config.exposurePolyOrder,
-                                           "SumOrder": "true"}}
-            elif "identity" in component.lower():
-                componentDict = {"Type": "Identity"}
+            if 'poly' in component.lower():
+                componentDict = {'Type': 'Poly',
+                                 'XPoly': {'OrderX': self.config.exposurePolyOrder,
+                                           'SumOrder': 'true'},
+                                 'YPoly': {'OrderX': self.config.exposurePolyOrder,
+                                           'SumOrder': 'true'}}
+            elif 'identity' in component.lower():
+                componentDict = {'Type': 'Identity'}
 
             inputDict[component] = componentDict
 
         inputYAML.addInput(yaml.dump(inputDict))
-        inputYAML.addInput("Identity:\n  Type:  Identity\n")
+        inputYAML.addInput('Identity:\n  Type:  Identity\n')
 
         return inputYAML
 
@@ -955,8 +955,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         wcsf : `wcsfit.WCSFit`
             WCS-fitting object.
         inputCatalogRefs : `list`
-            List of DeferredDatasetHandles pointing to visit-level source.
-            tables
+            List of DeferredDatasetHandles pointing to visit-level source
+            tables.
         sourceIndices : `list`
             List of boolean arrays used to select sources.
         extensionInfo : `lsst.pipe.base.Struct`
@@ -982,8 +982,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                          / (sourceCat['ixx'] + sourceCat['iyy']))
                 # TODO: add correct xyErr if DM-7101 is ever done.
 
-                d = {"x": sourceCat['x'].to_numpy(), "y": sourceCat['y'].to_numpy(),
-                     "xCov": xCov.to_numpy(), "yCov": yCov.to_numpy(), "xyCov": xyCov.to_numpy()}
+                d = {'x': sourceCat['x'].to_numpy(), 'y': sourceCat['y'].to_numpy(),
+                     'xCov': xCov.to_numpy(), 'yCov': yCov.to_numpy(), 'xyCov': xyCov.to_numpy()}
 
                 wcsf.setObjects(extensionIndex, d, 'x', 'y', ['xCov', 'yCov', 'xyCov'])
 
@@ -1036,8 +1036,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             WCS constructed from the input mappings
         """
         # Set up pixel frames
-        pixelFrame = astshim.Frame(2, "Domain=PIXELS")
-        normedPixelFrame = astshim.Frame(2, "Domain=NORMEDPIXELS")
+        pixelFrame = astshim.Frame(2, 'Domain=PIXELS')
+        normedPixelFrame = astshim.Frame(2, 'Domain=NORMEDPIXELS')
 
         if doNormalizePixels:
             # Pixels will need to be rescaled before going into the mappings
@@ -1051,13 +1051,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         tangentPoint = lsst.geom.SpherePoint(centerRA, centerDec)
         cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0 * lsst.geom.degrees, True)
         iwcToSkyWcs = afwgeom.makeSkyWcs(lsst.geom.Point2D(0, 0), tangentPoint, cdMatrix)
-        iwcToSkyMap = iwcToSkyWcs.getFrameDict().getMapping("PIXELS", "SKY")
-        skyFrame = iwcToSkyWcs.getFrameDict().getFrame("SKY")
+        iwcToSkyMap = iwcToSkyWcs.getFrameDict().getMapping('PIXELS', 'SKY')
+        skyFrame = iwcToSkyWcs.getFrameDict().getFrame('SKY')
 
         frameDict = astshim.FrameDict(pixelFrame)
-        frameDict.addFrame("PIXELS", normMap, normedPixelFrame)
+        frameDict.addFrame('PIXELS', normMap, normedPixelFrame)
 
-        currentFrameName = "NORMEDPIXELS"
+        currentFrameName = 'NORMEDPIXELS'
 
         # Dictionary values are ordered according to the maps' application.
         for m, mapElement in enumerate(mapDict.values()):
@@ -1072,13 +1072,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 raise ValueError(f"Converting map type {mapType} to WCS is not supported")
 
             if m == len(mapDict) - 1:
-                newFrameName = "IWC"
+                newFrameName = 'IWC'
             else:
-                newFrameName = "INTERMEDIATE" + str(m)
-            newFrame = astshim.Frame(2, f"Domain={newFrameName}")
+                newFrameName = 'INTERMEDIATE' + str(m)
+            newFrame = astshim.Frame(2, f'Domain={newFrameName}')
             frameDict.addFrame(currentFrameName, astMap, newFrame)
             currentFrameName = newFrameName
-        frameDict.addFrame("IWC", iwcToSkyMap, skyFrame)
+        frameDict.addFrame('IWC', iwcToSkyMap, skyFrame)
 
         outWCS = afwgeom.SkyWcs(frameDict)
         return outWCS
@@ -1123,9 +1123,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             catalog['visit'] = visit
 
             for d, detector in enumerate(visitSummary['id']):
-                mapName = f"{visit}/{detector}"
+                mapName = f'{visit}/{detector}'
 
-                mapElements = wcsf.mapCollection.orderAtoms(f"{mapName}/base")
+                mapElements = wcsf.mapCollection.orderAtoms(f'{mapName}/base')
                 mapDict = {}
                 for m, mapElement in enumerate(mapElements):
                     mapType = wcsf.mapCollection.getMapType(mapElement)
