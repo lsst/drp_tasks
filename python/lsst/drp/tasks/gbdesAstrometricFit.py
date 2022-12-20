@@ -78,6 +78,7 @@ def _lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
                 findFirst=True,
             ).expanded()
         )
+    sorted(refs)
     yield from refs
 
 
@@ -229,7 +230,7 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         deferLoad=True,
         multiple=True,
     )
-    inputVisitSummary = pipeBase.connectionTypes.Input(
+    inputVisitSummaries = pipeBase.connectionTypes.Input(
         doc=("Per-visit consolidated exposure metadata built from calexps. "
              "These catalogs use detector id for the id and must be sorted for "
              "fast lookups of a detector."),
@@ -345,6 +346,16 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
         doc="Exclude reference objects without proper motion/parallax information.",
         default=True
     )
+    fitReserveFraction = pexConfig.Field(
+        dtype=float,
+        default=0.2,
+        doc="Fraction of objects to reserve from fit for validation."
+    )
+    fitReserveRandomSeed = pexConfig.Field(
+        dtype=int,
+        doc="Set the random seed for selecting data points to reserve from the fit for validation.",
+        default=1234
+    )
 
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
@@ -417,6 +428,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                                                 config=refConfig,
                                                 log=self.log)
 
+        # Ensure the inputs are in a consistent order
+        inputCatVisits = np.array([inputCat.dataId['visit'] for inputCat in inputs['inputCatalogRefs']])
+        inputs['inputCatalogRefs'] = [inputs['inputCatalogRefs'][v] for v in inputCatVisits.argsort()]
+        inputSumVisits = np.array([inputSum[0]['visit'] for inputSum in inputs['inputVisitSummaries']])
+        inputs['inputVisitSummaries'] = [inputs['inputVisitSummaries'][v] for v in inputSumVisits.argsort()]
+
         output = self.run(**inputs, instrumentName=instrumentName, refEpoch=refEpoch,
                           refObjectLoader=refObjectLoader)
 
@@ -425,7 +442,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             butlerQC.put(output.outputWCSs[visit], outputRef)
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
 
-    def run(self, inputCatalogRefs, inputVisitSummary, instrumentName="", refEpoch=None,
+    def run(self, inputCatalogRefs, inputVisitSummaries, instrumentName="", refEpoch=None,
             refObjectLoader=None):
         """Run the WCS fit for a given set of visits
 
@@ -434,7 +451,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         inputCatalogRefs : `list`
             List of `DeferredDatasetHandle`s pointing to visit-level source
             tables.
-        inputVisitSummary : `list` of `lsst.afw.table.ExposureCatalog`
+        inputVisitSummaries : `list` of `lsst.afw.table.ExposureCatalog`
             List of catalogs with per-detector summary information.
         instrumentName : `str`, optional
             Name of the instrument used. This is only used for labelling.
@@ -460,11 +477,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         instrument = wcsfit.Instrument(instrumentName)
 
         # Get RA, Dec, MJD, etc., for the input visits
-        exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(inputVisitSummary, instrument,
-                                                                               refEpoch=refEpoch)
+        exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(inputVisitSummaries,
+                                                                               instrument, refEpoch=refEpoch)
 
         # Get information about the extent of the input visits
-        fields, fieldCenter, fieldRadius = self._prep_sky(inputVisitSummary, exposureInfo.medianEpoch)
+        fields, fieldCenter, fieldRadius = self._prep_sky(inputVisitSummaries, exposureInfo.medianEpoch)
 
         self.log.info("Load catalogs and associate sources")
         # Set up class to associate sources into matches using a
@@ -484,7 +501,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self.log.info("Fit the WCSs")
         # Set up a YAML-type string using the config variables and a sample
         # visit
-        inputYAML = self.make_yaml(inputVisitSummary[0])
+        inputYAML = self.make_yaml(inputVisitSummaries[0])
 
         # Set the verbosity level for WCSFit from the task log level.
         # TODO: DM-36850, Add lsst.log to gbdes so that log messages are
@@ -511,10 +528,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self._add_ref_objects(wcsf, refObjects, refCovariance, extensionInfo)
 
         # Do the WCS fit
-        wcsf.fit()
+        wcsf.fit(reserveFraction=self.config.fitReserveFraction,
+                 randomNumberSeed=self.config.fitReserveRandomSeed)
         self.log.info("WCS fitting done")
 
-        outputWCSs = self._make_outputs(wcsf, inputVisitSummary, exposureInfo)
+        outputWCSs = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo)
         outputCatalog = pa.Table.from_pydict(wcsf.getOutputCatalog())
 
         return pipeBase.Struct(outputWCSs=outputWCSs,
@@ -527,7 +545,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         Paramaters
         ----------
-        inputVisitSummary : `list` of `lsst.afw.table.ExposureCatalog`
+        inputVisitSummaries : `list` of `lsst.afw.table.ExposureCatalog`
             List of catalogs with per-detector summary information.
         epoch : float
             Reference epoch.
@@ -560,14 +578,14 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         return fields, center, radius
 
-    def _get_exposure_info(self, visitSummaryTables, instrument, fieldNumber=0, instrumentNumber=0,
+    def _get_exposure_info(self, inputVisitSummaries, instrument, fieldNumber=0, instrumentNumber=0,
                            refEpoch=None):
         """Get various information about the input visits to feed to the
         fitting routines.
 
         Parameters
         ----------
-        visitSummaryTables : `list` of `lsst.afw.table.ExposureCatalog`
+        inputVisitSummaries : `list` of `lsst.afw.table.ExposureCatalog`
             Tables for each visit with information for detectors.
         instrument : `wcsfit.Instrument`
             Instrument object to which detector information is added.
@@ -628,7 +646,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         extensionVisits = []
         extensionDetectors = []
         # Get information for all the science visits
-        for v, visitSummary in enumerate(visitSummaryTables):
+        for v, visitSummary in enumerate(inputVisitSummaries):
             visitInfo = visitSummary[0].getVisitInfo()
             visit = visitSummary[0]['visit']
             visits.append(visit)
@@ -848,7 +866,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         for inputCatalogRef in inputCatalogRefs:
             visit = inputCatalogRef.dataId['visit']
             inputCatalog = inputCatalogRef.get(parameters={'columns': columns})
-            detectors = set(inputCatalog['detector'])
+            # Get a sorted array of detector names
+            detectors = np.unique(inputCatalog['detector'])
 
             for detector in detectors:
                 detectorSources = inputCatalog[inputCatalog['detector'] == detector]
@@ -889,8 +908,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         Parameters
         ----------
-        inputVisitSummary : `list` of `lsst.afw.table.ExposureCatalog`
-            List of catalogs with per-detector summary information.
+        inputVisitSummary : `lsst.afw.table.ExposureCatalog`
+            Catalog with per-detector summary information.
         inputFile : `str`
             Path to a file that contains a basic model.
 
@@ -967,7 +986,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         for inputCatalogRef in inputCatalogRefs:
             visit = inputCatalogRef.dataId['visit']
             inputCatalog = inputCatalogRef.get(parameters={'columns': columns})
-            detectors = set(inputCatalog['detector'])
+            detectors = np.unique(inputCatalog['detector'])
 
             for detector in detectors:
                 detectorSources = inputCatalog[inputCatalog['detector'] == detector]
