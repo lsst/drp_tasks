@@ -46,6 +46,8 @@ You can find Jira issues for this module under the `drp_tasks <https://jira.lsst
 Python API reference
 ====================
 
-.. automodapi:: lsst.drp.tasks
+.. automodapi:: lsst.drp.tasks.gbdesAstrometricFit
+   :no-main-docstr:
+   :no-inheritance-diagram:
    :no-main-docstr:
    :no-inheritance-diagram:

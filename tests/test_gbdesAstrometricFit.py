@@ -30,7 +30,7 @@ import wcsfit
 import lsst.utils
 import lsst.afw.table as afwTable
 import lsst.afw.geom as afwgeom
-from lsst.drp.tasks import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
+from lsst.drp.tasks.gbdesAstrometricFit import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
 from lsst.daf.base import PropertyList
 from lsst.daf.butler import DimensionUniverse, DatasetType, DatasetRef, StorageClass
 from lsst.meas.algorithms import ReferenceObjectLoader
