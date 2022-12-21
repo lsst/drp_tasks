@@ -54,6 +54,9 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
     @classmethod
     def setUpClass(cls):
 
+        # Set random seed
+        np.random.seed(1234)
+
         # Fraction of simulated stars in the reference catalog and science
         # exposures
         inReferenceFraction = 1
@@ -81,6 +84,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.config.systematicError = 0
         cls.config.devicePolyOrder = 4
         cls.config.exposurePolyOrder = 6
+        cls.config.fitReserveFraction = 0
+        cls.config.fitReserveRandomSeed = 1234
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
         cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
@@ -132,6 +137,10 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         # Make source catalogs:
         cls.inputCatalogRefs = cls._make_sourceCat(starIds, starRAs, starDecs, trueWCSs,
                                                    inScienceFraction)
+
+        cls.outputs = cls.task.run(cls.inputCatalogRefs, cls.inputVisitSummary,
+                                   instrumentName=cls.instrumentName, refEpoch=cls.refEpoch,
+                                   refObjectLoader=cls.refObjectLoader)
 
     @classmethod
     def _make_refCat(cls, starIds, starRas, starDecs, inReferenceFraction):
@@ -439,14 +448,9 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
     def test_make_outputs(self):
         """Test that the run method recovers the input model parameters.
         """
-        task = GbdesAstrometricFitTask(config=self.config)
-
-        outputs = task.run(self.inputCatalogRefs, self.inputVisitSummary, instrumentName=self.instrumentName,
-                           refEpoch=self.refEpoch, refObjectLoader=self.refObjectLoader)
-
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
-            outputWcsCatalog = outputs.outputWCSs[visit]
+            outputWcsCatalog = self.outputs.outputWCSs[visit]
             visitSources = self.inputCatalogRefs[v].get()
             for d, detectorRow in enumerate(visitSummary):
                 detectorId = detectorRow['id']
@@ -464,12 +468,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
     def test_run(self):
         """Test that run method recovers the input model parameters
         """
-        task = GbdesAstrometricFitTask(config=self.config)
-
-        outputs = task.run(self.inputCatalogRefs, self.inputVisitSummary, instrumentName=self.instrumentName,
-                           refEpoch=self.refEpoch, refObjectLoader=self.refObjectLoader)
-
-        outputMaps = outputs.fitModel.mapCollection.getParamDict()
+        outputMaps = self.outputs.fitModel.mapCollection.getParamDict()
 
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
