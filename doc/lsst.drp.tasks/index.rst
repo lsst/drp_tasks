@@ -18,6 +18,17 @@ lsst.drp.tasks
 .. .. toctree::
 ..    :maxdepth: 1
 
+Task reference
+==============
+
+.. _lsst.drp.tasks-pipeline-tasks:
+
+Pipeline tasks
+--------------
+
+.. lsst-pipelinetasks::
+   :root: lsst.drp.tasks
+
 .. _lsst.drp.tasks-contributing:
 
 Contributing
