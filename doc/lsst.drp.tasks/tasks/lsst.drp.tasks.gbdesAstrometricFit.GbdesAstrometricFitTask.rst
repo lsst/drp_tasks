@@ -1,8 +1,8 @@
-.. lsst-task-topic:: lsst.drp.tasks.GbdesAstrometricFitTask
+.. lsst-task-topic:: lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask
 
-##########
+#######################
 GbdesAstrometricFitTask
-##########
+#######################
 
 ``GbdesAstrometricFitTask`` fits an astrometric solution, or world coordinate system (WCS), for a series of visits.
 Sources in science images are matched with a reference catalog, which allows the fitting algorithm to break degeneracies in the astrometric model.
@@ -13,7 +13,7 @@ This task requires source catalogs for the input images, a reference catalog, an
 The task produces the fitted WCSs, which are described in AST format and are held in `lsst.afw.table.ExposureCatalog`\s called `outputWcs`.
 The task also outputs a table for debugging, `outputCatalog`, which contains the sources used in the fit, along with their residuals with the best-fit model.
 
-.. _lsst.drp.tasks.GbdesAstrometricFitTask-summary:
+.. _lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask-summary:
 
 Processing summary
 ==================
@@ -31,23 +31,23 @@ This uses `WCSFit` from the `gbdes` package (https://github.com/lsst/gbdes/tree/
 The output is in the form of one `lsst.afw.table.ExposureCatalog` for each visit, with a row for each detector.
 The fit WCS is accessed by calling `getWCS()` on the catalog row corresponding to the desired visit and detector.
 
-.. _lsst.drp.tasks.GbdesAstrometricFit-api:
+.. _lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFit-api:
 
 Python API summary
 ==================
 
-.. lsst-task-api-summary:: lsst.drp.tasks.GbdesAstrometricFitTask
+.. lsst-task-api-summary:: lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask
 
-.. _lsst.drp.tasks.GbdesAstrometricFitTask-subtasks:
+.. _lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask-subtasks:
 
 Retargetable subtasks
 =====================
 
-.. lsst-task-config-subtasks:: lsst.drp.tasks.GbdesAstrometricFitTask
+.. lsst-task-config-subtasks:: lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask
 
-.. _lsst.drp.tasks.GbdesAstrometricFitTask-configs:
+.. _lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask-configs:
 
 Configuration fields
 ====================
 
-.. lsst-task-config-fields:: lsst.drp.tasks.GbdesAstrometricFitTask
+.. lsst-task-config-fields:: lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask
