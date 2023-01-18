@@ -18,6 +18,17 @@ lsst.drp.tasks
 .. .. toctree::
 ..    :maxdepth: 1
 
+Task reference
+==============
+
+.. _lsst.drp.tasks-pipeline-tasks:
+
+Pipeline tasks
+--------------
+
+.. lsst-pipelinetasks::
+   :root: lsst.drp.tasks
+
 .. _lsst.drp.tasks-contributing:
 
 Contributing
@@ -46,6 +57,6 @@ You can find Jira issues for this module under the `drp_tasks <https://jira.lsst
 Python API reference
 ====================
 
-.. automodapi:: lsst.drp.tasks
+.. automodapi:: lsst.drp.tasks.update_visit_summary
    :no-main-docstr:
    :no-inheritance-diagram:
