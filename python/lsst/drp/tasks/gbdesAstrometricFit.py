@@ -252,7 +252,7 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         doc=("Per-tract, per-visit world coordinate systems derived from the fitted model."
              " These catalogs only contain entries for detectors with an output, and use"
              " the detector id for the catalog id, sorted on id for fast lookups of a detector."),
-        name='GbdesAstrometricFitSkyWcsCatalog',
+        name='gbdesAstrometricFitSkyWcsCatalog',
         storageClass='ExposureCatalog',
         dimensions=('instrument', 'visit', 'skymap', 'tract'),
         multiple=True
@@ -260,7 +260,7 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
     outputCatalog = pipeBase.connectionTypes.Output(
         doc=("Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
              "plane coordinates and chisq values."),
-        name='GbdesAstrometricFit_fitStars',
+        name='gbdesAstrometricFit_fitStars',
         storageClass='ArrowTable',
         dimensions=('instrument', 'skymap', 'tract', 'physical_filter'),
     )
