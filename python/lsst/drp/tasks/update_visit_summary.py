@@ -263,24 +263,28 @@ class UpdateVisitSummaryConnections(
         storageClass="ExposureF",
         multiple=True,
         deferLoad=True,
+        deferGraphConstraint=True,
     )
     psf_overrides = cT.Input(
         doc="Visit-level catalog of updated PSFs to use.",
         name="finalized_psf_ap_corr_catalog",
         dimensions=("instrument", "visit"),
         storageClass="ExposureCatalog",
+        deferGraphConstraint=True,
     )
     psf_star_catalog = cT.Input(
         doc="Per-visit table of PSF reserved- and used-star measurements.",
         name="finalized_src_table",
         dimensions=("instrument", "visit"),
         storageClass="DataFrame",
+        deferGraphConstraint=True,
     )
     ap_corr_overrides = cT.Input(
         doc="Visit-level catalog of updated aperture correction maps to use.",
         name="finalized_psf_ap_corr_catalog",
         dimensions=("instrument", "visit"),
         storageClass="ExposureCatalog",
+        deferGraphConstraint=True,
     )
     photo_calib_overrides_tract = cT.Input(
         doc="Per-Tract visit-level catalog of updated photometric calibration objects to use.",
@@ -288,12 +292,14 @@ class UpdateVisitSummaryConnections(
         dimensions=("instrument", "visit", "tract"),
         storageClass="ExposureCatalog",
         multiple=True,
+        deferGraphConstraint=True,
     )
     photo_calib_overrides_global = cT.Input(
         doc="Global visit-level catalog of updated photometric calibration objects to use.",
         name="{photoCalibName}PhotoCalibCatalog",
         dimensions=("instrument", "visit"),
         storageClass="ExposureCatalog",
+        deferGraphConstraint=True,
     )
     wcs_overrides_tract = cT.Input(
         doc="Per-tract visit-level catalog of updated astrometric calibration objects to use.",
@@ -301,12 +307,14 @@ class UpdateVisitSummaryConnections(
         dimensions=("instrument", "visit", "tract"),
         storageClass="ExposureCatalog",
         multiple=True,
+        deferGraphConstraint=True,
     )
     wcs_overrides_global = cT.Input(
         doc="Global visit-level catalog of updated astrometric calibration objects to use.",
         name="{skyWcsName}SkyWcsCatalog",
         dimensions=("instrument", "visit"),
         storageClass="ExposureCatalog",
+        deferGraphConstraint=True,
     )
     background_originals = cT.Input(
         doc="Per-detector original background that has already been subtracted from 'input_exposures'.",
@@ -315,6 +323,7 @@ class UpdateVisitSummaryConnections(
         storageClass="Background",
         multiple=True,
         deferLoad=True,
+        deferGraphConstraint=True,
     )
     background_overrides = cT.Input(
         doc="Per-detector background that can be subtracted directly from 'input_exposures'.",
@@ -323,6 +332,7 @@ class UpdateVisitSummaryConnections(
         storageClass="Background",
         multiple=True,
         deferLoad=True,
+        deferGraphConstraint=True,
     )
     output_summary_schema = cT.InitOutput(
         doc="Schema of the output visit summary catalog.",
