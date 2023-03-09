@@ -232,7 +232,7 @@ class UpdateVisitSummaryConnections(
     PipelineTaskConnections,
     dimensions=("instrument", "visit"),
     defaultTemplates={
-        "skyWcsName": "jointcal",
+        "skyWcsName": "gbdesAstrometricFit",
         "photoCalibName": "fgcm",
     },
 ):
