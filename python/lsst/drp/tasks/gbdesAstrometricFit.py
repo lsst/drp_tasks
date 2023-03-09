@@ -26,7 +26,6 @@ import astropy.coordinates
 import yaml
 import wcsfit
 import astshim
-import pyarrow as pa
 
 import lsst.geom
 import lsst.pex.config as pexConfig
@@ -263,6 +262,12 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         name='gbdesAstrometricFit_fitStars',
         storageClass='ArrowTable',
         dimensions=('instrument', 'skymap', 'tract', 'physical_filter'),
+    )
+    starCatalog = pipeBase.connectionTypes.Output(
+        doc="",
+        name='gbdesAstrometricFit_starCatalog',
+        storageClass='ArrowTable',
+        dimensions=('instrument', 'skymap', 'tract', 'physical_filter')
     )
 
 
@@ -534,10 +539,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         outputWCSs = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo)
         outputCatalog = pa.Table.from_pydict(wcsf.getOutputCatalog())
+        import ipdb; ipdb.set_trace()
+        starCatalog = parquet.numpy_dict_to_arrow(wcsf.getStarCatalog())
 
         return pipeBase.Struct(outputWCSs=outputWCSs,
                                fitModel=wcsf,
-                               outputCatalog=outputCatalog)
+                               outputCatalog=outputCatalog,
+                               starCatalog=starCatalog)
 
     def _prep_sky(self, inputVisitSummaries, epoch, fieldName='Field'):
         """Get center and radius of the input tract. This assumes that all
