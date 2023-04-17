@@ -46,7 +46,7 @@ class MockRefCatDataId():
 
         datasetDimensions = DimensionUniverse().extract(['htm7'])
         datasetType = DatasetType('gaia_dr2_20200414', datasetDimensions, StorageClass("SimpleCatalog"))
-        self.ref = DatasetRef(datasetType, {'htm7': "mockRefCat"})
+        self.ref = DatasetRef(datasetType, {'htm7': "mockRefCat"}, run="mock")
 
 
 class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
