@@ -32,7 +32,6 @@ import lsst.afw.table as afwTable
 import lsst.afw.geom as afwgeom
 from lsst.drp.tasks.gbdesAstrometricFit import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
 from lsst.daf.base import PropertyList
-from lsst.daf.butler import DimensionUniverse, DatasetType, DatasetRef, StorageClass
 from lsst.meas.algorithms import ReferenceObjectLoader
 from lsst.pipe.base import InMemoryDatasetHandle
 from lsst import sphgeom
@@ -43,10 +42,6 @@ class MockRefCatDataId():
 
     def __init__(self, region):
         self.region = region
-
-        datasetDimensions = DimensionUniverse().extract(['htm7'])
-        datasetType = DatasetType('gaia_dr2_20200414', datasetDimensions, StorageClass("SimpleCatalog"))
-        self.ref = DatasetRef(datasetType, {'htm7': "mockRefCat"})
 
 
 class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
@@ -190,7 +185,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
             record.set(pmraErrKey, 1e-9)
             record.set(pmdecErrKey, 1e-9)
         refDataId = MockRefCatDataId(cls.boundingPolygon)
-        deferredRefCat = InMemoryDatasetHandle(refCat, storageClass="SourceCatalog")
+        deferredRefCat = InMemoryDatasetHandle(refCat, storageClass="SourceCatalog", htm7="mockRefCat")
 
         return refDataId, deferredRefCat
 
