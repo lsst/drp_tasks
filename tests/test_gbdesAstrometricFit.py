@@ -38,6 +38,8 @@ from lsst.pipe.base import InMemoryDatasetHandle
 from lsst import sphgeom
 import lsst.geom
 
+TESTDIR = os.path.abspath(os.path.dirname(__file__))
+
 
 class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
@@ -53,8 +55,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         inScienceFraction = 1
 
         # Make fake data
-        packageDir = lsst.utils.getPackageDir('drp_tasks')
-        cls.datadir = os.path.join(packageDir, 'tests', "data")
+        cls.datadir = os.path.join(TESTDIR, "data")
 
         cls.fieldNumber = 0
         cls.instrumentName = 'HSC'
