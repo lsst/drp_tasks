@@ -33,15 +33,12 @@ import lsst.afw.geom as afwgeom
 from lsst.drp.tasks.gbdesAstrometricFit import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
 from lsst.daf.base import PropertyList
 from lsst.meas.algorithms import ReferenceObjectLoader
+from lsst.meas.algorithms.testUtils import MockRefcatDataId
 from lsst.pipe.base import InMemoryDatasetHandle
 from lsst import sphgeom
 import lsst.geom
 
-
-class MockRefCatDataId():
-
-    def __init__(self, region):
-        self.region = region
+TESTDIR = os.path.abspath(os.path.dirname(__file__))
 
 
 class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
@@ -58,8 +55,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         inScienceFraction = 1
 
         # Make fake data
-        packageDir = lsst.utils.getPackageDir('drp_tasks')
-        cls.datadir = os.path.join(packageDir, 'tests', "data")
+        cls.datadir = os.path.join(TESTDIR, "data")
 
         cls.fieldNumber = 0
         cls.instrumentName = 'HSC'
@@ -154,7 +150,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
         Returns
         -------
-        refDataId : MockRefCatDataId
+        refDataId : `lsst.meas.algorithms.testUtils.MockRefcatDataId`
             Object that replicates the functionality of a dataId.
         deferredRefCat : `lsst.pipe.base.InMemoryDatasetHandle`
             Dataset handle for reference catalog.
@@ -184,7 +180,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
             record.set(decErrKey, 0.00001)
             record.set(pmraErrKey, 1e-9)
             record.set(pmdecErrKey, 1e-9)
-        refDataId = MockRefCatDataId(cls.boundingPolygon)
+        refDataId = MockRefcatDataId(cls.boundingPolygon)
         deferredRefCat = InMemoryDatasetHandle(refCat, storageClass="SourceCatalog", htm7="mockRefCat")
 
         return refDataId, deferredRefCat
