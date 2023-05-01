@@ -26,7 +26,6 @@ import astropy.coordinates
 import yaml
 import wcsfit
 import astshim
-import pyarrow as pa
 
 import lsst.geom
 import lsst.pex.config as pexConfig
@@ -261,8 +260,14 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         doc=("Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
              "plane coordinates and chisq values."),
         name='gbdesAstrometricFit_fitStars',
-        storageClass='ArrowTable',
+        storageClass='ArrowNumpyDict',
         dimensions=('instrument', 'skymap', 'tract', 'physical_filter'),
+    )
+    starCatalog = pipeBase.connectionTypes.Output(
+        doc="",
+        name='gbdesAstrometricFit_starCatalog',
+        storageClass='ArrowNumpyDict',
+        dimensions=('instrument', 'skymap', 'tract', 'physical_filter')
     )
 
 
@@ -441,6 +446,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             visit = outputRef.dataId['visit']
             butlerQC.put(output.outputWCSs[visit], outputRef)
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
+        butlerQC.put(output.starCatalog, outputRefs.starCatalog)
 
     def run(self, inputCatalogRefs, inputVisitSummaries, instrumentName="", refEpoch=None,
             refObjectLoader=None):
@@ -478,7 +484,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # Get RA, Dec, MJD, etc., for the input visits
         exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(inputVisitSummaries,
-                                                                               instrument, refEpoch=refEpoch)
+                                                                               instrument)
 
         # Get information about the extent of the input visits
         fields, fieldCenter, fieldRadius = self._prep_sky(inputVisitSummaries, exposureInfo.medianEpoch)
@@ -491,8 +497,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                                        (self.config.matchRadius * u.arcsec).to(u.degree).value)
 
         # Add the reference catalog to the associator
+        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format='decimalyear').mjd
         refObjects, refCovariance = self._load_refcat(associations, refObjectLoader, fieldCenter, fieldRadius,
-                                                      extensionInfo, epoch=refEpoch)
+                                                      extensionInfo, epoch=medianEpoch)
 
         # Add the science catalogs and associate new sources as they are added
         sourceIndices, usedColumns = self._load_catalogs_and_associate(associations, inputCatalogRefs,
@@ -533,11 +540,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self.log.info("WCS fitting done")
 
         outputWCSs = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo)
-        outputCatalog = pa.Table.from_pydict(wcsf.getOutputCatalog())
+        outputCatalog = wcsf.getOutputCatalog()
+        starCatalog = wcsf.getStarCatalog()
 
         return pipeBase.Struct(outputWCSs=outputWCSs,
                                fitModel=wcsf,
-                               outputCatalog=outputCatalog)
+                               outputCatalog=outputCatalog,
+                               starCatalog=starCatalog)
 
     def _prep_sky(self, inputVisitSummaries, epoch, fieldName='Field'):
         """Get center and radius of the input tract. This assumes that all
@@ -692,7 +701,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # Set the reference epoch to be the median of the science visits.
         # The reference catalog will be shifted to this date.
-        medianEpoch = astropy.time.Time(np.median(mjds), format='mjd').decimalyear
+        medianMJD = np.median(mjds)
+        medianEpoch = astropy.time.Time(medianMJD, format='mjd').decimalyear
 
         # Add information for the reference catalog. Most of the values are
         # not used.
@@ -707,7 +717,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         decs.append(0.0)
         airmasses.append(0.0)
         exposureTimes.append(0)
-        mjds.append((refEpoch if (refEpoch is not None) else medianEpoch))
+        mjds.append((refEpoch if (refEpoch is not None) else medianMJD))
         observatories.append(np.array([0, 0, 0]))
         identity = wcsfit.IdentityMap()
         icrs = wcsfit.SphericalICRS()
