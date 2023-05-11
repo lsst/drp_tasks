@@ -386,6 +386,9 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
                     ]
         self.sourceSelector['science'].flags.bad = badFlags
 
+        # Use only primary sources.
+        self.sourceSelector['science'].doRequirePrimary = True
+
     def validate(self):
         super().validate()
 
@@ -871,6 +874,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         if self.sourceSelector.config.doIsolated:
             columns.append(self.sourceSelector.config.isolated.parentName)
             columns.append(self.sourceSelector.config.isolated.nChildName)
+        if self.sourceSelector.config.doRequirePrimary:
+            columns.append(self.sourceSelector.config.requirePrimary.primaryColName)
 
         sourceIndices = [None] * len(extensionInfo.visit)
         for inputCatalogRef in inputCatalogRefs:
