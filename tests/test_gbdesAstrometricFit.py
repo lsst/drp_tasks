@@ -262,6 +262,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                             'deblend_nChild', 'ixy']:
                     sourceDict[key] = zeros_like
                 sourceDict['apFlux_12_0_instFluxErr'] = 1e-3 * ones_like
+                sourceDict['detect_isPrimary'] = ones_like.astype(bool)
 
                 sourceCat = pd.DataFrame(sourceDict)
                 sourceCats.append(sourceCat)
