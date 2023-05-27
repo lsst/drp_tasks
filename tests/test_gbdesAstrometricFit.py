@@ -279,6 +279,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                     "hsmPsfMoments_flag",
                     "apFlux_12_0_flag",
                     "extendedness",
+                    "extendedLikelihood",
                     "parentSourceId",
                     "deblend_nChild",
                     "ixy",
