@@ -28,6 +28,7 @@ from lsst.meas.base._id_generator import SkyMapIdGeneratorConfig
 from lsst.meas.base.forcedMeasurement import ForcedMeasurementTask
 from lsst.meas.base.applyApCorr import ApplyApCorrTask
 from lsst.meas.base.catalogCalculation import CatalogCalculationTask
+from lsst.meas.extensions.scarlet.io import updateCatalogFootprints
 
 __all__ = ("ForcedPhotCoaddConfig", "ForcedPhotCoaddTask")
 
@@ -327,15 +328,15 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         """Attach scarlet models as HeavyFootprints
         """
         if self.config.doConserveFlux:
-            redistributeImage = exposure.image
+            redistributeImage = exposure
         else:
             redistributeImage = None
         # Attach the footprints
-        modelData.updateCatalogFootprints(
+        updateCatalogFootprints(
+            modelData=modelData,
             catalog=catalog,
             band=band,
-            psfModel=exposure.getPsf(),
-            redistributeImage=redistributeImage,
+            imageForResdistibution=redistributeImage,
             removeScarletData=True,
             updateFluxColumns=False,
         )
