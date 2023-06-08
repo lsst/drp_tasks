@@ -264,7 +264,7 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         dimensions=('instrument', 'skymap', 'tract', 'physical_filter'),
     )
     starCatalog = pipeBase.connectionTypes.Output(
-        doc="",
+        doc="Star catalog.",
         name='gbdesAstrometricFit_starCatalog',
         storageClass='ArrowNumpyDict',
         dimensions=('instrument', 'skymap', 'tract', 'physical_filter')
