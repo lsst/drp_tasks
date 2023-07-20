@@ -33,29 +33,35 @@ import wcsfit
 import yaml
 from lsst import sphgeom
 from lsst.daf.base import PropertyList
-from lsst.drp.tasks.gbdesAstrometricFit import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
+from lsst.drp.tasks.gbdesAstrometricFit import (
+    GbdesAstrometricFitConfig,
+    GbdesAstrometricFitTask,
+    GbdesGlobalAstrometricFitConfig,
+    GbdesGlobalAstrometricFitTask,
+)
 from lsst.meas.algorithms import ReferenceObjectLoader
 from lsst.meas.algorithms.testUtils import MockRefcatDataId
 from lsst.pipe.base import InMemoryDatasetHandle
+from smatch.matcher import Matcher
 
 TESTDIR = os.path.abspath(os.path.dirname(__file__))
 
 
 class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
+    """This class tests `GbdesAstrometricFit` using real `visitSummaryTable`s
+    from HSC RC2 processing, with simulated sources for those visits.
+    """
+
     @classmethod
     def setUpClass(cls):
         # Set random seed
         np.random.seed(1234)
 
-        # Fraction of simulated stars in the reference catalog and science
-        # exposures
-        inReferenceFraction = 1
-        inScienceFraction = 1
-
         # Make fake data
         cls.datadir = os.path.join(TESTDIR, "data")
 
         cls.fieldNumber = 0
+        cls.nFields = 1
         cls.instrumentName = "HSC"
         cls.instrument = wcsfit.Instrument(cls.instrumentName)
         cls.refEpoch = 57205.5
@@ -77,6 +83,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.config.fitReserveFraction = 0
         cls.config.fitReserveRandomSeed = 1234
         cls.config.saveModelParams = True
+        cls.config.allowSelfMatches = True
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
         cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
@@ -110,13 +117,19 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
         # Make random set of data in a bounding box determined by input visits
         # Make wcs objects for the "true" model
-        cls.nStars = 10000
-        starIds = np.arange(cls.nStars)
-        starRAs = np.random.random(cls.nStars) * (raMax - raMin) + raMin
-        starDecs = np.random.random(cls.nStars) * (decMax - decMin) + decMin
+        cls.nStars, starIds, starRAs, starDecs = cls._make_simulated_stars(
+            raMin, raMax, decMin, decMax, cls.config.matchRadius
+        )
+
+        # Fraction of simulated stars in the reference catalog and science
+        # exposures
+        inReferenceFraction = 1
+        inScienceFraction = 1
 
         # Make a reference catalog and load it into ReferenceObjectLoader
-        refDataId, deferredRefCat = cls._make_refCat(starIds, starRAs, starDecs, inReferenceFraction)
+        refDataId, deferredRefCat = cls._make_refCat(
+            starIds, starRAs, starDecs, inReferenceFraction, cls.boundingPolygon
+        )
         cls.refObjectLoader = ReferenceObjectLoader([refDataId], [deferredRefCat])
         cls.refObjectLoader.config.requireProperMotion = False
         cls.refObjectLoader.config.anyFilterMapsToThis = "test_filter"
@@ -140,20 +153,68 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
             refObjectLoader=cls.refObjectLoader,
         )
 
+    @staticmethod
+    def _make_simulated_stars(raMin, raMax, decMin, decMax, matchRadius, nStars=10000):
+        """Generate random positions for "stars" in an RA/Dec box.
+
+        Parameters
+        ----------
+        raMin : `float`
+            Minimum RA for simulated stars.
+        raMax : `float`
+            Maximum RA for simulated stars.
+        decMin : `float`
+            Minimum Dec for simulated stars.
+        decMax : `float`
+            Maximum Dec for simulated stars.
+        matchRadius : `float`
+            Minimum allowed distance in arcsec between stars.
+        nStars : `int`, optional
+            Number of stars to simulate. Final number will be lower if any
+            too-close stars are dropped.
+
+        Returns
+        -------
+        nStars : `int`
+            Number of stars simulated.
+        starIds: `np.ndarray`
+            Unique identification number for stars.
+        starRAs: `np.ndarray`
+            Simulated Right Ascensions.
+        starDecs: `np.ndarray`
+            Simulated Declination.
+        """
+        starIds = np.arange(nStars)
+        starRAs = np.random.random(nStars) * (raMax - raMin) + raMin
+        starDecs = np.random.random(nStars) * (decMax - decMin) + decMin
+        # Remove neighbors:
+        with Matcher(starRAs, starDecs) as matcher:
+            idx = matcher.query_groups(matchRadius / 3600.0, min_match=2)
+        if len(idx) > 0:
+            neighbors = np.unique(np.concatenate(idx))
+            starRAs = np.delete(starRAs, neighbors)
+            starDecs = np.delete(starDecs, neighbors)
+            nStars = len(starRAs)
+            starIds = np.arange(nStars)
+
+        return nStars, starIds, starRAs, starDecs
+
     @classmethod
-    def _make_refCat(cls, starIds, starRas, starDecs, inReferenceFraction):
+    def _make_refCat(cls, starIds, starRas, starDecs, inReferenceFraction, bounds):
         """Make reference catalog from a subset of the simulated data
 
         Parameters
         ----------
-        starIds : `np.ndarray` of `int`
+        starIds : `np.ndarray` [`int`]
             Source ids for the simulated stars
-        starRas : `np.ndarray` of `float`
+        starRas : `np.ndarray` [`float`]
             RAs of the simulated stars
-        starDecs : `np.ndarray` of `float`
+        starDecs : `np.ndarray` [`float`]
             Decs of the simulated stars
         inReferenceFraction : float
             Percentage of simulated stars to include in reference catalog
+        bounds : `lsst.sphgeom.ConvexPolygon`
+            Boundary of the reference catalog region
 
         Returns
         -------
@@ -169,10 +230,10 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         refSchema = afwTable.SimpleTable.makeMinimalSchema()
         idKey = refSchema.addField("sourceId", type="I")
         fluxKey = refSchema.addField("test_filter_flux", units="nJy", type=np.float64)
-        raErrKey = refSchema.addField("coord_raErr", type=np.float64)
-        decErrKey = refSchema.addField("coord_decErr", type=np.float64)
-        pmraErrKey = refSchema.addField("pm_raErr", type=np.float64)
-        pmdecErrKey = refSchema.addField("pm_decErr", type=np.float64)
+        raErrKey = refSchema.addField("coord_raErr", units="rad", type=np.float64)
+        decErrKey = refSchema.addField("coord_decErr", units="rad", type=np.float64)
+        pmraErrKey = refSchema.addField("pm_raErr", units="rad2 / yr", type=np.float64)
+        pmdecErrKey = refSchema.addField("pm_decErr", units="rad2 / yr", type=np.float64)
         refCat = afwTable.SimpleCatalog(refSchema)
         ref_md = PropertyList()
         ref_md.set("REFCAT_FORMAT_VERSION", 1)
@@ -187,7 +248,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
             record.set(decErrKey, 0.00001)
             record.set(pmraErrKey, 1e-9)
             record.set(pmdecErrKey, 1e-9)
-        refDataId = MockRefcatDataId(cls.boundingPolygon)
+        refDataId = MockRefcatDataId(bounds)
         deferredRefCat = InMemoryDatasetHandle(refCat, storageClass="SourceCatalog", htm7="mockRefCat")
 
         return refDataId, deferredRefCat
@@ -199,20 +260,20 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
         Parameters
         ----------
-        starIds : `np.ndarray` of `int`
+        starIds : `np.ndarray` [`int`]
             Source ids for the simulated stars
-        starRas : `np.ndarray` of `float`
+        starRas : `np.ndarray` [`float`]
             RAs of the simulated stars
-        starDecs : `np.ndarray` of `float`
+        starDecs : `np.ndarray` [`float`]
             Decs of the simulated stars
-        trueWCSs : `list` of `lsst.afw.geom.SkyWcs`
+        trueWCSs : `list` [`lsst.afw.geom.SkyWcs`]
             WCS with which to simulate the source pixel coordinates
         inReferenceFraction : float
             Percentage of simulated stars to include in reference catalog
 
         Returns
         -------
-        sourceCat : `list` of `lsst.pipe.base.InMemoryDatasetHandle`
+        sourceCat : `list` [`lsst.pipe.base.InMemoryDatasetHandle`]
             List of reference to source catalogs.
         """
         inputCatalogRefs = []
@@ -308,11 +369,11 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         ----------
         model : `dict`
             Dictionary with WCS model parameters
-        inputVisitSummaries : `list` of `lsst.afw.table.ExposureCatalog`
+        inputVisitSummaries : `list` [`lsst.afw.table.ExposureCatalog`]
             Visit summary catalogs
         Returns
         -------
-        catalogs : `dict` of `lsst.afw.table.ExposureCatalog`
+        catalogs : `dict` [`int`, `lsst.afw.table.ExposureCatalog`]
             Visit summary catalogs with WCS set to input model
         """
 
@@ -376,13 +437,14 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         """
 
         # The total number of extensions is the number of detectors for each
-        # visit plus one for the reference catalog
-        totalExtensions = sum([len(visSum) for visSum in self.inputVisitSummary]) + 1
+        # visit plus one for the reference catalog for each field.
+        totalExtensions = sum([len(visSum) for visSum in self.inputVisitSummary]) + self.nFields
 
         self.assertEqual(totalExtensions, len(self.extensionInfo.visit))
 
         taskVisits = set(self.extensionInfo.visit)
-        self.assertEqual(taskVisits, set(self.testVisits + [-1]))
+        refVisits = np.arange(0, -1 * self.nFields, -1).tolist()
+        self.assertEqual(taskVisits, set(self.testVisits + refVisits))
 
         xx = np.linspace(0, 2000, 3)
         yy = np.linspace(0, 4000, 6)
@@ -401,11 +463,18 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
                 calexpra, calexpdec = calexpWcs.pixelToSkyArray(xgrid.ravel(), ygrid.ravel(), degrees=True)
 
-                tangentPoint = calexpWcs.pixelToSky(
+                # The pixel origin maps to a position slightly off from the
+                # tangent plane origin, so we want to use this value for the
+                # tangent-plane-to-sky part of the mapping.
+                tangentPlaneCenter = fitWcs.toWorld(
                     calexpWcs.getPixelOrigin().getX(), calexpWcs.getPixelOrigin().getY()
                 )
-                cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0 * lsst.geom.degrees, True)
-                iwcToSkyWcs = afwgeom.makeSkyWcs(lsst.geom.Point2D(0, 0), tangentPoint, cdMatrix)
+                tangentPlaneOrigin = lsst.geom.Point2D(tangentPlaneCenter)
+                skyOrigin = calexpWcs.pixelToSky(
+                    calexpWcs.getPixelOrigin().getX(), calexpWcs.getPixelOrigin().getY()
+                )
+                cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0.0 * lsst.geom.degrees, True)
+                iwcToSkyWcs = afwgeom.makeSkyWcs(tangentPlaneOrigin, skyOrigin, cdMatrix)
                 newRAdeg, newDecdeg = iwcToSkyWcs.pixelToSkyArray(
                     tanPlaneXY[:, 0], tanPlaneXY[:, 1], degrees=True
                 )
@@ -425,12 +494,12 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         )
 
         self.task._load_refcat(
-            tmpAssociations,
             self.refObjectLoader,
-            self.fieldCenter,
-            self.fieldRadius,
             self.extensionInfo,
-            epoch=2015,
+            associations=tmpAssociations,
+            center=self.fieldCenter,
+            radius=self.fieldRadius,
+            epoch=self.exposureInfo.medianEpoch,
         )
 
         # We have only loaded one catalog, so getting the 'matches' should just
@@ -443,25 +512,34 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         self.assertLessEqual(nMatches, self.nStars)
         self.assertGreater(nMatches, self.nStars * 0.9)
 
-    def test_load_catalogs_and_associate(self):
+    def test_loading_and_association(self):
+        """Test that objects can be loaded and correctly associated."""
+        # Running `_load_catalogs_and_associate` changes the input WCSs, so
+        # recalculate them here so that the variables shared among tests are
+        # not affected.
+        instrument = wcsfit.Instrument(self.instrumentName)
+        _, exposuresHelper, extensionInfo = self.task._get_exposure_info(
+            self.inputVisitSummary, instrument, refEpoch=self.refEpoch
+        )
+
         tmpAssociations = wcsfit.FoFClass(
             self.fields,
             [self.instrument],
-            self.exposuresHelper,
+            exposuresHelper,
             [self.fieldRadius.asDegrees()],
             (self.task.config.matchRadius * u.arcsec).to(u.degree).value,
         )
-        self.task._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs, self.extensionInfo)
+        self.task._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs, extensionInfo)
 
         tmpAssociations.sortMatches(self.fieldNumber, minMatches=2)
 
         matchIds = []
         correctMatches = []
         for s, e, o in zip(tmpAssociations.sequence, tmpAssociations.extn, tmpAssociations.obj):
-            objVisitInd = self.extensionInfo.visitIndex[e]
-            objDet = self.extensionInfo.detector[e]
-            ExtnInds = self.inputCatalogRefs[objVisitInd].get()["detector"] == objDet
-            objInfo = self.inputCatalogRefs[objVisitInd].get()[ExtnInds].iloc[o]
+            objVisitInd = extensionInfo.visitIndex[e]
+            objDet = extensionInfo.detector[e]
+            extnInds = self.inputCatalogRefs[objVisitInd].get()["detector"] == objDet
+            objInfo = self.inputCatalogRefs[objVisitInd].get()[extnInds].iloc[o]
             if s == 0:
                 if len(matchIds) > 0:
                     correctMatches.append(len(set(matchIds)) == 1)
@@ -477,7 +555,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         """Test that the run method recovers the input model parameters."""
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
-            outputWcsCatalog = self.outputs.outputWCSs[visit]
+            outputWcsCatalog = self.outputs.outputWcss[visit]
             visitSources = self.inputCatalogRefs[v].get()
             for d, detectorRow in enumerate(visitSummary):
                 detectorId = detectorRow["id"]
@@ -560,7 +638,332 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
         # Check that the fit WCS for the extension with input WCS=None returns
         # finite sky values.
-        testWcs = outputs.outputWCSs[self.testVisits[testVisit]][testDetector].getWcs()
+        testWcs = outputs.outputWcss[self.testVisits[testVisit]][testDetector].getWcs()
+        testSky = testWcs.pixelToSky(0, 0)
+        self.assertTrue(testSky.isFinite())
+
+
+class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
+    @classmethod
+    def setUpClass(cls):
+        # Set random seed
+        np.random.seed(1234)
+
+        # Fraction of simulated stars in the reference catalog and science
+        # exposures
+        inReferenceFraction = 1
+        inScienceFraction = 1
+
+        # Make fake data
+        cls.datadir = os.path.join(TESTDIR, "data")
+
+        cls.nFields = 2
+        cls.instrumentName = "HSC"
+        cls.instrument = wcsfit.Instrument(cls.instrumentName)
+        cls.refEpoch = 57205.5
+
+        # Make test inputVisitSummary. VisitSummaryTables are taken from
+        # collection HSC/runs/RC2/w_2022_20/DM-34794
+        cls.testVisits = [1176, 17900, 17930, 17934, 36434, 36460, 36494, 36446]
+        cls.inputVisitSummary = []
+        for testVisit in cls.testVisits:
+            visSum = afwTable.ExposureCatalog.readFits(
+                os.path.join(cls.datadir, f"visitSummary_{testVisit}.fits")
+            )
+            cls.inputVisitSummary.append(visSum)
+
+        cls.config = GbdesGlobalAstrometricFitConfig()
+        cls.config.systematicError = 0
+        cls.config.devicePolyOrder = 4
+        cls.config.exposurePolyOrder = 6
+        cls.config.fitReserveFraction = 0
+        cls.config.fitReserveRandomSeed = 1234
+        cls.config.saveModelParams = True
+        cls.task = GbdesGlobalAstrometricFitTask(config=cls.config)
+
+        cls.fields, cls.fieldRegions = cls.task._prep_sky(cls.inputVisitSummary)
+
+        cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
+            cls.inputVisitSummary, cls.instrument, fieldRegions=cls.fieldRegions
+        )
+
+        refDataIds, deferredRefCats = [], []
+        allStarIds = []
+        allStarRAs = []
+        allStarDecs = []
+        for region in cls.fieldRegions.values():
+            # Bounding box of observations:
+            bbox = region.getBoundingBox()
+            raMin = bbox.getLon().getA().asDegrees()
+            raMax = bbox.getLon().getB().asDegrees()
+            decMin = bbox.getLat().getA().asDegrees()
+            decMax = bbox.getLat().getB().asDegrees()
+
+            # Make random set of data in a bounding box determined by input
+            # visits
+            cls.nStars, starIds, starRAs, starDecs = cls._make_simulated_stars(
+                raMin, raMax, decMin, decMax, cls.config.matchRadius
+            )
+
+            allStarIds.append(starIds)
+            allStarRAs.append(starRAs)
+            allStarDecs.append(starDecs)
+
+            corners = [
+                lsst.geom.SpherePoint(ra, dec, lsst.geom.degrees).getVector()
+                for (ra, dec) in zip([raMin, raMax, raMax, raMin], [decMin, decMin, decMax, decMax])
+            ]
+            conv_box = lsst.sphgeom.ConvexPolygon.convexHull(corners)
+            # Make a reference catalog that will be loaded into
+            # ReferenceObjectLoader
+            refDataId, deferredRefCat = cls._make_refCat(
+                starIds, starRAs, starDecs, inReferenceFraction, conv_box
+            )
+            refDataIds.append(refDataId)
+            deferredRefCats.append(deferredRefCat)
+
+        cls.refObjectLoader = ReferenceObjectLoader(refDataIds, deferredRefCats)
+        cls.refObjectLoader.config.requireProperMotion = False
+        cls.refObjectLoader.config.anyFilterMapsToThis = "test_filter"
+
+        cls.task.refObjectLoader = cls.refObjectLoader
+
+        allRefObjects, allRefCovariances = {}, {}
+        for f, fieldRegion in cls.fieldRegions.items():
+            refObjects, refCovariance = cls.task._load_refcat(
+                cls.refObjectLoader, cls.extensionInfo, epoch=cls.exposureInfo.medianEpoch, region=fieldRegion
+            )
+            allRefObjects[f] = refObjects
+            allRefCovariances[f] = refCovariance
+        cls.refObjects = allRefObjects
+
+        # Get True WCS for stars:
+        with open(os.path.join(cls.datadir, "sample_global_wcs.yaml"), "r") as f:
+            cls.trueModel = yaml.load(f, Loader=yaml.Loader)
+
+        cls.trueWCSs = cls._make_wcs(cls.trueModel, cls.inputVisitSummary)
+
+        cls.isolatedStarCatalogs, cls.isolatedStarSources = cls._make_isolatedStars(
+            allStarIds, allStarRAs, allStarDecs, cls.trueWCSs, inScienceFraction
+        )
+
+        cls.outputs = cls.task.run(
+            cls.inputVisitSummary,
+            cls.isolatedStarSources,
+            cls.isolatedStarCatalogs,
+            instrumentName=cls.instrumentName,
+            refEpoch=cls.refEpoch,
+            refObjectLoader=cls.refObjectLoader,
+        )
+
+    @classmethod
+    def _make_isolatedStars(cls, allStarIds, allStarRAs, allStarDecs, trueWCSs, inScienceFraction):
+        """Given a subset of the simulated data, make source catalogs and star
+        catalogs.
+
+        This takes the true WCSs to go from the RA and Decs of the simulated
+        stars to pixel coordinates for a given visit and detector. If those
+        pixel coordinates are within the bounding box of the detector, the
+        source and visit information is put in the corresponding catalog of
+        isolated star sources.
+
+        Parameters
+        ----------
+        allStarIds : `np.ndarray` [`int`]
+            Source ids for the simulated stars
+        allStarRas : `np.ndarray` [`float`]
+            RAs of the simulated stars
+        allStarDecs : `np.ndarray` [`float`]
+            Decs of the simulated stars
+        trueWCSs : `list` [`lsst.afw.geom.SkyWcs`]
+            WCS with which to simulate the source pixel coordinates
+        inReferenceFraction : float
+            Percentage of simulated stars to include in reference catalog
+
+        Returns
+        -------
+        isolatedStarCatalogRefs : `list`
+            [`lsst.pipe.base.InMemoryDatasetHandle`]
+            List of references to isolated star catalogs.
+        isolatedStarSourceRefs : `list`
+            [`lsst.pipe.base.InMemoryDatasetHandle`]
+            List of references to isolated star sources.
+        """
+        bbox = lsst.geom.BoxD(
+            lsst.geom.Point2D(
+                cls.inputVisitSummary[0][0]["bbox_min_x"], cls.inputVisitSummary[0][0]["bbox_min_y"]
+            ),
+            lsst.geom.Point2D(
+                cls.inputVisitSummary[0][0]["bbox_max_x"], cls.inputVisitSummary[0][0]["bbox_max_y"]
+            ),
+        )
+        bboxCorners = bbox.getCorners()
+
+        isolatedStarCatalogRefs = []
+        isolatedStarSourceRefs = []
+        for i in range(len(allStarIds)):
+            starIds = allStarIds[i]
+            starRAs = allStarRAs[i]
+            starDecs = allStarDecs[i]
+            isolatedStarCatalog = pd.DataFrame({"ra": starRAs, "dec": starDecs}, index=starIds)
+            isolatedStarCatalogRefs.append(
+                InMemoryDatasetHandle(isolatedStarCatalog, storageClass="DataFrame", dataId={"tract": 0})
+            )
+            sourceCats = []
+            for v, visit in enumerate(cls.testVisits):
+                nVisStars = int(cls.nStars * inScienceFraction)
+                visitStarIndices = np.random.choice(cls.nStars, nVisStars, replace=False)
+                visitStarIds = starIds[visitStarIndices]
+                visitStarRas = starRAs[visitStarIndices]
+                visitStarDecs = starDecs[visitStarIndices]
+                for detector in trueWCSs[visit]:
+                    detWcs = detector.getWcs()
+                    detectorId = detector["id"]
+                    radecCorners = detWcs.pixelToSky(bboxCorners)
+                    detectorFootprint = sphgeom.ConvexPolygon([rd.getVector() for rd in radecCorners])
+                    detectorIndices = detectorFootprint.contains(
+                        (visitStarRas * u.degree).to(u.radian), (visitStarDecs * u.degree).to(u.radian)
+                    )
+                    nDetectorStars = detectorIndices.sum()
+                    detectorArray = np.ones(nDetectorStars, dtype=int) * detector["id"]
+                    visitArray = np.ones(nDetectorStars, dtype=int) * visit
+
+                    ones_like = np.ones(nDetectorStars)
+                    zeros_like = np.zeros(nDetectorStars, dtype=bool)
+
+                    x, y = detWcs.skyToPixelArray(
+                        visitStarRas[detectorIndices], visitStarDecs[detectorIndices], degrees=True
+                    )
+
+                    origWcs = (cls.inputVisitSummary[v][cls.inputVisitSummary[v]["id"] == detectorId])[
+                        0
+                    ].getWcs()
+                    inputRa, inputDec = origWcs.pixelToSkyArray(x, y, degrees=True)
+
+                    sourceDict = {}
+                    sourceDict["detector"] = detectorArray
+                    sourceDict["visit"] = visitArray
+                    sourceDict["obj_index"] = visitStarIds[detectorIndices]
+                    sourceDict["x"] = x
+                    sourceDict["y"] = y
+                    sourceDict["xErr"] = 1e-3 * ones_like
+                    sourceDict["yErr"] = 1e-3 * ones_like
+                    sourceDict["inputRA"] = inputRa
+                    sourceDict["inputDec"] = inputDec
+                    sourceDict["trueRA"] = visitStarRas[detectorIndices]
+                    sourceDict["trueDec"] = visitStarDecs[detectorIndices]
+                    for key in ["apFlux_12_0_flux", "apFlux_12_0_instFlux", "ixx", "iyy"]:
+                        sourceDict[key] = ones_like
+                    for key in [
+                        "pixelFlags_edge",
+                        "pixelFlags_saturated",
+                        "pixelFlags_interpolatedCenter",
+                        "pixelFlags_interpolated",
+                        "pixelFlags_crCenter",
+                        "pixelFlags_bad",
+                        "hsmPsfMoments_flag",
+                        "apFlux_12_0_flag",
+                        "extendedness",
+                        "parentSourceId",
+                        "deblend_nChild",
+                        "ixy",
+                    ]:
+                        sourceDict[key] = zeros_like
+                    sourceDict["apFlux_12_0_instFluxErr"] = 1e-3 * ones_like
+                    sourceDict["detect_isPrimary"] = ones_like.astype(bool)
+
+                    sourceCat = pd.DataFrame(sourceDict)
+                    sourceCats.append(sourceCat)
+
+            isolatedStarSourceTable = pd.concat(sourceCats, ignore_index=True)
+            isolatedStarSourceTable = isolatedStarSourceTable.sort_values(by=["obj_index"])
+            isolatedStarSourceRefs.append(
+                InMemoryDatasetHandle(isolatedStarSourceTable, storageClass="DataFrame", dataId={"tract": 0})
+            )
+
+        return isolatedStarCatalogRefs, isolatedStarSourceRefs
+
+    def test_loading_and_association(self):
+        """Test that associated objects actually correspond to the same
+        simulated object."""
+        associations, sourceDict = self.task._associate_from_isolated_sources(
+            self.isolatedStarSources, self.isolatedStarCatalogs, self.extensionInfo, self.refObjects
+        )
+
+        object_groups = np.flatnonzero(np.array(associations.sequence) == 0)
+        for i in range(len(object_groups) - 1)[:10]:
+            ras, decs = [], []
+            for ind in np.arange(object_groups[i], object_groups[i + 1]):
+                visit = self.extensionInfo.visit[associations.extn[ind]]
+                detectorInd = self.extensionInfo.detectorIndex[associations.extn[ind]]
+                detector = self.extensionInfo.detector[associations.extn[ind]]
+                if detectorInd == -1:
+                    ra = self.refObjects[visit * -1]["ra"][associations.obj[ind]]
+                    dec = self.refObjects[visit * -1]["dec"][associations.obj[ind]]
+                    ras.append(ra)
+                    decs.append(dec)
+                else:
+                    x = sourceDict[visit][detector]["x"][associations.obj[ind]]
+                    y = sourceDict[visit][detector]["y"][associations.obj[ind]]
+                    ra, dec = self.trueWCSs[visit][detectorInd].getWcs().pixelToSky(x, y)
+                    ras.append(ra.asDegrees())
+                    decs.append(dec.asDegrees())
+            np.testing.assert_allclose(ras, ras[0])
+            np.testing.assert_allclose(decs, decs[0])
+
+    def test_refCatLoader(self):
+        """Test loading objects from the refCat in each of the fields."""
+
+        for region in self.fieldRegions.values():
+            refCat, refCov = self.task._load_refcat(
+                self.refObjectLoader, self.extensionInfo, region=region, epoch=self.exposureInfo.medianEpoch
+            )
+            assert len(refCat) > 0
+
+    def test_make_outputs(self):
+        """Test that the run method recovers the input model parameters."""
+        for isolatedStarSourceRef in self.isolatedStarSources:
+            iss = isolatedStarSourceRef.get()
+            visits = np.unique(iss["visit"])
+            for v, visit in enumerate(visits):
+                outputWcsCatalog = self.outputs.outputWcss[visit]
+                visitSources = iss[iss["visit"] == visit]
+                detectors = outputWcsCatalog["id"]
+                for d, detectorId in enumerate(detectors):
+                    fitwcs = outputWcsCatalog[d].getWcs()
+                    detSources = visitSources[visitSources["detector"] == detectorId]
+                    fitRA, fitDec = fitwcs.pixelToSkyArray(detSources["x"], detSources["y"], degrees=True)
+                    dRA = fitRA - detSources["trueRA"]
+                    dDec = fitDec - detSources["trueDec"]
+                    # Check that input coordinates match the output coordinates
+                    self.assertAlmostEqual(np.mean(dRA), 0)
+                    self.assertAlmostEqual(np.std(dRA), 0)
+                    self.assertAlmostEqual(np.mean(dDec), 0)
+                    self.assertAlmostEqual(np.std(dDec), 0)
+
+    def test_missingWcs(self):
+        """Test that task does not fail when the input WCS is None for one
+        extension and that the fit WCS for that extension returns a finite
+        result.
+        """
+        inputVisitSummary = self.inputVisitSummary.copy()
+        # Set one WCS to be None
+        testVisit = 0
+        testDetector = 20
+        inputVisitSummary[testVisit][testDetector].setWcs(None)
+
+        outputs = self.task.run(
+            inputVisitSummary,
+            self.isolatedStarSources,
+            self.isolatedStarCatalogs,
+            instrumentName=self.instrumentName,
+            refEpoch=self.refEpoch,
+            refObjectLoader=self.refObjectLoader,
+        )
+
+        # Check that the fit WCS for the extension with input WCS=None returns
+        # finite sky values.
+        testWcs = outputs.outputWcss[self.testVisits[testVisit]][testDetector].getWcs()
         testSky = testWcs.pixelToSky(0, 0)
         self.assertTrue(testSky.isFinite())
 
