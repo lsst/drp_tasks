@@ -251,7 +251,7 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
     )
     referenceCatalog = pipeBase.connectionTypes.PrerequisiteInput(
         doc="The astrometry reference catalog to match to loaded input catalog sources.",
-        name='gaia_dr3',
+        name='gaia_dr3_20230707',
         storageClass='SimpleCatalog',
         dimensions=('skypix',),
         deferLoad=True,
