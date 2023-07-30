@@ -82,7 +82,7 @@ def _lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
 
 
 def _make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.marcsec,
-                                outputPMUnit=u.marcsec):
+                                outputPMUnit=u.marcsec, version=1):
     """Make a covariance matrix for the reference catalog including proper
     motion and parallax.
 
@@ -101,48 +101,59 @@ def _make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.ma
     outputPMUnit : `astropy.unit.core.Unit`
         Units required for the proper motion/parallax in the covariance matrix.
         `gbdes` expects milliarcseconds.
-
+    version : `int`
+        Version of the reference catalog. Version 2 includes covariance
+        measurements.
     Returns
     -------
     cov : `list` of `float`
         Flattened output covariance matrix.
     """
-    # Here is the standard ordering of components in the cov matrix,
-    # to match the PM enumeration in C++ code of gbdes package's Match.
-    # Each tuple gives: the array holding the 1d error,
-    #                   the string in Gaia column names for this
-    #                   the ordering in the Gaia catalog
-    # and the ordering of the tuples is the order we want in our cov matrix
-    raErr = (refCat['coord_raErr'] * inputUnit).to(outputCoordUnit).to_value()
-    decErr = (refCat['coord_decErr'] * inputUnit).to(outputCoordUnit).to_value()
-    raPMErr = (refCat['pm_raErr'] * inputUnit).to(outputPMUnit).to_value()
-    decPMErr = (refCat['pm_decErr'] * inputUnit).to(outputPMUnit).to_value()
-    parallaxErr = (refCat['parallaxErr'] * inputUnit).to(outputPMUnit).to_value()
-    stdOrder = ((raErr, 'ra', 0),
-                (decErr, 'dec', 1),
-                (raPMErr, 'pmra', 3),
-                (decPMErr, 'pmdec', 4),
-                (parallaxErr, 'parallax', 2))
     cov = np.zeros((len(refCat), 25))
-    k = 0
-    # TODO: when DM-35130, is done, we need the full covariance here
-    for i, pr1 in enumerate(stdOrder):
-        for j, pr2 in enumerate(stdOrder):
-            if pr1[2] < pr2[2]:
-                # add correlation coefficient (once it is available)
-                # cov[:, k] = (pr1[0] * pr2[0] * refCat[pr1[1] + '_' + pr2[1]
-                #              + '_corr'])
-                cov[:, k] = 0
-            elif pr1[2] > pr2[2]:
-                # add correlation coefficient (once it is available)
-                # cov[:, k] = (pr1[0] * pr2[0] * refCat[pr2[1] + '_' + pr1[1]
-                #              + '_corr'])
-                cov[:, k] = 0
-            else:
-                # diagnonal element
-                cov[:, k] = pr1[0] * pr2[0]
-            k = k+1
+    if version == 1:
+        # Here is the standard ordering of components in the cov matrix,
+        # to match the PM enumeration in C++ code of gbdes package's Match.
+        # Each tuple gives: the array holding the 1d error,
+        #                   the string in Gaia column names for this
+        #                   the ordering in the Gaia catalog
+        # and the ordering of the tuples is the order we want in our cov matrix
+        raErr = (refCat['coord_raErr'] * inputUnit).to(outputCoordUnit).to_value()
+        decErr = (refCat['coord_decErr'] * inputUnit).to(outputCoordUnit).to_value()
+        raPMErr = (refCat['pm_raErr'] * inputUnit).to(outputPMUnit).to_value()
+        decPMErr = (refCat['pm_decErr'] * inputUnit).to(outputPMUnit).to_value()
+        parallaxErr = (refCat['parallaxErr'] * inputUnit).to(outputPMUnit).to_value()
+        stdOrder = ((raErr, 'ra', 0),
+                    (decErr, 'dec', 1),
+                    (raPMErr, 'pmra', 3),
+                    (decPMErr, 'pmdec', 4),
+                    (parallaxErr, 'parallax', 2))
 
+        k = 0
+        for i, pr1 in enumerate(stdOrder):
+            for j, pr2 in enumerate(stdOrder):
+                if pr1[2] < pr2[2]:
+                    cov[:, k] = 0
+                elif pr1[2] > pr2[2]:
+                    cov[:, k] = 0
+                else:
+                    # diagnonal element
+                    cov[:, k] = pr1[0] * pr2[0]
+                k = k+1
+
+    elif version == 2:
+        positionParameters = ['coord_ra', 'coord_dec', 'pm_ra', 'pm_dec', 'parallax']
+        units = [outputCoordUnit, outputCoordUnit, outputPMUnit, outputPMUnit, outputPMUnit]
+        k = 0
+        for i, pi in enumerate(positionParameters):
+            for j, pj in enumerate(positionParameters):
+                if i == j:
+                    cov[:, k] = (refCat[f'{pi}Err']**2 * inputUnit**2).to_value(units[j] * units[j])
+                elif i > j:
+                    cov[:, k] = (refCat[f'{pj}_{pi}_Cov'] * inputUnit**2).to_value(units[i] * units[j])
+                else:
+                    cov[:, k] = (refCat[f'{pi}_{pj}_Cov'] * inputUnit**2).to_value(units[i] * units[j])
+
+                k += 1
     return cov
 
 
@@ -240,7 +251,7 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
     )
     referenceCatalog = pipeBase.connectionTypes.PrerequisiteInput(
         doc="The astrometry reference catalog to match to loaded input catalog sources.",
-        name='gaia_dr2_20200414',
+        name='gaia_dr3_20230707',
         storageClass='SimpleCatalog',
         dimensions=('skypix',),
         deferLoad=True,
@@ -424,6 +435,16 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         instrumentName = butlerQC.quantum.dataId['instrument']
 
+        # Ensure the inputs are in a consistent order
+        inputCatVisits = np.array([inputCat.dataId['visit'] for inputCat in inputs['inputCatalogRefs']])
+        inputs['inputCatalogRefs'] = [inputs['inputCatalogRefs'][v] for v in inputCatVisits.argsort()]
+        inputSumVisits = np.array([inputSum[0]['visit'] for inputSum in inputs['inputVisitSummaries']])
+        inputs['inputVisitSummaries'] = [inputs['inputVisitSummaries'][v] for v in inputSumVisits.argsort()]
+        inputRefHtm7s = np.array([inputRefCat.dataId['htm7'] for inputRefCat in inputRefs.referenceCatalog])
+        inputRefCatRefs = [inputRefs.referenceCatalog[htm7] for htm7 in inputRefHtm7s.argsort()]
+        inputRefCats = np.array([inputRefCat.dataId['htm7'] for inputRefCat in inputs['referenceCatalog']])
+        inputs['referenceCatalog'] = [inputs['referenceCatalog'][v] for v in inputRefCats.argsort()]
+
         sampleRefCat = inputs['referenceCatalog'][0].get()
         refEpoch = sampleRefCat[0]['epoch']
 
@@ -431,16 +452,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refConfig.anyFilterMapsToThis = 'phot_g_mean'
         refConfig.requireProperMotion = True
         refObjectLoader = ReferenceObjectLoader(dataIds=[ref.datasetRef.dataId
-                                                         for ref in inputRefs.referenceCatalog],
+                                                         for ref in inputRefCatRefs],
                                                 refCats=inputs.pop('referenceCatalog'),
                                                 config=refConfig,
                                                 log=self.log)
-
-        # Ensure the inputs are in a consistent order
-        inputCatVisits = np.array([inputCat.dataId['visit'] for inputCat in inputs['inputCatalogRefs']])
-        inputs['inputCatalogRefs'] = [inputs['inputCatalogRefs'][v] for v in inputCatVisits.argsort()]
-        inputSumVisits = np.array([inputSum[0]['visit'] for inputSum in inputs['inputVisitSummaries']])
-        inputs['inputVisitSummaries'] = [inputs['inputVisitSummaries'][v] for v in inputSumVisits.argsort()]
 
         output = self.run(**inputs, instrumentName=instrumentName, refEpoch=refEpoch,
                           refObjectLoader=refObjectLoader)
@@ -802,8 +817,14 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         else:
             refCat = selected.sourceCat
 
+        # In Gaia DR3, missing values are denoted by NaNs.
+        finiteInd = np.isfinite(refCat['coord_ra']) & np.isfinite(refCat['coord_dec'])
+        refCat = refCat[finiteInd]
+
         if self.config.excludeNonPMObjects:
-            hasPM = refCat['pm_raErr'] != 0
+            # Gaia DR2 has zeros for missing data, while Gaia DR3 has NaNs:
+            hasPM = ((refCat['pm_raErr'] != 0) & np.isfinite(refCat['pm_raErr'])
+                     & np.isfinite(refCat['pm_decErr']))
             refCat = refCat[hasPM]
 
         ra = (refCat['coord_ra'] * u.radian).to(u.degree).to_value().tolist()
@@ -811,16 +832,22 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         raCov = ((refCat['coord_raErr'] * u.radian).to(u.degree).to_value()**2).tolist()
         decCov = ((refCat['coord_decErr'] * u.radian).to(u.degree).to_value()**2).tolist()
 
-        # TODO: DM-37316 we need the full gaia covariance here
-        refObjects = {'ra': ra, 'dec': dec, 'raCov': raCov, 'decCov': decCov,
-                      'raDecCov': np.zeros(len(ra))}
+        # Get refcat version from refcat metadata
+        refCatMetadata = refObjectLoader.refCats[0].get().getMetadata()
+        refCatVersion = refCatMetadata['REFCAT_FORMAT_VERSION']
+        if refCatVersion == 2:
+            raDecCov = (refCat['coord_ra_coord_dec_Cov'] * u.radian**2).to(u.degree**2).to_value().tolist()
+        else:
+            raDecCov = np.zeros(len(ra))
+
+        refObjects = {'ra': ra, 'dec': dec, 'raCov': raCov, 'decCov': decCov, 'raDecCov': raDecCov}
         refCovariance = []
 
         if self.config.fitProperMotion:
             raPM = (refCat['pm_ra'] * u.radian).to(u.marcsec).to_value().tolist()
             decPM = (refCat['pm_dec'] * u.radian).to(u.marcsec).to_value().tolist()
             parallax = (refCat['parallax'] * u.radian).to(u.marcsec).to_value().tolist()
-            cov = _make_ref_covariance_matrix(refCat)
+            cov = _make_ref_covariance_matrix(refCat, version=refCatVersion)
             pmDict = {'raPM': raPM, 'decPM': decPM, 'parallax': parallax}
             refObjects.update(pmDict)
             refCovariance = cov
