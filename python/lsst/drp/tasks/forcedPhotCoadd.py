@@ -19,8 +19,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import warnings
-
 import lsst.pex.config
 import lsst.afw.table
 
@@ -171,8 +169,6 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
 
     Parameters
     ----------
-    butler : `None`
-        Deprecated and unused. Should always be `None`.
     refSchema : `lsst.afw.table.Schema`, optional
         The schema of the reference catalog, passed to the constructor of the
         references subtask. Optional, but must be specified if ``initInputs``
@@ -188,13 +184,8 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
     _DefaultName = "forcedPhotCoadd"
     dataPrefix = "deepCoadd_"
 
-    def __init__(self, butler=None, refSchema=None, initInputs=None, **kwds):
+    def __init__(self, refSchema=None, initInputs=None, **kwds):
         super().__init__(**kwds)
-
-        if butler is not None:
-            warnings.warn("The 'butler' parameter is no longer used and can be safely removed.",
-                          category=FutureWarning, stacklevel=2)
-            butler = None
 
         if initInputs is not None:
             refSchema = initInputs['inputSchema'].schema
