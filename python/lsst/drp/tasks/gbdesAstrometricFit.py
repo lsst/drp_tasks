@@ -281,6 +281,9 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         dimensions=('instrument', 'skymap', 'tract', 'physical_filter')
     )
 
+    def getSpatialBoundsConnections(self):
+        return ("inputVisitSummaries",)
+
 
 class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
                                 pipelineConnections=GbdesAstrometricFitConnections):
