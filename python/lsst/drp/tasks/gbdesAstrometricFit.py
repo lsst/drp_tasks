@@ -40,47 +40,6 @@ from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
 __all__ = ['GbdesAstrometricFitConnections', 'GbdesAstrometricFitConfig', 'GbdesAstrometricFitTask']
 
 
-def _lookup_visit_refcats(datasetType, registry, quantumDataId, collections):
-    """Lookup function that finds all refcats for all visits that overlap a
-    tract, rather than just the refcats that directly overlap the tract.
-    Borrowed from jointcal.
-
-    Parameters
-    ----------
-    datasetType : `lsst.daf.butler.DatasetType`
-        Type of dataset being searched for.
-    registry : `lsst.daf.butler.Registry`
-        Data repository registry to search.
-    quantumDataId : `lsst.daf.butler.DataCoordinate`
-        Data ID of the quantum; expected to be something we can use as a
-        constraint to query for overlapping visits.
-    collections : `Iterable` [ `str` ]
-        Collections to search.
-    Returns
-    -------
-    refs : `Iterator` [ `lsst.daf.butler.DatasetRef` ]
-        Iterator over refcat references.
-    """
-    refs = set()
-    # Use .expanded() on the query methods below because we need data IDs with
-    # regions, both in the outer loop over visits (queryDatasets will expand
-    # any data ID we give it, but doing it up-front in bulk is much more
-    # efficient) and in the data IDs of the DatasetRefs this function yields
-    # (because the RefCatLoader relies on them to do some of its own
-    # filtering).
-    for visit_data_id in set(registry.queryDataIds('visit', dataId=quantumDataId).expanded()):
-        refs.update(
-            registry.queryDatasets(
-                datasetType,
-                collections=collections,
-                dataId=visit_data_id,
-                findFirst=True,
-            ).expanded()
-        )
-    sorted(refs)
-    yield from refs
-
-
 def _make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.marcsec,
                                 outputPMUnit=u.marcsec, version=1):
     """Make a covariance matrix for the reference catalog including proper
@@ -256,7 +215,6 @@ class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
         dimensions=('skypix',),
         deferLoad=True,
         multiple=True,
-        lookupFunction=_lookup_visit_refcats,
     )
     outputWcs = pipeBase.connectionTypes.Output(
         doc=("Per-tract, per-visit world coordinate systems derived from the fitted model."
