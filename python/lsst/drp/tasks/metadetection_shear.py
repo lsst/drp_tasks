@@ -253,7 +253,9 @@ class MetadetectionShearTask(PipelineTask):
               catalog for the patch, with schema equal to `object_schema`.
         """
         single_cell_tables: list[pa.Table] = []
-        for single_cell_coadds in zip(*patch_coadds, strict=True):
+        for single_cell_coadds in zip(
+            *[patch_coadd.cells.values() for patch_coadd in patch_coadds], strict=True
+        ):
             single_cell_tables.append(self.process_cell(single_cell_coadds))
         # TODO: if we need to do any cell-overlap-region deduplication here
         # (instead of purely in science analysis code), this is where'd it'd
