@@ -71,8 +71,8 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
     # object_schema = cT.InitOutput(
     #     "ShearObject_schema",
     #     # TODO: It's not currently possible to save ArrowSchema objects on
-    #     # their own, but some combination of Eli and Jim can figure out how to
-    #     # fix that.
+    #     # their own, but some combination of Eli and Jim can figure out
+    #     # how to # fix that.
     #     storageClass="ArrowSchema",
     #     doc="Schema of the output catalog.",
     # )
