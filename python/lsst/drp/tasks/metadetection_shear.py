@@ -50,7 +50,7 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
     """Definitions of inputs and outputs for MetadetectionShearTask."""
 
     input_coadds = cT.Input(
-        "DeepCoadd",
+        "cellCoadd",
         storageClass="MultipleCellCoadd",
         doc="Per-band deep coadds.",
         multiple=True,
@@ -67,14 +67,15 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
         multiple=False,
         dimensions={"patch"},
     )
-    object_schema = cT.InitOutput(
-        "ShearObject_schema",
-        # TODO: It's not currently possible to save ArrowSchema objects on
-        # their own, but some combination of Eli and Jim can figure out how to
-        # fix that.
-        storageClass="ArrowSchema",
-        doc="Schema of the output catalog.",
-    )
+    # TODO make this exist
+    # object_schema = cT.InitOutput(
+    #     "ShearObject_schema",
+    #     # TODO: It's not currently possible to save ArrowSchema objects on
+    #     # their own, but some combination of Eli and Jim can figure out how to
+    #     # fix that.
+    #     storageClass="ArrowSchema",
+    #     doc="Schema of the output catalog.",
+    # )
 
     # TODO: if we want a per-cell output catalog instead of just denormalizing
     # everything into per-object catalogs, add it and its schema here.
@@ -121,7 +122,9 @@ class MetadetectionShearConfig(
         "Bands expected to be present.  Cells with one or more of these bands "
         "missing will be skipped.  Bands other than those listed here will "
         "not be processed.",
-        default=["g", "r", "i", "z"],
+        # TODO learn how to set in a config file
+        # default=["g", "r", "i", "z"],
+        default=["r"],
         optional=False,
     )
 
