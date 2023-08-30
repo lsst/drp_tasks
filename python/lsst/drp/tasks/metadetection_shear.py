@@ -222,7 +222,300 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-                # TODO: add more field definitions here
+
+                pa.field(
+                    "wmom_flags",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Overall flags for wmom measurement.",
+                        "unit": "",
+                    },
+                ),
+
+                # Original PSF measurements
+                pa.field(
+                    "psfrec_flags",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Flags for admom PSF measurement.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "psfrec_g_1",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "admom g1 measurement for PSF.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "psfrec_g_2",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "admom g2 measurement for PSF.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "psfrec_T",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "admom wmom T (<x^2> + <y^2>) measurement for PSF.",
+                        "unit": "",
+                    },
+                ),
+
+                # reconvolved PSF measurements
+                pa.field(
+                    "wmom_psf_flags",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Flags for wmom reconvolved PSF measurement.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_psf_g_1",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom g1 measurement for reconvolved PSF.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_psf_g_2",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom g2 measurement for reconvolved PSF.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_psf_T",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom T (<x^2> + <y^2>) measurement for reconvolved PSF.",
+                        "unit": "",
+                    },
+                ),
+
+                # Object measurements
+                pa.field(
+                    "wmom_obj_flags",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Flags for wmom object measurement.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_s2n",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom object s2n measurement.",
+                        "unit": "",
+                    },
+                ),
+
+                pa.field(
+                    "wmom_g_1",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom object g1 measurement.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_g_2",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom object g2 measurement.",
+                        "unit": "",
+                    },
+                ),
+
+                pa.field(
+                    "wmom_T_flags",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Flags for wmom T measurement for object.",
+                        "unit": "",
+                    },
+                ),
+
+                pa.field(
+                    "wmom_T",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom T (<x^2> + <y^2>) measurement for object.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_T_err",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom T uncertainty for object.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_T_ratio",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom T/Tpsf for object.",
+                        "unit": "",
+                    },
+                ),
+
+                pa.field(
+                    "wmom_band_flux_flags_1",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom flux measurement flags for object.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_band_flux_1",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom flux for object.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "wmom_band_flux_err_1",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "wmom flux uncertainty for object.",
+                        "unit": "",
+                    },
+                ),
+                # pa.field(
+                #     "row0",
+                #     pa.float32(),
+                #     nullable=False,
+                #     metadata={
+                #         "doc": "row start for stamp.",
+                #         "unit": "",
+                #     },
+                # ),
+                # pa.field(
+                #     "col0",
+                #     pa.float32(),
+                #     nullable=False,
+                #     metadata={
+                #         "doc": "column start for stamp.",
+                #         "unit": "",
+                #     },
+                # ),
+                pa.field(
+                    "row",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "detected row for object, within image.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "col",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "detected column for object, within image.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "row_diff",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "difference of measured row from detected row.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "col_diff",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "difference of measured column from detected row.",
+                        "unit": "",
+                    },
+                ),
+
+                pa.field(
+                    "ra",
+                    pa.float64(),
+                    nullable=False,
+                    metadata={
+                        "doc": "detected ra for object.",
+                        "unit": "degrees",
+                    },
+                ),
+                pa.field(
+                    "dec",
+                    pa.float64(),
+                    nullable=False,
+                    metadata={
+                        "doc": "detected dec for object.",
+                        "unit": "degrees",
+                    },
+                ),
+
+                pa.field(
+                    "bmask",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "bmask flags for object",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "ormask",
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "ored mask flags for object",
+                        "unit": "",
+                    },
+                ),
+
+                pa.field(
+                    "mfrac",
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "gaussian weighted masked fraction for object.",
+                        "unit": "",
+                    },
+                ),
+
             ]
         )
 
@@ -283,6 +576,7 @@ class MetadetectionShearTask(PipelineTask):
             self._log_ids(single_cell_coadds[0])
 
             res = self.process_cell(single_cell_coadds, rng, simulate=True)
+
             # TODO figure out how to make the object ids
             if len(res) > 0:
                 res['id'] = np.arange(idstart, idstart + len(res))
@@ -291,6 +585,7 @@ class MetadetectionShearTask(PipelineTask):
 
                 single_cell_tables.append(table)
                 idstart += len(res)
+            break
 
         # TODO: if we need to do any cell-overlap-region deduplication here
         # (instead of purely in science analysis code), this is where'd it'd
@@ -355,11 +650,6 @@ class MetadetectionShearTask(PipelineTask):
         )
 
         return comb_res
-        if len(comb_res) == 0:
-            return pa.Table.from_pylist(comb_res, self.object_schema)
-        else:
-            da = _dictify(comb_res)
-            return pa.Table.from_pydict(da, self.object_schema)
 
     def _log_ids(self, single_cell_coadd):
         idinfo = single_cell_coadd.identifiers
@@ -392,6 +682,19 @@ def _make_comb_data(
 
     idinfo = single_cell_coadd.identifiers
 
+    copy_dt = [
+        # we will copy out of arrays to these
+        ('psfrec_g_1', 'f4'),
+        ('psfrec_g_2', 'f4'),
+        ('wmom_psf_g_1', 'f4'),
+        ('wmom_psf_g_2', 'f4'),
+        ('wmom_g_1', 'f4'),
+        ('wmom_g_2', 'f4'),
+        ('wmom_band_flux_flags_1', 'i4'),
+        ('wmom_band_flux_1', 'f4'),
+        ('wmom_band_flux_err_1', 'f4'),
+    ]
+
     add_dt = [
         ('id', 'u8'),
         ('tract', 'u4'),
@@ -402,7 +705,7 @@ def _make_comb_data(
         ('shear_type', 'U2'),
         ('mask_frac', 'f4'),
         ('primary', bool),
-    ]
+    ] + copy_dt
 
     if not hasattr(res, 'keys'):
         res = {'noshear': res}
@@ -416,6 +719,15 @@ def _make_comb_data(
                 data = _trim_output_columns(data, meas_type)
 
             newdata = eu.numpy_util.add_fields(data, add_dt)
+            newdata['psfrec_g_1'] = newdata['psfrec_g'][:, 0]
+            newdata['psfrec_g_2'] = newdata['psfrec_g'][:, 1]
+            newdata['wmom_psf_g_1'] = newdata['wmom_psf_g'][:, 0]
+            newdata['wmom_psf_g_2'] = newdata['wmom_psf_g'][:, 1]
+            newdata['wmom_g_1'] = newdata['wmom_g'][:, 0]
+            newdata['wmom_g_2'] = newdata['wmom_g'][:, 1]
+            newdata['wmom_band_flux_flags_1'] = newdata['wmom_band_flux_flags']
+            newdata['wmom_band_flux_1'] = newdata['wmom_band_flux']
+            newdata['wmom_band_flux_err_1'] = newdata['wmom_band_flux_err']
 
             newdata['tract'] = idinfo.tract
             newdata['patch_x'] = idinfo.patch.x
