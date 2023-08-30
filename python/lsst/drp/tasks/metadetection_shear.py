@@ -413,6 +413,16 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
+                pa.field(
+                    "shear_bands",
+                    pa.string(),
+                    nullable=False,
+                    metadata={
+                        "doc": "bands used for shear measurement.",
+                        "unit": "",
+                    },
+                ),
+
                 # pa.field(
                 #     "row0",
                 #     pa.float32(),
