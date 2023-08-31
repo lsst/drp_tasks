@@ -634,12 +634,6 @@ class MetadetectionShearTask(PipelineTask):
         from metadetect.lsst.metadetect import run_metadetect
         from metadetect.lsst.metadetect import get_config as get_mdet_config
 
-        # rows: list[dict[str, Any]] = []
-        # TODO: run metadetection on the cell, filling in 'rows' with
-        # measurements.  Or replace 'rows' with a 'columns' dict of numpy array
-        # columns and call 'from_pydict' instead of 'from_pylist' below, if
-        # that's more convenient.
-
         if simulate:
             coadd_data = _simulate_coadd(self.rng)
         else:
@@ -651,7 +645,7 @@ class MetadetectionShearTask(PipelineTask):
         )
 
         mdet_config = get_mdet_config()
-        # TODO how to get the id/tract/patch_x etc. currently in schema
+
         res = run_metadetect(
             rng=self.rng,
             config=mdet_config,
