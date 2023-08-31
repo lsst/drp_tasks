@@ -46,6 +46,11 @@ from lsst.pipe.base import (
 import lsst.pipe.base.connectionTypes as cT
 from lsst.cell_coadds import MultipleCellCoadd, SingleCellCoadd
 
+from lsst.afw.image import ImageF, MaskedImageF, ExposureF, FilterLabel
+from lsst.afw.math import FixedKernel
+from lsst.meas.algorithms import KernelPsf
+from metadetect.lsst.util import extract_multiband_coadd_data
+
 
 class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"}):
     """Definitions of inputs and outputs for MetadetectionShearTask."""
@@ -576,16 +581,16 @@ class MetadetectionShearTask(PipelineTask):
 
         # TODO figure out how to use a config to switch to simulation mode
         # in that case also need to fake the id info
-        rng = np.random.RandomState(seed)
+        self.rng = np.random.RandomState(seed)
         idstart = 0
 
         single_cell_tables: list[pa.Table] = []
-        for single_cell_coadds in zip(
+        for cell_coadds in zip(
             *[patch_coadd.cells.values() for patch_coadd in patch_coadds], strict=True
         ):
-            self._log_ids(single_cell_coadds[0])
+            self._log_ids(cell_coadds[0])
 
-            res = self.process_cell(single_cell_coadds, rng, simulate=True)
+            res = self.process_cell(cell_coadds, simulate=False)
 
             # TODO figure out how to make the object ids
             if len(res) > 0:
@@ -605,20 +610,18 @@ class MetadetectionShearTask(PipelineTask):
         )
 
     def process_cell(
-        self, single_cell_coadds: Sequence[SingleCellCoadd], rng,
+        self, cell_coadds: Sequence[SingleCellCoadd],
         simulate=False,
     ) -> pa.Table:
         """Run metadetection on a single cell.
 
         Parameters
         ----------
-        single_cell_coadds : `~collections.abc.Sequence` [ \
+        cell_coadds : `~collections.abc.Sequence` [ \
                 `~lsst.cell_coadds.SingleCellCoadd` ]
             Per-band, per-cell coadds, in the order specified by
             `MetadetectionShearConfig.required_bands`.
 
-        rng: `np.random.RandomState`
-            Random number generator.
         simulate: bool, optional
             If set to True, simulate the data
 
@@ -637,7 +640,10 @@ class MetadetectionShearTask(PipelineTask):
         # columns and call 'from_pydict' instead of 'from_pylist' below, if
         # that's more convenient.
 
-        coadd_data = _simulate_coadd(rng)
+        if simulate:
+            coadd_data = _simulate_coadd(self.rng)
+        else:
+            coadd_data = self._cell_to_coadd_data(cell_coadds)
 
         mask_frac = _get_mask_frac(
             coadd_data['mfrac_mbexp'],
@@ -647,12 +653,12 @@ class MetadetectionShearTask(PipelineTask):
         mdet_config = get_mdet_config()
         # TODO how to get the id/tract/patch_x etc. currently in schema
         res = run_metadetect(
-            rng=rng,
+            rng=self.rng,
             config=mdet_config,
             **coadd_data,
         )
         comb_res = _make_comb_data(
-            single_cell_coadd=single_cell_coadds[0],
+            cell_coadd=cell_coadds[0],
             res=res,
             meas_type=mdet_config['meas_type'],
             mask_frac=mask_frac,
@@ -661,8 +667,8 @@ class MetadetectionShearTask(PipelineTask):
 
         return comb_res
 
-    def _log_ids(self, single_cell_coadd):
-        idinfo = single_cell_coadd.identifiers
+    def _log_ids(self, cell_coadd):
+        idinfo = cell_coadd.identifiers
         tract = idinfo.tract
         patch_x = idinfo.patch.x
         patch_y = idinfo.patch.y
@@ -673,6 +679,89 @@ class MetadetectionShearTask(PipelineTask):
         )
         self.log.info(mess)
 
+    # these are implemented as methods to the class to access task logging
+    # in _get_cell_psf
+
+    def _cell_to_coadd_data(self, cell_coadds: Sequence[SingleCellCoadd]):
+
+        coadd_data_list = []
+        for cell_coadd in cell_coadds:
+            coadd_data = {}
+            coadd_data['coadd_exp'] = self._make_main_exposure(cell_coadd)
+            coadd_data['coadd_noise_exp'] = self._make_noise_exposure(cell_coadd, index=0)
+            coadd_data['coadd_mfrac_exp'] = self._make_mfrac_exposure(cell_coadd)
+            coadd_data_list.append(coadd_data)
+
+        return extract_multiband_coadd_data(coadd_data_list)
+
+    def _make_main_exposure(self, cell_coadd: SingleCellCoadd) -> ExposureF:
+        return self._make_cell_exposure(
+            cell_coadd.outer.image, cell_coadd,
+        )
+
+    def _make_noise_exposure(self, cell_coadd: SingleCellCoadd, index: int) -> ExposureF:
+        # TODO: cell coadds will have real noise realization
+        fake_noise_image = ImageF(cell_coadd.outer.image, True)
+        noise = np.median(cell_coadd.outer.variance.array[:, :])
+        fake_noise_image.array[:, :] = self.rng.normal(
+            scale=noise,
+            size=fake_noise_image.array.shape,
+        )
+        return self._make_cell_exposure(
+            fake_noise_image, cell_coadd,
+        )
+        # return self._make_cell_exposure(
+        #     cell_coadd.outer.noise_realizations[index], cell_coadd,
+        # )
+
+    def _make_mfrac_exposure(self, cell_coadd: SingleCellCoadd) -> ExposureF:
+        # TODO: cell coadds will have a real mfrac image
+        # True means deep copy
+        fake_mfrac_image = ImageF(cell_coadd.outer.image, True)
+        fake_mfrac_image.array[:, :] = 0
+        return self._make_cell_exposure(
+            fake_mfrac_image, cell_coadd,
+        )
+
+    def _make_cell_exposure(
+        self, image: ImageF, cell_coadd: SingleCellCoadd,
+    ) -> ExposureF:
+
+        masked_image = MaskedImageF(
+            image, cell_coadd.outer.mask, cell_coadd.outer.variance,
+        )
+
+        exposure = ExposureF(masked_image)
+        exposure.setWcs(cell_coadd.common.wcs)
+
+        psf = self._get_cell_psf(cell_coadd)
+        exposure.setPsf(psf)
+
+        band = cell_coadd.common.band
+        filter_label = FilterLabel(band=band, physical=band)
+        exposure.setFilter(filter_label)
+
+        return exposure
+
+    def _get_cell_psf(self, cell_coadd: SingleCellCoadd) -> KernelPsf:
+
+        # this makes a deep copy
+        psf_image = cell_coadd.psf_image.convertD()
+        psf_array = psf_image.array
+
+        wbad = np.where(~np.isfinite(psf_array))
+        if wbad[0].size == psf_array.size:
+            raise ValueError('no good pixels in the psf')
+
+        if wbad[0].size > 0:
+            self.log.debug('zeroing %d bad psf pixels' % wbad[0].size)
+            psf_array[wbad] = 0.0
+
+        psf_array *= 1/psf_array.sum()
+        # assert np.all(psf_image.array[:, :] == psf_array)
+        kernel = FixedKernel(psf_image)
+        return KernelPsf(kernel)
+
 
 def _dictify(data):
     output = {}
@@ -682,7 +771,7 @@ def _dictify(data):
 
 
 def _make_comb_data(
-    single_cell_coadd,
+    cell_coadd,
     res,
     meas_type,
     mask_frac,
@@ -690,7 +779,7 @@ def _make_comb_data(
 ):
     import esutil as eu
 
-    idinfo = single_cell_coadd.identifiers
+    idinfo = cell_coadd.identifiers
 
     copy_dt = [
         # we will copy out of arrays to these
@@ -818,7 +907,6 @@ def _simulate_coadd(rng):
     from descwl_shear_sims.psfs import make_fixed_psf, make_ps_psf, make_rand_psf
     # from descwl_shear_sims.stars import make_star_catalog
     from descwl_coadd.coadd_nowarp import make_coadd_nowarp
-    from metadetect.lsst.util import extract_multiband_coadd_data
 
     g1, g2 = 0.02, 0.00
 
