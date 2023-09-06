@@ -396,7 +396,7 @@ class MetadetectionShearTask(PipelineTask):
                     pa.uint32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom flux measurement flags for object.",
+                        "doc": "wmom flux measurement flags for object in filter 1.",
                         "unit": "",
                     },
                 ),
@@ -405,7 +405,7 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom flux for object.",
+                        "doc": "wmom flux for object in filter 1.",
                         "unit": "",
                     },
                 ),
@@ -414,7 +414,7 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom flux uncertainty for object.",
+                        "doc": "wmom flux uncertainty for object in filter 1.",
                         "unit": "",
                     },
                 ),
