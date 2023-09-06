@@ -272,7 +272,7 @@ class MetadetectionShearTask(PipelineTask):
                     nullable=False,
                     metadata={
                         "doc": "admom wmom T (<x^2> + <y^2>) measurement for PSF.",
-                        "unit": "",
+                        "unit": "arcseconds squared",
                     },
                 ),
 
@@ -310,7 +310,7 @@ class MetadetectionShearTask(PipelineTask):
                     nullable=False,
                     metadata={
                         "doc": "wmom T (<x^2> + <y^2>) measurement for reconvolved PSF.",
-                        "unit": "",
+                        "unit": "arcseconds squared",
                     },
                 ),
 
@@ -369,7 +369,7 @@ class MetadetectionShearTask(PipelineTask):
                     nullable=False,
                     metadata={
                         "doc": "wmom T (<x^2> + <y^2>) measurement for object.",
-                        "unit": "",
+                        "unit": "arcseconds squared",
                     },
                 ),
                 pa.field(
@@ -378,7 +378,7 @@ class MetadetectionShearTask(PipelineTask):
                     nullable=False,
                     metadata={
                         "doc": "wmom T uncertainty for object.",
-                        "unit": "",
+                        "unit": "arcseconds squared",
                     },
                 ),
                 pa.field(
