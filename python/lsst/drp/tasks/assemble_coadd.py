@@ -60,7 +60,8 @@ class AssembleCoaddConnections(pipeBase.PipelineTaskConnections,
 
     inputWarps = pipeBase.connectionTypes.Input(
         doc=("Input list of warps to be assemebled i.e. stacked."
-             "WarpType (e.g. direct, psfMatched) is controlled by the warpType config parameter"),
+             "WarpType (e.g. direct, psfMatched) is controlled by the "
+             "warpType config parameter"),
         name="{inputCoaddName}Coadd_{warpType}Warp",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "visit", "instrument"),
@@ -68,7 +69,8 @@ class AssembleCoaddConnections(pipeBase.PipelineTaskConnections,
         multiple=True
     )
     skyMap = pipeBase.connectionTypes.Input(
-        doc="Input definition of geometry/bbox and projection/wcs for coadded exposures",
+        doc="Input definition of geometry/bbox and projection/wcs for coadded "
+            "exposures",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
         storageClass="SkyMap",
         dimensions=("skymap", ),
@@ -80,8 +82,9 @@ class AssembleCoaddConnections(pipeBase.PipelineTaskConnections,
         dimensions=("instrument", "tract", "patch", "skymap", "band")
     )
     brightObjectMask = pipeBase.connectionTypes.PrerequisiteInput(
-        doc=("Input Bright Object Mask mask produced with external catalogs to be applied to the mask plane"
-             " BRIGHT_OBJECT."),
+        doc=("Input Bright Object Mask mask produced with external catalogs "
+             "to be applied to the mask plane BRIGHT_OBJECT."
+             ),
         name="brightObjectMask",
         storageClass="ObjectMaskCatalog",
         dimensions=("tract", "patch", "skymap", "band"),
@@ -132,7 +135,8 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
     subregionSize = pexConfig.ListField(
         dtype=int,
         doc="Width, height of stack subregion size; "
-        "make small enough that a full stack of images will fit into memory at once.",
+        "make small enough that a full stack of images will fit into memory "
+        " at once.",
         length=2,
         default=(2000, 2000),
     )
@@ -148,31 +152,37 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
     )
     doSigmaClip = pexConfig.Field(
         dtype=bool,
-        doc="Perform sigma clipped outlier rejection with MEANCLIP statistic? (DEPRECATED)",
+        doc="Perform sigma clipped outlier rejection with MEANCLIP statistic?",
+        deprecated=True,
         default=False,
     )
     sigmaClip = pexConfig.Field(
         dtype=float,
-        doc="Sigma for outlier rejection; ignored if non-clipping statistic selected.",
+        doc="Sigma for outlier rejection; ignored if non-clipping statistic "
+            "selected.",
         default=3.0,
     )
     clipIter = pexConfig.Field(
         dtype=int,
-        doc="Number of iterations of outlier rejection; ignored if non-clipping statistic selected.",
+        doc="Number of iterations of outlier rejection; ignored if "
+            "non-clipping statistic selected.",
         default=2,
     )
     calcErrorFromInputVariance = pexConfig.Field(
         dtype=bool,
-        doc="Calculate coadd variance from input variance by stacking statistic."
-            "Passed to StatisticsControl.setCalcErrorFromInputVariance()",
+        doc="Calculate coadd variance from input variance by stacking "
+            "statistic. Passed to "
+            "StatisticsControl.setCalcErrorFromInputVariance()",
         default=True,
     )
     scaleZeroPoint = pexConfig.ConfigurableField(
         target=ScaleZeroPointTask,
-        doc="Task to adjust the photometric zero point of the coadd temp exposures",
+        doc="Task to adjust the photometric zero point of the coadd temp "
+            "exposures",
     )
     doInterp = pexConfig.Field(
-        doc="Interpolate over NaN pixels? Also extrapolate, if necessary, but the results are ugly.",
+        doc="Interpolate over NaN pixels? Also extrapolate, if necessary, but "
+            "the results are ugly.",
         dtype=bool,
         default=True,
     )
@@ -191,30 +201,43 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
         default=False,
     )
     doUsePsfMatchedPolygons = pexConfig.Field(
-        doc="Use ValidPolygons from shrunk Psf-Matched Calexps? Should be set to True by CompareWarp only.",
+        doc="Use ValidPolygons from shrunk Psf-Matched Calexps? Should be set "
+            "to True by CompareWarp only.",
         dtype=bool,
         default=False,
     )
     maskPropagationThresholds = pexConfig.DictField(
         keytype=str,
         itemtype=float,
-        doc=("Threshold (in fractional weight) of rejection at which we propagate a mask plane to "
-             "the coadd; that is, we set the mask bit on the coadd if the fraction the rejected frames "
+        doc=("Threshold (in fractional weight) of rejection at which we "
+             "propagate a mask plane to the coadd; that is, we set the mask "
+             "bit on the coadd if the fraction the rejected frames "
              "would have contributed exceeds this value."),
         default={"SAT": 0.1},
     )
-    removeMaskPlanes = pexConfig.ListField(dtype=str, default=["NOT_DEBLENDED"],
-                                           doc="Mask planes to remove before coadding")
-    doMaskBrightObjects = pexConfig.Field(dtype=bool, default=False,
-                                          doc="Set mask and flag bits for bright objects?")
-    brightObjectMaskName = pexConfig.Field(dtype=str, default="BRIGHT_OBJECT",
-                                           doc="Name of mask bit used for bright objects")
+    removeMaskPlanes = pexConfig.ListField(
+        dtype=str,
+        default=["NOT_DEBLENDED"],
+        doc="Mask planes to remove before coadding",
+    )
+    doMaskBrightObjects = pexConfig.Field(
+        dtype=bool,
+        default=False,
+        doc="Set mask and flag bits for bright objects?",
+    )
+    brightObjectMaskName = pexConfig.Field(
+        dtype=str,
+        default="BRIGHT_OBJECT",
+        doc="Name of mask bit used for bright objects",
+    )
     coaddPsf = pexConfig.ConfigField(
         doc="Configuration for CoaddPsf",
         dtype=measAlg.CoaddPsfConfig,
     )
     doAttachTransmissionCurve = pexConfig.Field(
-        dtype=bool, default=False, optional=False,
+        dtype=bool,
+        default=False,
+        optional=False,
         doc=("Attach a piecewise TransmissionCurve for the coadd? "
              "(requires all input Exposures to have TransmissionCurves).")
     )
