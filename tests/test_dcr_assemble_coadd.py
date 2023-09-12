@@ -32,8 +32,9 @@ class DcrAssembleCoaddCalculateGainTestCase(lsst.utils.tests.TestCase):
         self.baseGain = 0.5
         self.gainList = [self.baseGain, self.baseGain]
         self.convergenceList = [0.2]
-        # Calculate the convergence we would expect if the model was converging perfectly,
-        # so that the improvement is limited only by our conservative gain.
+        # Calculate the convergence we would expect if the model was converging
+        # perfectly, so that the improvement is limited only by our
+        # conservative gain.
         for i in range(2):
             self.convergenceList.append(self.convergenceList[i]/(self.baseGain + 1))
         self.nextGain = (1 + self.baseGain) / 2

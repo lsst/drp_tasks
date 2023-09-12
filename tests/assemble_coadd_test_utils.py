@@ -119,14 +119,18 @@ class MockCoaddTestData:
     ------
     ValueError
         If the bounding box does not contain the pixel coordinate (0, 0).
-        This is due to `GaussianPsf` that is used by `lsst.meas.algorithms.testUtils.plantSources`
+        This is due to `GaussianPsf` that is used by
+        `~lsst.meas.algorithms.testUtils.plantSources`
         lacking the option to specify the pixel origin.
     """
     rotAngle = 0.*degrees
-    "Rotation of the pixel grid on the sky, East from North (`lsst.geom.Angle`)."
+    """Rotation of the pixel grid on the sky, East from North
+    (`lsst.geom.Angle`).
+    """
     filterLabel = None
-    """The filter definition, usually set in the current instruments' obs package.
-    For these tests, a simple filter is defined without using an obs package (`lsst.afw.image.FilterLabel`).
+    """The filter definition, usually set in the current instruments' obs
+    package. For these tests, a simple filter is defined without using an obs
+    package (`lsst.afw.image.FilterLabel`).
     """
     rngData = None
     """Pre-initialized random number generator for constructing the test images
@@ -139,15 +143,21 @@ class MockCoaddTestData:
     kernelSize = None
     "Width of the kernel used for simulating sources, in pixels."
     exposures = {}
-    "The simulated test data, with variable PSF sizes (`dict` of `lsst.afw.image.Exposure`)"
+    """The simulated test data, with variable PSF size
+    (`dict` of `lsst.afw.image.Exposure`)
+    """
     matchedExposures = {}
-    """The simulated exposures, all with PSF width set to `maxPsfSize`
+    """The simulated exposures, all with PSF width set to ``maxPsfSize``
     (`dict` of `lsst.afw.image.Exposure`).
     """
     photoCalib = afwImage.makePhotoCalibFromCalibZeroPoint(27, 10)
-    "The photometric zero point to use for converting counts to flux units (`lsst.afw.image.PhotoCalib`)."
+    """The photometric zero point to use for converting counts to flux units
+    (`lsst.afw.image.PhotoCalib`).
+    """
     badMaskPlanes = ["NO_DATA", "BAD"]
-    "Mask planes that, if set, the associated pixel should not be included in the coaddTempExp."
+    """Mask planes that, if set, the associated pixel should not be included in
+    the coaddTempExp.
+    """
     detector = None
     "Properties of the CCD for the exposure (`lsst.afw.cameraGeom.Detector`)."
 

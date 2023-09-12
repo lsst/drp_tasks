@@ -89,7 +89,8 @@ class DcrAssembleCoaddConnections(AssembleCoaddConnections,
             self.outputs.remove("dcrCoadds")
         if not config.doNImage:
             self.outputs.remove("dcrNImages")
-        # Remove outputs inherited from ``AssembleCoaddConnections`` that are not used
+        # Remove outputs inherited from ``AssembleCoaddConnections`` that are
+        # not used.
         self.outputs.remove("coaddExposure")
         self.outputs.remove("nImage")
 
@@ -237,7 +238,8 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig,
         self.assembleStaticSkyModel.retarget(CompareWarpAssembleCoaddTask)
         self.doNImage = True
         self.assembleStaticSkyModel.warpType = self.warpType
-        # The deepCoadd and nImage files will be overwritten by this Task, so don't write them the first time
+        # The deepCoadd and nImage files will be overwritten by this Task, so
+        # don't write them the first time.
         self.assembleStaticSkyModel.doNImage = False
         self.assembleStaticSkyModel.doWrite = False
         self.detectPsfSources.returnOriginalFootprints = False
@@ -268,9 +270,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
 
     Notes
     -----
-    As with AssembleCoaddTask, we want to assemble a coadded image from a set of
-    Warps (also called coadded temporary exposures), including the effects of
-    Differential Chromatic Refraction (DCR).
+    As with AssembleCoaddTask, we want to assemble a coadded image from a set
+    of Warps (also called coadded temporary exposures), including the effects
+    of Differential Chromatic Refraction (DCR).
     For full details of the mathematics and algorithm, please see
     DMTN-037: DCR-matched template generation (https://dmtn-037.lsst.io).
 
@@ -294,8 +296,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
     First, the new solution is averaged with the solution from the previous
     iteration, which mitigates oscillating solutions where the model
     overshoots with alternating very high and low values.
-    Second, a common degeneracy when the data have a limited range of airmass or
-    parallactic angle values is for one subfilter to be fit with very low or
+    Second, a common degeneracy when the data have a limited range of airmass
+    or parallactic angle values is for one subfilter to be fit with very low or
     negative values, while another subfilter is fit with very high values. This
     typically appears in the form of holes next to sources in one subfilter,
     and corresponding extended wings in another. Because each subfilter has
@@ -336,7 +338,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         inputData = butlerQC.get(inputRefs)
 
         # Construct skyInfo expected by run
-        # Do not remove skyMap from inputData in case _makeSupplementaryData needs it
+        # Do not remove skyMap from inputData in case _makeSupplementaryData
+        # needs it.
         skyMap = inputData["skyMap"]
         outputDataId = butlerQC.quantum.dataId
 
@@ -360,7 +363,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
 
         inputData.setdefault('brightObjectMask', None)
         for subfilter in range(self.config.dcrNumSubfilters):
-            # Use the PSF of the stacked dcrModel, and do not recalculate the PSF for each subfilter
+            # Use the PSF of the stacked dcrModel, and do not recalculate the
+            # PSF for each subfilter
             retStruct.dcrCoadds[subfilter].setPsf(retStruct.coaddExposure.getPsf())
             self.processResults(retStruct.dcrCoadds[subfilter], inputData['brightObjectMask'], outputDataId)
 
@@ -411,7 +415,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             coaddExposure.setPsf(psfResults.psf)
 
     def prepareDcrInputs(self, templateCoadd, warpRefList, weightList):
-        """Prepare the DCR coadd by iterating through the visitInfo of the input warps.
+        """Prepare the DCR coadd by iterating through the visitInfo of the
+        input warps.
 
         Sets the property ``bufferSize``.
 
@@ -433,7 +438,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         Raises
         ------
         NotImplementedError
-            If ``lambdaMin`` is missing from the Mapper class of the obs package being used.
+            If ``lambdaMin`` is missing from the Mapper class of the obs
+            package being used.
         """
         sigma2fwhm = 2.*np.sqrt(2.*np.log(2.))
         filterLabel = templateCoadd.getFilter()
@@ -487,8 +493,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         ``templateCoadd`` that serves as the model of the static sky.
 
         Find artifacts and apply them to the warps' masks creating a list of
-        alternative masks with a new "CLIPPED" plane and updated "NO_DATA" plane
-        Then pass these alternative masks to the base class's assemble method.
+        alternative masks with a new "CLIPPED" plane and updated "NO_DATA"
+        plane then pass these alternative masks to the base class's assemble
+        method.
 
         Divide the ``templateCoadd`` evenly between each subfilter of a
         ``DcrModel`` as the starting best estimate of the true wavelength-
@@ -515,7 +522,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         weightList : `list` of `float`
             The weight to give each input exposure in the coadd
         supplementaryData : `lsst.pipe.base.Struct`
-            Result struct returned by ``_makeSupplementaryData`` with attributes:
+            Result struct returned by ``_makeSupplementaryData`` with
+            attributes:
 
             ``templateCoadd``
                 Coadded exposure (`lsst.afw.image.Exposure`).
@@ -543,13 +551,15 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         baseVariance = templateCoadd.variance.clone()
         baseVariance /= self.config.dcrNumSubfilters
         spanSetMaskList = self.findArtifacts(templateCoadd, warpRefList, imageScalerList)
-        # Note that the mask gets cleared in ``findArtifacts``, but we want to preserve the mask.
+        # Note that the mask gets cleared in ``findArtifacts``, but we want to
+        # preserve the mask.
         templateCoadd.setMask(baseMask)
         badMaskPlanes = self.config.badMaskPlanes[:]
-        # Note that is important that we do not add "CLIPPED" to ``badMaskPlanes``
-        # This is because pixels in observations that are significantly affect by DCR
-        # are likely to have many pixels that are both "DETECTED" and "CLIPPED",
-        # but those are necessary to constrain the DCR model.
+        # Note that is important that we do not add "CLIPPED" to
+        # ``badMaskPlanes``. This is because pixels in observations that are
+        # significantly affected by DCR are likely to have many pixels that are
+        # both "DETECTED" and "CLIPPED", but those are necessary to constrain
+        # the DCR model.
         badPixelMask = templateCoadd.mask.getPlaneBitMask(badMaskPlanes)
 
         stats = self.prepareStats(mask=badPixelMask)
@@ -558,9 +568,10 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             dcrNImages, dcrWeights = self.calculateNImage(dcrModels, skyInfo.bbox, warpRefList,
                                                           spanSetMaskList, stats.ctrl)
             nImage = afwImage.ImageU(skyInfo.bbox)
-            # Note that this nImage will be a factor of dcrNumSubfilters higher than
-            # the nImage returned by assembleCoadd for most pixels. This is because each
-            # subfilter may have a different nImage, and fractional values are not allowed.
+            # Note that this nImage will be a factor of dcrNumSubfilters higher
+            # than the nImage returned by assembleCoadd for most pixels. This
+            # is because each subfilter may have a different nImage, and
+            # fractional values are not allowed.
             for dcrNImage in dcrNImages:
                 nImage += dcrNImage
         else:
@@ -681,14 +692,16 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 self.applyAltMaskPlanes(mask, altMaskSpans)
             weightImage = np.zeros_like(exposure.image.array)
             weightImage[(mask.array & statsCtrl.getAndMask()) == 0] = 1.
-            # The weights must be shifted in exactly the same way as the residuals,
-            # because they will be used as the denominator in the weighted average of residuals.
+            # The weights must be shifted in exactly the same way as the
+            # residuals, because they will be used as the denominator in the
+            # weighted average of residuals.
             weightsGenerator = self.dcrResiduals(weightImage, visitInfo, wcs,
                                                  dcrModels.effectiveWavelength, dcrModels.bandwidth)
             for shiftedWeights, dcrNImage, dcrWeight in zip(weightsGenerator, dcrNImages, dcrWeights):
                 dcrNImage.array += np.rint(shiftedWeights).astype(dcrNImage.array.dtype)
                 dcrWeight.array += shiftedWeights
-        # Exclude any pixels that don't have at least one exposure contributing in all subfilters
+        # Exclude any pixels that don't have at least one exposure contributing
+        # in all subfilters
         weightsThreshold = 1.
         goodPix = dcrWeights[0].array > weightsThreshold
         for weights in dcrWeights[1:]:
@@ -709,11 +722,11 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         Stack the shifted residuals and apply them as a correction to the
         solution from the previous iteration.
         Restrict the new model solutions from varying by more than a factor of
-        `modelClampFactor` from the last solution, and additionally restrict the
-        individual subfilter models from varying by more than a factor of
+        `modelClampFactor` from the last solution, and additionally restrict
+        the individual subfilter models from varying by more than a factor of
         `frequencyClampFactor` from their average.
-        Finally, mitigate potentially oscillating solutions by averaging the new
-        solution with the solution from the previous iteration, weighted by
+        Finally, mitigate potentially oscillating solutions by averaging the
+        new solution with the solution from the previous iteration, weighted by
         their convergence metric.
 
         Parameters
@@ -731,12 +744,14 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         statsCtrl : `lsst.afw.math.StatisticsControl`
             Statistics control object for coadd.
         convergenceMetric : `float`
-            Quality of fit metric for the matched templates of the input images.
+            Quality of fit metric for the matched templates of the input
+            images.
         gain : `float`, optional
             Relative weight to give the new solution when updating the model.
         modelWeights : `numpy.ndarray` or `float`
-            A 2D array of weight values that tapers smoothly to zero away from detected sources.
-            Set to a placeholder value of 1.0 if ``self.config.useModelWeights`` is False.
+            A 2D array of weight values that tapers smoothly to zero away from
+            detected sources. Set to a placeholder value of 1.0 if
+            ``self.config.useModelWeights`` is False.
         refImage : `lsst.afw.image.Image`
             A reference image used to supply the default pixel values.
         dcrWeights : `list` of `lsst.afw.image.Image`
@@ -757,11 +772,13 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                                                            splitThreshold=self.config.splitThreshold,
                                                            amplifyModel=self.config.accelerateModel)
             residual = exposure.image.array - templateImage.array
-            # Note that the variance plane here is used to store weights, not the actual variance
+            # Note that the variance plane here is used to store weights, not
+            # the actual variance
             residual *= exposure.variance.array
             # The residuals are stored as a list of generators.
-            # This allows the residual for a given subfilter and exposure to be created
-            # on the fly, instead of needing to store them all in memory.
+            # This allows the residual for a given subfilter and exposure to be
+            # created on the fly, instead of needing to store them all in
+            # memory.
             residualGeneratorList.append(self.dcrResiduals(residual, visitInfo, wcs,
                                                            dcrModels.effectiveWavelength,
                                                            dcrModels.bandwidth))
@@ -774,7 +791,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         dcrModels.assign(dcrSubModelOut, bbox)
 
     def dcrResiduals(self, residual, visitInfo, wcs, effectiveWavelength, bandwidth):
-        """Prepare a residual image for stacking in each subfilter by applying the reverse DCR shifts.
+        """Prepare a residual image for stacking in each subfilter by applying
+        the reverse DCR shifts.
 
         Parameters
         ----------
@@ -792,14 +810,15 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The residual image for the next subfilter, shifted for DCR.
         """
         if self.config.imageInterpOrder > 1:
-            # Pre-calculate the spline-filtered residual image, so that step can be
-            # skipped in the shift calculation in `applyDcr`.
+            # Pre-calculate the spline-filtered residual image, so that step
+            # can be skipped in the shift calculation in `applyDcr`.
             filteredResidual = ndimage.spline_filter(residual, order=self.config.imageInterpOrder)
         else:
             # No need to prefilter if order=1 (it will also raise an error)
             filteredResidual = residual
-        # Note that `splitSubfilters` is always turned off in the reverse direction.
-        # This option introduces additional blurring if applied to the residuals.
+        # Note that `splitSubfilters` is always turned off in the reverse
+        # direction. This option introduces additional blurring if applied to
+        # the residuals.
         dcrShift = calculateDcr(visitInfo, wcs, effectiveWavelength, bandwidth, self.config.dcrNumSubfilters,
                                 splitSubfilters=False)
         for dcr in dcrShift:
@@ -823,8 +842,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         gain : `float`
             Relative weight to give the new solution when updating the model.
         modelWeights : `numpy.ndarray` or `float`
-            A 2D array of weight values that tapers smoothly to zero away from detected sources.
-            Set to a placeholder value of 1.0 if ``self.config.useModelWeights`` is False.
+            A 2D array of weight values that tapers smoothly to zero away from
+            detected sources. Set to a placeholder value of 1.0 if
+            ``self.config.useModelWeights`` is False.
         refImage : `lsst.afw.image.Image`
             A reference image used to supply the default pixel values.
         dcrWeights : `list` of `lsst.afw.image.Image`
@@ -841,7 +861,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             residualsList = [next(residualGenerator) for residualGenerator in residualGeneratorList]
             residual = np.sum(residualsList, axis=0)
             residual *= dcrWeights[subfilter][dcrBBox].array
-            # `MaskedImage`s only support in-place addition, so rename for readability
+            # `MaskedImage`s only support in-place addition, so rename for
+            # readability.
             newModel = model[dcrBBox].clone()
             newModel.array += residual
             # Catch any invalid values
@@ -883,7 +904,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         Returns
         -------
         convergenceMetric : `float`
-            Quality of fit metric for all input exposures, within the sub-region.
+            Quality of fit metric for all input exposures, within the
+            sub-region.
         """
         significanceImage = np.abs(dcrModels.getReferenceImage(bbox))
         nSigma = 3.
@@ -1004,7 +1026,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 coaddExposure.setPhotoCalib(calibration)
             if coaddInputs is not None:
                 coaddExposure.getInfo().setCoaddInputs(coaddInputs)
-            # Set the metadata for the coadd, including PSF and aperture corrections.
+            # Set the metadata for the coadd, including PSF and aperture
+            # corrections.
             self.assembleMetadata(coaddExposure, warpRefList, weightList)
             # Overwrite the PSF
             coaddExposure.setPsf(dcrModels.psf)
@@ -1058,41 +1081,45 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                              % (len(convergenceList), len(gainList)))
 
         if self.config.baseGain is None:
-            # If ``baseGain`` is not set, calculate it from the number of DCR subfilters
-            # The more subfilters being modeled, the lower the gain should be.
+            # If ``baseGain`` is not set, calculate it from the number of DCR
+            # subfilters. The more subfilters being modeled, the lower the gain
+            # should be.
             baseGain = 1./(self.config.dcrNumSubfilters - 1)
         else:
             baseGain = self.config.baseGain
 
         if self.config.useProgressiveGain and nIter > 2:
-            # To calculate the best gain to use, compare the past gains that have been used
-            # with the resulting convergences to estimate the best gain to use.
-            # Algorithmically, this is a Kalman filter.
-            # If forward modeling proceeds perfectly, the convergence metric should
-            # asymptotically approach a final value.
-            # We can estimate that value from the measured changes in convergence
-            # weighted by the gains used in each previous iteration.
+            # To calculate the best gain to use, compare the past gains that
+            # have been used with the resulting convergences to estimate the
+            # best gain to use. Algorithmically, this is a Kalman filter.
+            # If forward modeling proceeds perfectly, the convergence metric
+            # should asymptotically approach a final value. We can estimate
+            # that value from the measured changes in convergence weighted by
+            # the gains used in each previous iteration.
             estFinalConv = [((1 + gainList[i])*convergenceList[i + 1] - convergenceList[i])/gainList[i]
                             for i in range(nIter - 1)]
-            # The convergence metric is strictly positive, so if the estimated final convergence is
-            # less than zero, force it to zero.
+            # The convergence metric is strictly positive, so if the estimated
+            # final convergence is less than zero, force it to zero.
             estFinalConv = np.array(estFinalConv)
             estFinalConv[estFinalConv < 0] = 0
-            # Because the estimate may slowly change over time, only use the most recent measurements.
+            # Because the estimate may slowly change over time, only use the
+            # most recent measurements.
             estFinalConv = np.median(estFinalConv[max(nIter - 5, 0):])
             lastGain = gainList[-1]
             lastConv = convergenceList[-2]
             newConv = convergenceList[-1]
-            # The predicted convergence is the value we would get if the new model calculated
-            # in the previous iteration was perfect. Recall that the updated model that is
-            # actually used is the gain-weighted average of the new and old model,
-            # so the convergence would be similarly weighted.
+            # The predicted convergence is the value we would get if the new
+            # model calculated in the previous iteration was perfect. Recall
+            # that the updated model that is actually used is the gain-weighted
+            # average of the new and old model, so the convergence would be
+            # similarly weighted.
             predictedConv = (estFinalConv*lastGain + lastConv)/(1. + lastGain)
-            # If the measured and predicted convergence are very close, that indicates
-            # that our forward model is accurate and we can use a more aggressive gain
-            # If the measured convergence is significantly worse (or better!) than predicted,
-            # that indicates that the model is not converging as expected and
-            # we should use a more conservative gain.
+            # If the measured and predicted convergence are very close, that
+            # indicates that our forward model is accurate and we can use a
+            # more aggressive gain. If the measured convergence is
+            # significantly worse (or better!) than predicted, that indicates
+            # that the model is not converging as expected and we should use a
+            # more conservative gain.
             delta = (predictedConv - newConv)/((lastConv - estFinalConv)/(1 + lastGain))
             newGain = 1 - abs(delta)
             # Average the gains to prevent oscillating solutions.
@@ -1116,13 +1143,15 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         Returns
         -------
         weights : `numpy.ndarray` or `float`
-            A 2D array of weight values that tapers smoothly to zero away from detected sources.
-            Set to a placeholder value of 1.0 if ``self.config.useModelWeights`` is False.
+            A 2D array of weight values that tapers smoothly to zero away from
+            detected sources. Set to a placeholder value of 1.0 if
+            ``self.config.useModelWeights`` is False.
 
         Raises
         ------
         ValueError
-            If ``useModelWeights`` is set and ``modelWeightsWidth`` is negative.
+            If ``useModelWeights`` is set and ``modelWeightsWidth`` is
+            negative.
         """
         if not self.config.useModelWeights:
             return 1.0
@@ -1148,8 +1177,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         refImage : `lsst.afw.image.MaskedImage`
             A reference image used to supply the default pixel values.
         modelWeights : `numpy.ndarray` or `float`
-            A 2D array of weight values that tapers smoothly to zero away from detected sources.
-            Set to a placeholder value of 1.0 if ``self.config.useModelWeights`` is False.
+            A 2D array of weight values that tapers smoothly to zero away from
+            detected sources. Set to a placeholder value of 1.0 if
+            ``self.config.useModelWeights`` is False.
         """
         if self.config.useModelWeights:
             for model in modelImages:
@@ -1170,7 +1200,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         imageScalerList : `list` of `lsst.pipe.task.ImageScaler`
             The image scalars correct for the zero point of the exposures.
         spanSetMaskList : `list` of `dict` containing spanSet lists, or `None`
-            Each element is dict with keys = mask plane name to add the spans to.
+            Each element is dict with keys = mask plane name to add the spans
+            to.
 
         Returns
         -------
@@ -1188,18 +1219,21 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             if altMaskSpans is not None:
                 self.applyAltMaskPlanes(exposure.mask, altMaskSpans)
             imageScaler.scaleMaskedImage(exposure.maskedImage)
-            # Note that the variance plane here is used to store weights, not the actual variance
+            # Note that the variance plane here is used to store weights, not
+            # the actual variance
             exposure.variance.array[:, :] = 0.
             # Set the weight of unmasked pixels to 1.
             exposure.variance.array[(exposure.mask.array & statsCtrl.getAndMask()) == 0] = 1.
             # Set the image value of masked pixels to zero.
-            # This eliminates needing the mask plane when stacking images in ``newModelFromResidual``
+            # This eliminates needing the mask plane when stacking images in
+            # ``newModelFromResidual``
             exposure.image.array[(exposure.mask.array & statsCtrl.getAndMask()) > 0] = 0.
             subExposures[visit] = exposure
         return subExposures
 
     def selectCoaddPsf(self, templateCoadd, warpRefList):
-        """Compute the PSF of the coadd from the exposures with the best seeing.
+        """Compute the PSF of the coadd from the exposures with the best
+        seeing.
 
         Parameters
         ----------
@@ -1214,8 +1248,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The average PSF of the input exposures with the best seeing.
         """
         sigma2fwhm = 2.*np.sqrt(2.*np.log(2.))
-        # Note: ``ccds`` is a `lsst.afw.table.ExposureCatalog` with one entry per ccd and per visit
-        # If there are multiple ccds, it will have that many times more elements than ``warpExpRef``
+        # Note: ``ccds`` is a `lsst.afw.table.ExposureCatalog` with one entry
+        # per ccd and per visit. If there are multiple ccds, it will have that
+        # many times more elements than ``warpExpRef``.
         ccds = templateCoadd.getInfo().getCoaddInputs().ccds
         templatePsf = templateCoadd.getPsf()
         # Just need a rough estimate; average positions are fine
@@ -1229,9 +1264,10 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             psfAvgPos = psf.getAveragePosition()
             psfSize = psf.computeShape(psfAvgPos).getDeterminantRadius()*sigma2fwhm
             psfSizes[ccdVisits == visit] = psfSize
-        # Note that the input PSFs include DCR, which should be absent from the DcrCoadd
-        # The selected PSFs are those that have a FWHM less than or equal to the smaller
-        # of the mean or median FWHM of the input exposures.
+        # Note that the input PSFs include DCR, which should be absent from the
+        # DcrCoadd. The selected PSFs are those that have a FWHM less than or
+        # equal to the smaller of the mean or median FWHM of the input
+        # exposures.
         sizeThreshold = min(np.median(psfSizes), psfRefSize)
         goodPsfs = psfSizes <= sizeThreshold
         psf = measAlg.CoaddPsf(ccds[goodPsfs], templateCoadd.getWcs(),
