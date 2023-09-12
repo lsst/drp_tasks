@@ -280,7 +280,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     `AssembleCoaddTask` uses several sub-tasks. These are
 
     - `~lsst.pipe.tasks.ScaleZeroPointTask`
-    - create and use an ``imageScaler`` object to scale the photometric zeropoint for each Warp
+    - create and use an ``imageScaler`` object to scale the photometric
+      zeropoint for each Warp
     - `~lsst.pipe.tasks.InterpImageTask`
     - interpolate across bad pixels (NaN) in the final coadd
 
@@ -303,7 +304,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     _DefaultName = "assembleCoadd"
 
     def __init__(self, *args, **kwargs):
-        # TODO: DM-17415 better way to handle previously allowed passed args e.g.`AssembleCoaddTask(config)`
+        # TODO: DM-17415 better way to handle previously allowed passed args
+        # e.g.`AssembleCoaddTask(config)`
         if args:
             argNames = ["config", "name", "parentTask", "log"]
             kwargs.update({k: v for k, v in zip(argNames, args)})
@@ -333,7 +335,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         inputData = butlerQC.get(inputRefs)
 
         # Construct skyInfo expected by run
-        # Do not remove skyMap from inputData in case _makeSupplementaryData needs it
+        # Do not remove skyMap from inputData in case _makeSupplementaryData
+        # needs it
         skyMap = inputData["skyMap"]
         outputDataId = butlerQC.quantum.dataId
 
@@ -401,13 +404,14 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             Gen3 Butler object for fetching additional data products before
             running the Task specialized for quantum being processed.
         inputRefs : `~lsst.pipe.base.InputQuantizedConnection`
-            Attributes are the names of the connections describing input dataset types.
-            Values are DatasetRefs that task consumes for corresponding dataset type.
-            DataIds are guaranteed to match data objects in ``inputData``.
+            Attributes are the names of the connections describing input
+            dataset types. Values are DatasetRefs that task consumes for the
+            corresponding dataset type. DataIds are guaranteed to match data
+            objects in ``inputData``.
         outputRefs : `~lsst.pipe.base.OutputQuantizedConnection`
-            Attributes are the names of the connections describing output dataset types.
-            Values are DatasetRefs that task is to produce
-            for corresponding dataset type.
+            Attributes are the names of the connections describing output
+            dataset types. Values are DatasetRefs that task is to produce
+            for the corresponding dataset type.
         """
         return pipeBase.Struct()
 
@@ -425,7 +429,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         Each Warp has its own photometric zeropoint and background variance.
         Before coadding these Warps together, compute a scale factor to
-        normalize the photometric zeropoint and compute the weight for each Warp.
+        normalize the photometric zeropoint and compute the weight for each
+        Warp.
 
         Parameters
         ----------
@@ -451,7 +456,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         statsCtrl.setNanSafe(True)
         # compute tempExpRefList: a list of tempExpRef that actually exist
         # and weightList: a list of the weight of the associated coadd tempExp
-        # and imageScalerList: a list of scale factors for the associated coadd tempExp
+        # and imageScalerList: a list of scale factors for the associated coadd
+        # tempExp.
         tempExpRefList = []
         weightList = []
         imageScalerList = []
@@ -504,7 +510,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             Statistics as a struct with attributes:
 
             ``statsCtrl``
-                Statistics control object for coadd (`~lsst.afw.math.StatisticsControl`).
+                Statistics control object for coadd
+                (`~lsst.afw.math.StatisticsControl`).
             ``statsFlags``
                 Statistic for coadd (`~lsst.afw.math.Property`).
         """
@@ -562,14 +569,14 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             Results as a struct with attributes:
 
             ``coaddExposure``
-                Coadded exposure (``lsst.afw.image.Exposure``).
+                Coadded exposure (`~lsst.afw.image.Exposure`).
             ``nImage``
-                Exposure count image (``lsst.afw.image.Image``), if requested.
+                Exposure count image (`~lsst.afw.image.Image`), if requested.
             ``inputMap``
                 Bit-wise map of inputs, if requested.
             ``warpRefList``
-                Input list of refs to the warps (``lsst.daf.butler.DeferredDatasetHandle``)
-                (unmodified).
+                Input list of refs to the warps
+                (`~lsst.daf.butler.DeferredDatasetHandle`) (unmodified).
             ``imageScalerList``
                 Input list of image scalers (`list`) (unmodified).
             ``weightList``
@@ -597,13 +604,14 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddMaskedImage = coaddExposure.getMaskedImage()
         subregionSizeArr = self.config.subregionSize
         subregionSize = geom.Extent2I(subregionSizeArr[0], subregionSizeArr[1])
-        # if nImage is requested, create a zero one which can be passed to assembleSubregion
+        # if nImage is requested, create a zero one which can be passed to
+        # assembleSubregion.
         if self.config.doNImage:
             nImage = afwImage.ImageU(skyInfo.bbox)
         else:
             nImage = None
-        # If inputMap is requested, create the initial version that can be masked in
-        # assembleSubregion.
+        # If inputMap is requested, create the initial version that can be
+        # masked in assembleSubregion.
         if self.config.doInputMap:
             self.inputMapper.build_ccd_input_map(skyInfo.bbox,
                                                  skyInfo.wcs,
@@ -627,7 +635,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                     self.log.exception("Cannot compute coadd %s: %s", subBBox, e)
                     raise
 
-        # If inputMap is requested, we must finalize the map after the accumulation.
+        # If inputMap is requested, we must finalize the map after the
+        # accumulation.
         if self.config.doInputMap:
             self.inputMapper.finalize_ccd_input_map_mask()
             inputMap = self.inputMapper.ccd_input_map
@@ -635,8 +644,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             inputMap = None
 
         self.setInexactPsf(coaddMaskedImage.getMask())
-        # Despite the name, the following doesn't really deal with "EDGE" pixels: it identifies
-        # pixels that didn't receive any unmasked inputs (as occurs around the edge of the field).
+        # Despite the name, the following doesn't really deal with "EDGE"
+        # pixels: it identifies pixels that didn't receive any unmasked inputs
+        # (as occurs around the edge of the field).
         coaddUtils.setCoaddEdgeBits(coaddMaskedImage.getMask(), coaddMaskedImage.getVariance())
         return pipeBase.Struct(coaddExposure=coaddExposure, nImage=nImage,
                                warpRefList=tempExpRefList, imageScalerList=imageScalerList,
@@ -663,9 +673,10 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         """
         assert len(tempExpRefList) == len(weightList), "Length mismatch"
 
-        # We load a single pixel of each coaddTempExp, because we just want to get at the metadata
-        # (and we need more than just the PropertySet that contains the header), which is not possible
-        # with the current butler (see #2777).
+        # We load a single pixel of each coaddTempExp, because we just want to
+        # get at the metadata (and we need more than just the PropertySet that
+        # contains the header), which is not possible with the current butler
+        # (see #2777).
         bbox = geom.Box2I(coaddExposure.getBBox().getMin(), geom.Extent2I(1, 1))
 
         tempExpList = [tempExpRef.get(parameters={'bbox': bbox}) for tempExpRef in tempExpRefList]
@@ -688,8 +699,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddInputs.visits.sort()
         coaddInputs.ccds.sort()
         if self.warpType == "psfMatched":
-            # The modelPsf BBox for a psfMatchedWarp/coaddTempExp was dynamically defined by
-            # ModelPsfMatchTask as the square box bounding its spatially-variable, pre-matched WarpedPsf.
+            # The modelPsf BBox for a psfMatchedWarp/coaddTempExp was
+            # dynamically defined by ModelPsfMatchTask as the square box
+            # bounding its spatially-variable, pre-matched WarpedPsf.
             # Likewise, set the PSF of a PSF-Matched Coadd to the modelPsf
             # having the maximum width (sufficient because square)
             modelPsfList = [tempExp.getPsf() for tempExp in tempExpList]
@@ -715,9 +727,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         if one is passed. Remove mask planes listed in
         `config.removeMaskPlanes`. Finally, stack the actual exposures using
         `lsst.afw.math.statisticsStack` with the statistic specified by
-        statsFlags. Typically, the statsFlag will be one of lsst.afw.math.MEAN for
-        a mean-stack or `lsst.afw.math.MEANCLIP` for outlier rejection using
-        an N-sigma clipped mean where N and iterations are specified by
+        statsFlags. Typically, the statsFlag will be one of lsst.afw.math.MEAN
+        for a mean-stack or `lsst.afw.math.MEANCLIP` for outlier rejection
+        using an N-sigma clipped mean where N and iterations are specified by
         statsCtrl.  Assign the stacked subregion back to the coadd.
 
         Parameters
@@ -764,7 +776,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             imageScaler.scaleMaskedImage(maskedImage)
 
             # Add 1 for each pixel which is not excluded by the exclude mask.
-            # In legacyCoadd, pixels may also be excluded by afwMath.statisticsStack.
+            # In legacyCoadd, pixels may also be excluded by
+            # afwMath.statisticsStack.
             if nImage is not None:
                 subNImage.getArray()[maskedImage.getMask().getArray() & statsCtrl.getAndMask() == 0] += 1
             if self.config.removeMaskPlanes:
@@ -922,10 +935,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         """
         if self.config.doUsePsfMatchedPolygons:
             if ("NO_DATA" in altMaskSpans) and ("NO_DATA" in self.config.badMaskPlanes):
-                # Clear away any other masks outside the validPolygons. These pixels are no longer
-                # contributing to inexact PSFs, and will still be rejected because of NO_DATA
-                # self.config.doUsePsfMatchedPolygons should be True only in CompareWarpAssemble
-                # This mask-clearing step must only occur *before* applying the new masks below
+                # Clear away any other masks outside the validPolygons. These
+                # pixels are no longer contributing to inexact PSFs, and will
+                # still be rejected because of NO_DATA.
+                # self.config.doUsePsfMatchedPolygons should be True only in
+                # CompareWarpAssemble. This mask-clearing step must only occur
+                # *before* applying the new masks below.
                 for spanSet in altMaskSpans['NO_DATA']:
                     spanSet.clippedTo(mask.getBBox()).clearMask(mask, self.getBadPixelMask())
 
@@ -1019,19 +1034,23 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         array[selected] |= inexactPsf
 
     def filterWarps(self, inputs, goodVisits):
-        """Return list of only inputRefs with visitId in goodVisits ordered by goodVisit.
+        """Return list of only inputRefs with visitId in goodVisits ordered by
+        goodVisit.
 
         Parameters
         ----------
         inputs : `list` of `~lsst.pipe.base.connections.DeferredDatasetRef`
-            List of `lsst.pipe.base.connections.DeferredDatasetRef` with dataId containing visit.
+            List of `lsst.pipe.base.connections.DeferredDatasetRef` with dataId
+            containing visit.
         goodVisit : `dict`
             Dictionary with good visitIds as the keys. Value ignored.
 
         Returns
         -------
-        filteredInputs : `list` of `~lsst.pipe.base.connections.DeferredDatasetRef`
-            Filtered and sorted list of inputRefs with visitId in goodVisits ordered by goodVisit.
+        filteredInputs : `list` \
+            [`~lsst.pipe.base.connections.DeferredDatasetRef`]
+            Filtered and sorted list of inputRefs with visitId in goodVisits
+            ordered by goodVisit.
         """
         inputWarpDict = {inputRef.ref.dataId['visit']: inputRef for inputRef in inputs}
         filteredInputs = []
@@ -1104,8 +1123,8 @@ class CompareWarpAssembleCoaddConfig(AssembleCoaddConfig,
                                      pipelineConnections=CompareWarpAssembleCoaddConnections):
     assembleStaticSkyModel = pexConfig.ConfigurableField(
         target=AssembleCoaddTask,
-        doc="Task to assemble an artifact-free, PSF-matched Coadd to serve as a"
-            " naive/first-iteration model of the static sky.",
+        doc="Task to assemble an artifact-free, PSF-matched Coadd to serve as "
+            "a naive/first-iteration model of the static sky.",
     )
     detect = pexConfig.ConfigurableField(
         target=SourceDetectionTask,
@@ -1211,8 +1230,9 @@ class CompareWarpAssembleCoaddConfig(AssembleCoaddConfig,
         self.statistic = 'MEAN'
         self.doUsePsfMatchedPolygons = True
 
-        # Real EDGE removed by psfMatched NO_DATA border half the width of the matching kernel
-        # CompareWarp applies psfMatched EDGE pixels to directWarps before assembling
+        # Real EDGE removed by psfMatched NO_DATA border half the width of the
+        # matching kernel. CompareWarp applies psfMatched EDGE pixels to
+        # directWarps before assembling.
         if "EDGE" in self.badMaskPlanes:
             self.badMaskPlanes.remove('EDGE')
         self.removeMaskPlanes.append('EDGE')
@@ -1326,14 +1346,16 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             ``templateCoadd``
                 Coadded exposure (`lsst.afw.image.Exposure`).
             ``nImage``
-                Keeps track of exposure count for each pixel (`lsst.afw.image.ImageU`).
+                Keeps track of exposure count for each pixel
+                (`lsst.afw.image.ImageU`).
 
         Raises
         ------
         RuntimeError
             Raised if ``templateCoadd`` is `None`.
         """
-        # Ensure that psfMatchedWarps are used as input warps for template generation
+        # Ensure that psfMatchedWarps are used as input warps for template
+        # generation.
         staticSkyModelInputRefs = copy.deepcopy(inputRefs)
         staticSkyModelInputRefs.inputWarps = inputRefs.psfMatchedWarps
 
@@ -1403,7 +1425,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             supplementaryData.imageScalerList = reorderAndPadList(supplementaryData.imageScalerList,
                                                                   psfMatchedDataIds, dataIds)
 
-        # Use PSF-Matched Warps (and corresponding scalers) and coadd to find artifacts
+        # Use PSF-Matched Warps (and corresponding scalers) and coadd to find
+        # artifacts.
         spanSetMaskList = self.findArtifacts(supplementaryData.templateCoadd,
                                              supplementaryData.warpRefList,
                                              supplementaryData.imageScalerList)
@@ -1415,8 +1438,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         result = AssembleCoaddTask.run(self, skyInfo, tempExpRefList, imageScalerList, weightList,
                                        spanSetMaskList, mask=badPixelMask)
 
-        # Propagate PSF-matched EDGE pixels to coadd SENSOR_EDGE and INEXACT_PSF
-        # Psf-Matching moves the real edge inwards
+        # Propagate PSF-matched EDGE pixels to coadd SENSOR_EDGE and
+        # INEXACT_PSF. Psf-Matching moves the real edge inwards.
         self.applyAltEdgeMask(result.coaddExposure.maskedImage.mask, spanSetMaskList)
         return result
 
@@ -1486,7 +1509,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         for warpRef, imageScaler in zip(tempExpRefList, imageScalerList):
             warpDiffExp = self._readAndComputeWarpDiff(warpRef, imageScaler, templateCoadd)
             if warpDiffExp is not None:
-                # This nImage only approximates the final nImage because it uses the PSF-matched mask
+                # This nImage only approximates the final nImage because it
+                # uses the PSF-matched mask.
                 nImage.array += (numpy.isfinite(warpDiffExp.image.array)
                                  * ((warpDiffExp.mask.array & badPixelMask) == 0)).astype(numpy.uint16)
                 fpSet = self.detect.detectFootprints(warpDiffExp, doSmooth=False, clearMask=True)
@@ -1495,7 +1519,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 slateIm.set(0)
                 spanSetList = [footprint.spans for footprint in footprints.getFootprints()]
 
-                # Remove artifacts due to defects before they contribute to the epochCountImage
+                # Remove artifacts due to defects before they contribute to
+                # the epochCountImage.
                 if self.config.doPrefilterArtifacts:
                     spanSetList = self.prefilterArtifacts(spanSetList, warpDiffExp)
 
@@ -1512,7 +1537,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                     streakMask = warpDiffExp.mask
                     spanSetStreak = afwGeom.SpanSet.fromMask(streakMask,
                                                              streakMask.getPlaneBitMask(maskName)).split()
-                    # Pad the streaks to account for low-surface brightness wings
+                    # Pad the streaks to account for low-surface brightness
+                    # wings.
                     psf = warpDiffExp.getPsf()
                     for s, sset in enumerate(spanSetStreak):
                         psfShape = psf.computeShape(sset.computeCentroid())
@@ -1520,10 +1546,12 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                         sset_dilated = sset.dilated(int(dilation))
                         spanSetStreak[s] = sset_dilated
 
-                # PSF-Matched warps have less available area (~the matching kernel) because the calexps
-                # undergo a second convolution. Pixels with data in the direct warp
-                # but not in the PSF-matched warp will not have their artifacts detected.
-                # NaNs from the PSF-matched warp therefore must be masked in the direct warp
+                # PSF-Matched warps have less available area (~the matching
+                # kernel) because the calexps undergo a second convolution.
+                # Pixels with data in the direct warp but not in the
+                # PSF-matched warp will not have their artifacts detected.
+                # NaNs from the PSF-matched warp therefore must be masked in
+                # the direct warp.
                 nans = numpy.where(numpy.isnan(warpDiffExp.maskedImage.image.array), 1, 0)
                 nansMask = afwImage.makeMaskFromArray(nans.astype(afwImage.MaskPixel))
                 nansMask.setXY0(warpDiffExp.getXY0())
@@ -1531,8 +1559,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 spanSetEdgeMask = afwGeom.SpanSet.fromMask(edgeMask,
                                                            edgeMask.getPlaneBitMask("EDGE")).split()
             else:
-                # If the directWarp has <1% coverage, the psfMatchedWarp can have 0% and not exist
-                # In this case, mask the whole epoch
+                # If the directWarp has <1% coverage, the psfMatchedWarp can
+                # have 0% and not exist. In this case, mask the whole epoch.
                 nansMask = afwImage.MaskX(coaddBBox, 1)
                 spanSetList = []
                 spanSetEdgeMask = []
@@ -1573,14 +1601,14 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
         Parameters
         ----------
-        spanSetList : `list` of `lsst.afw.geom.SpanSet`
+        spanSetList : `list` [`lsst.afw.geom.SpanSet`]
             List of SpanSets representing artifact candidates.
         exp : `lsst.afw.image.Exposure`
             Exposure containing mask planes used to prefilter.
 
         Returns
         -------
-        returnSpanSetList : `list` of `lsst.afw.geom.SpanSet`
+        returnSpanSetList : `list` [`lsst.afw.geom.SpanSet`]
             List of SpanSets with artifacts.
         """
         badPixelMask = exp.mask.getPlaneBitMask(self.config.prefilterArtifactsMaskPlanes)
@@ -1602,7 +1630,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
         Parameters
         ----------
-        spanSetList : `list` of `lsst.afw.geom.SpanSet`
+        spanSetList : `list` [`lsst.afw.geom.SpanSet`]
             List of SpanSets representing artifact candidates.
         epochCountImage : `lsst.afw.image.Image`
             Image of accumulated number of warpDiff detections.
@@ -1611,7 +1639,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
         Returns
         -------
-        maskSpanSetList : `list`
+        maskSpanSetList : `list` [`lsst.afw.geom.SpanSet`]
             List of SpanSets with artifacts.
         """
         maskSpanSetList = []
@@ -1623,7 +1651,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             outlierN = epochCountImage.array[yIdxLocal, xIdxLocal]
             totalN = nImage.array[yIdxLocal, xIdxLocal]
 
-            # effectiveMaxNumEpochs is broken line (fraction of N) with characteristic config.maxNumEpochs
+            # effectiveMaxNumEpochs is broken line (fraction of N) with
+            # characteristic config.maxNumEpochs.
             effMaxNumEpochsHighN = (self.config.maxNumEpochs
                                     + self.config.maxFractionEpochsHigh*numpy.mean(totalN))
             effMaxNumEpochsLowN = self.config.maxFractionEpochsLow * numpy.mean(totalN)
@@ -1635,7 +1664,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 maskSpanSetList.append(span)
 
         if self.config.doPreserveContainedBySource and footprintsToExclude is not None:
-            # If a candidate is contained by a footprint on the template coadd, do not clip
+            # If a candidate is contained by a footprint on the template coadd,
+            # do not clip.
             filteredMaskSpanSetList = []
             for span in maskSpanSetList:
                 doKeep = True

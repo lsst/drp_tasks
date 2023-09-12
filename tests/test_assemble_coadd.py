@@ -20,8 +20,6 @@
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
 """Test AssembleCoaddTask and its variants.
-
-This uses
 """
 import unittest
 import numpy as np
@@ -66,7 +64,8 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
         pass
 
     def runQuantum(self, mockSkyInfo, warpRefList, *args):
-        """Modified interface for testing coaddition algorithms without a Butler.
+        """Modified interface for testing coaddition algorithms without a
+        Butler.
 
         Parameters
         ----------
@@ -280,7 +279,8 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         validPix, raPix, decPix = inputMap.valid_pixels_pos(return_pixels=True)
 
         # Confirm that all the map pixels are in the bounding box
-        # Exposure 100 is the first one and they all have the same WCS in the tests.
+        # Exposure 100 is the first one and they all have the same WCS in the
+        # tests.
         xPix, yPix = exposures[100].getWcs().skyToPixelArray(raPix, decPix, degrees=True)
         self.assertGreater(xPix.min(), testData.bbox.beginX)
         self.assertGreater(yPix.min(), testData.bbox.beginY)

@@ -145,11 +145,11 @@ class AssembleChi2CoaddTask(pipeBase.PipelineTask):
     1999. doi:10.1086/300689.
 
     .. [2] Kaiser 2001 whitepaper,
-    http://pan-starrs.ifa.hawaii.edu/project/people/kaiser/imageprocessing/im%2B%2B.pdf  # noqa: E501
+    http://pan-starrs.ifa.hawaii.edu/project/people/kaiser/imageprocessing/im%2B%2B.pdf  # noqa: E501, W505
 
     .. [3] https://dmtn-015.lsst.io/
 
-    .. [4] https://project.lsst.org/meetings/law/sites/lsst.org.meetings.law/files/Building%20and%20using%20coadds.pdf  # noqa: E501
+    .. [4] https://project.lsst.org/meetings/law/sites/lsst.org.meetings.law/files/Building%20and%20using%20coadds.pdf  # noqa: E501, W505
     """
     ConfigClass = AssembleChi2CoaddConfig
     _DefaultName = "assembleChi2Coadd"
@@ -283,8 +283,9 @@ class DetectChi2SourcesTask(pipeBase.PipelineTask):
     ConfigClass = DetectChi2SourcesConfig
 
     def __init__(self, schema=None, **kwargs):
-        # N.B. Super is used here to handle the multiple inheritance of PipelineTasks, the init tree
-        # call structure has been reviewed carefully to be sure super will work as intended.
+        # N.B. Super is used here to handle the multiple inheritance of
+        # PipelineTasks, the init tree call structure has been reviewed
+        # carefully to be sure super will work as intended.
         super().__init__(**kwargs)
         if schema is None:
             schema = afwTable.SourceTable.makeMinimalSchema()
@@ -306,7 +307,7 @@ class DetectChi2SourcesTask(pipeBase.PipelineTask):
         Parameters
         ----------
         exposure :
-            Exposure on which to detect (may be backround-subtracted and scaled,
+            Exposure on which to detect (maybe backround-subtracted and scaled,
             depending on configuration).
         idFactory :
             IdFactory to set source identifiers.
