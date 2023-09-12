@@ -39,11 +39,11 @@ import lsst.meas.algorithms as measAlg
 import lsstDebug
 import lsst.utils as utils
 from lsst.skymap import BaseSkyMap
-from .coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
-from .interpImage import InterpImageTask
-from .scaleZeroPoint import ScaleZeroPointTask
-from .maskStreaks import MaskStreaksTask
-from .healSparseMapping import HealSparseInputMapTask
+from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
+from lsst.pipe.tasks.interpImage import InterpImageTask
+from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
+from lsst.pipe.tasks.maskStreaks import MaskStreaksTask
+from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
 from lsst.meas.algorithms import SourceDetectionTask, AccumulatorMeanStack, ScaleVarianceTask
 from lsst.utils.timer import timeMethod
 from deprecated.sphinx import deprecated

@@ -29,10 +29,11 @@ import numpy as np
 import lsst.utils.tests
 
 import lsst.pipe.base as pipeBase
-from lsst.pipe.tasks.assembleCoadd import (AssembleCoaddTask, AssembleCoaddConfig,
-                                           CompareWarpAssembleCoaddTask, CompareWarpAssembleCoaddConfig)
-from lsst.pipe.tasks.dcrAssembleCoadd import DcrAssembleCoaddTask, DcrAssembleCoaddConfig
-from assembleCoaddTestUtils import makeMockSkyInfo, MockCoaddTestData
+from lsst.drp.tasks.assemble_coadd import (AssembleCoaddTask, AssembleCoaddConfig,
+                                           CompareWarpAssembleCoaddTask, CompareWarpAssembleCoaddConfig,
+                                           )
+from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddTask, DcrAssembleCoaddConfig
+from assemble_coadd_test_utils import makeMockSkyInfo, MockCoaddTestData
 
 __all__ = ["MockAssembleCoaddConfig", "MockAssembleCoaddTask",
            "MockCompareWarpAssembleCoaddConfig", "MockCompareWarpAssembleCoaddTask"]

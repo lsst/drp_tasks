@@ -35,12 +35,13 @@ import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 import lsst.utils as utils
 from lsst.utils.timer import timeMethod
-from .assembleCoadd import (AssembleCoaddConnections,
-                            AssembleCoaddTask,
-                            CompareWarpAssembleCoaddConfig,
-                            CompareWarpAssembleCoaddTask)
-from .coaddBase import makeSkyInfo, subBBoxIter
-from .measurePsf import MeasurePsfTask
+from .assemble_coadd import (AssembleCoaddConnections,
+                             AssembleCoaddTask,
+                             CompareWarpAssembleCoaddConfig,
+                             CompareWarpAssembleCoaddTask,
+                             )
+from lsst.pipe.tasks.coaddBase import makeSkyInfo, subBBoxIter
+from lsst.pipe.tasks.measurePsf import MeasurePsfTask
 
 
 class DcrAssembleCoaddConnections(AssembleCoaddConnections,
