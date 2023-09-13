@@ -131,8 +131,8 @@ class MetadetectionShearConfig(
         "missing will be skipped.  Bands other than those listed here will "
         "not be processed.",
         # TODO learn how to set in a config file
-        # default=["g", "r", "i", "z"],
-        default=["r"],
+        default=["g", "r", "i", "z"],
+        # default=["r"],
         optional=False,
     )
 
