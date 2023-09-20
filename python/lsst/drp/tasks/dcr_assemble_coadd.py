@@ -251,9 +251,6 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig,
         self.detectPsfSources.minPixels = 25
         # Use the variance plane to calculate signal to noise
         self.detectPsfSources.thresholdType = "pixel_stdev"
-        # The signal to noise limit is good enough, while the flux limit is set
-        # in dimensionless units and may not be appropriate for all data sets.
-        self.measurePsf.starSelector["objectSize"].doFluxLimit = False
         # Ensure psf candidate size is as large as piff psf size.
         if (self.doCalculatePsf and self.measurePsf.psfDeterminer.name == "piff"
                 and self.psfDeterminer["piff"].kernelSize > self.makePsfCandidates.kernelSize):
