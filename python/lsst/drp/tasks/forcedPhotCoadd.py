@@ -336,7 +336,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
             modelData=modelData,
             catalog=catalog,
             band=band,
-            imageForResdistibution=redistributeImage,
+            imageForRedistribution=redistributeImage,
             removeScarletData=True,
             updateFluxColumns=False,
         )
