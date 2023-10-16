@@ -633,11 +633,25 @@ class MetadetectionShearTask(PipelineTask):
         """
         from metadetect.lsst.metadetect import run_metadetect
         from metadetect.lsst.metadetect import get_config as get_mdet_config
+        from metadetect.lsst.masking import (
+            apply_apodized_edge_masks_mbexp,
+            apply_apodized_bright_masks_mbexp,
+        )
 
         if simulate:
-            coadd_data = _simulate_coadd(self.rng)
+            coadd_data, bright_info = _simulate_coadd(self.rng)
         else:
             coadd_data = self._cell_to_coadd_data(cell_coadds)
+            # TODO get bright star etc. info as input
+            bright_info = []
+
+        apply_apodized_edge_masks_mbexp(**coadd_data)
+
+        if len(bright_info) > 0:
+            apply_apodized_bright_masks_mbexp(
+                bright_info=bright_info,
+                **coadd_data
+            )
 
         mask_frac = _get_mask_frac(
             coadd_data['mfrac_mbexp'],
@@ -892,6 +906,12 @@ def _get_mask_frac(mfrac_mbexp, trim_pixels=0):
 
 
 def _simulate_coadd(rng):
+    """
+    TODO fake bright info
+
+    We can't use the usual star catalog because it is not available
+    to the science pipelines
+    """
     from descwl_shear_sims.sim import (
         make_sim,
         get_sim_config,
@@ -901,6 +921,8 @@ def _simulate_coadd(rng):
     from descwl_shear_sims.psfs import make_fixed_psf, make_ps_psf, make_rand_psf
     # from descwl_shear_sims.stars import make_star_catalog
     from descwl_coadd.coadd_nowarp import make_coadd_nowarp
+    from metadetect.masking import get_ap_range
+    from metadetect.lsst.masking import AP_RAD
 
     g1, g2 = 0.02, 0.00
 
@@ -979,4 +1001,13 @@ def _simulate_coadd(rng):
         for band in bands
     ]
 
-    return extract_multiband_coadd_data(coadd_data_list)
+    coadd_data = extract_multiband_coadd_data(coadd_data_list)
+    bright_info = sim_data['bright_info']
+    if len(bright_info) > 0:
+        # Note padding due to apodization, otherwise we get donuts the
+        # radii coming out of the sim code are not super conservative,
+        # just going to the noise level
+        ap_padding = get_ap_range(AP_RAD)
+        sim_data['bright_info']['radius_pixels'] += ap_padding
+
+    return coadd_data, bright_info
