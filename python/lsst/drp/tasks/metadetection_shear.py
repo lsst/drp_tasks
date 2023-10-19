@@ -32,7 +32,7 @@ from typing import Any, ClassVar
 
 import pyarrow as pa
 
-from lsst.pex.config import ListField
+from lsst.pex.config import ConfigField, ListField
 from lsst.pipe.base import (
     InputQuantizedConnection,
     NoWorkFound,
@@ -43,11 +43,13 @@ from lsst.pipe.base import (
     PipelineTaskConnections,
     Struct,
 )
+from lsst.meas.algorithms import LoadReferenceObjectsConfig, ReferenceObjectLoader
 import lsst.pipe.base.connectionTypes as cT
 from lsst.cell_coadds import MultipleCellCoadd, SingleCellCoadd
 
 from lsst.afw.image import ImageF, MaskedImageF, ExposureF, FilterLabel
 from lsst.afw.math import FixedKernel
+from lsst.afw.table import SimpleCatalog
 from lsst.meas.algorithms import KernelPsf
 from metadetect.lsst.util import extract_multiband_coadd_data
 
@@ -61,6 +63,15 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
         doc="Per-band deep coadds.",
         multiple=True,
         dimensions={"patch", "band"},
+    )
+
+    ref_cat = cT.PrerequisiteInput(
+        doc="Reference catalog used to mask bright objects.",
+        name="ref_cat",
+        storageClass="SimpleCatalog",
+        dimensions=("skypix",),
+        deferLoad=True,
+        multiple=True,
     )
 
     # TODO: If there are image-like or other non-catalog output products (e.g.
@@ -134,6 +145,11 @@ class MetadetectionShearConfig(
         default=["g", "r", "i", "z"],
         # default=["r"],
         optional=False,
+    )
+
+    ref_loader = ConfigField(
+        dtype=LoadReferenceObjectsConfig,
+        doc="Reference object loader used for bright-object masking.",
     )
 
     idGenerator = SkyMapIdGeneratorConfig.make_field()
@@ -536,16 +552,31 @@ class MetadetectionShearTask(PipelineTask):
         idGenerator = self.config.idGenerator.apply(qc.quantum.dataId)
         seed = idGenerator.catalog_id
 
+        ref_loader = ReferenceObjectLoader(
+            dataIds=[ref.datasetRef.dataId for ref in inputRefs.ref_cat],
+            refCats=[qc.get(ref) for ref in inputRefs.ref_cat],
+            name=self.config.connections.ref_cat,
+            config=self.config.ref_loader,
+            log=self.log,
+        )
+        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region)
+
         coadds_by_band = {
             ref.dataId["band"]: qc.get(ref) for ref in inputRefs.input_coadds
         }
         outputs = self.run(
             [coadds_by_band[b] for b in self.config.required_bands],
             seed,
+            ref_cat=ref_cat,
         )
         qc.put(outputs, outputRefs)
 
-    def run(self, patch_coadds: Sequence[MultipleCellCoadd], seed: int) -> Struct:
+    def run(
+        self,
+        patch_coadds: Sequence[MultipleCellCoadd],
+        seed: int,
+        ref_cat: SimpleCatalog,
+    ) -> Struct:
         """Run metadetection on a patch.
 
         Parameters
@@ -557,6 +588,8 @@ class MetadetectionShearTask(PipelineTask):
         seed: int
             A seed for random number generator, used for simulation, and/or
             fitting.
+        ref_cat : `lsst.afw.table.SimpleCatalog`
+            Reference catalog to use when masking bright stars.
 
         Returns
         -------
