@@ -87,6 +87,10 @@ class CompareWarpAssembleCoaddConfig(
         doc="Task to assemble an artifact-free, PSF-matched Coadd to serve as "
         "a naive/first-iteration model of the static sky.",
     )
+    assembleCoadd = pexConfig.ConfigurableField(
+        target=AssembleCoaddTask,
+        doc="Task to assemble a coadd from a set of warps",
+    )
     detect = pexConfig.ConfigurableField(
         target=SourceDetectionTask,
         doc="Detect outlier sources on difference between each psfMatched warp and static sky model",
@@ -295,6 +299,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.makeSubtask("assembleStaticSkyModel")
+        self.makeSubtask("assembleCoadd")
         detectionSchema = afwTable.SourceTable.makeMinimalSchema()
         self.makeSubtask("detect", schema=detectionSchema)
         if self.config.doPreserveContainedBySource:
@@ -413,9 +418,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         badMaskPlanes = self.config.badMaskPlanes[:]
         badMaskPlanes.append("CLIPPED")
         badPixelMask = afwImage.Mask.getPlaneBitMask(badMaskPlanes)
-
-        result = AssembleCoaddTask.run(
-            self,
+        result = self.assembleCoadd.run(
             skyInfo,
             tempExpRefList,
             imageScalerList,

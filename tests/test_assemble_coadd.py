@@ -101,6 +101,8 @@ class MockCompareWarpAssembleCoaddConfig(CompareWarpAssembleCoaddConfig):
         super().setDefaults()
         self.assembleStaticSkyModel.retarget(MockAssembleCoaddTask)
         self.assembleStaticSkyModel.doWrite = False
+        self.assembleCoadd.retarget(MockAssembleCoaddTask)
+        self.assembleCoadd.doWrite = False
         self.doWrite = False
 
 
@@ -172,7 +174,7 @@ class MockDcrAssembleCoaddTask(MockCompareWarpAssembleCoaddTask, DcrAssembleCoad
 class MockInputMapAssembleCoaddConfig(MockCompareWarpAssembleCoaddConfig):
     def setDefaults(self):
         super().setDefaults()
-        self.doInputMap = True
+        self.assembleCoadd.doInputMap = True
 
 
 class MockInputMapAssembleCoaddTask(MockCompareWarpAssembleCoaddTask):
