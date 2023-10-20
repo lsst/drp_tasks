@@ -920,8 +920,8 @@ def _get_mask_frac(mfrac_mbexp, trim_pixels=0):
         mfrac = mfrac_exp.image.array
         dim = mfrac.shape[0]
         mfrac = mfrac[
-            trim_pixels : dim - trim_pixels - 1,
-            trim_pixels : dim - trim_pixels - 1,
+            trim_pixels: dim - trim_pixels - 1,
+            trim_pixels: dim - trim_pixels - 1,
         ]
         mask_fracs.append(mfrac.mean())
 
