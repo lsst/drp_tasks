@@ -230,7 +230,7 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections
     )
 
     def setDefaults(self):
-        CompareWarpAssembleCoaddConfig.setDefaults(self)
+        super().setDefaults()
         self.assembleStaticSkyModel.retarget(CompareWarpAssembleCoaddTask)
         self.doNImage = True
         self.assembleStaticSkyModel.warpType = self.warpType

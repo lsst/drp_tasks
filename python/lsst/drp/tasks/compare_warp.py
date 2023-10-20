@@ -191,7 +191,7 @@ class CompareWarpAssembleCoaddConfig(
     )
 
     def setDefaults(self):
-        AssembleCoaddConfig.setDefaults(self)
+        super().setDefaults()
         self.statistic = "MEAN"
         self.doUsePsfMatchedPolygons = True
 
@@ -293,7 +293,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
     _DefaultName = "compareWarpAssembleCoadd"
 
     def __init__(self, *args, **kwargs):
-        AssembleCoaddTask.__init__(self, *args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.makeSubtask("assembleStaticSkyModel")
         detectionSchema = afwTable.SourceTable.makeMinimalSchema()
         self.makeSubtask("detect", schema=detectionSchema)
