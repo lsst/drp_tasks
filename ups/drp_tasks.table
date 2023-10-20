@@ -5,6 +5,7 @@
 setupRequired(base)
 setupRequired(gbdes)
 setupRequired(afw)
+setupRequired(cell_coadds)
 setupRequired(daf_base)
 setupRequired(daf_butler)
 setupRequired(sphgeom)

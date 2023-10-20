@@ -32,7 +32,7 @@ from typing import Any, ClassVar
 
 import pyarrow as pa
 
-from lsst.pex.config import ListField
+from lsst.pex.config import ConfigField, ListField
 from lsst.pipe.base import (
     InputQuantizedConnection,
     NoWorkFound,
@@ -43,11 +43,13 @@ from lsst.pipe.base import (
     PipelineTaskConnections,
     Struct,
 )
+from lsst.meas.algorithms import LoadReferenceObjectsConfig, ReferenceObjectLoader
 import lsst.pipe.base.connectionTypes as cT
 from lsst.cell_coadds import MultipleCellCoadd, SingleCellCoadd
 
 from lsst.afw.image import ImageF, MaskedImageF, ExposureF, FilterLabel
 from lsst.afw.math import FixedKernel
+from lsst.afw.table import SimpleCatalog
 from lsst.meas.algorithms import KernelPsf
 from metadetect.lsst.util import extract_multiband_coadd_data
 
@@ -61,6 +63,15 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
         doc="Per-band deep coadds.",
         multiple=True,
         dimensions={"patch", "band"},
+    )
+
+    ref_cat = cT.PrerequisiteInput(
+        doc="Reference catalog used to mask bright objects.",
+        name="ref_cat",
+        storageClass="SimpleCatalog",
+        dimensions=("skypix",),
+        deferLoad=True,
+        multiple=True,
     )
 
     # TODO: If there are image-like or other non-catalog output products (e.g.
@@ -134,6 +145,11 @@ class MetadetectionShearConfig(
         default=["g", "r", "i", "z"],
         # default=["r"],
         optional=False,
+    )
+
+    ref_loader = ConfigField(
+        dtype=LoadReferenceObjectsConfig,
+        doc="Reference object loader used for bright-object masking.",
     )
 
     idGenerator = SkyMapIdGeneratorConfig.make_field()
@@ -227,7 +243,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 pa.field(
                     "wmom_flags",
                     pa.uint32(),
@@ -237,7 +252,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 # Original PSF measurements
                 pa.field(
                     "psfrec_flags",
@@ -275,7 +289,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "arcseconds squared",
                     },
                 ),
-
                 # reconvolved PSF measurements
                 pa.field(
                     "wmom_psf_flags",
@@ -313,7 +326,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "arcseconds squared",
                     },
                 ),
-
                 # Object measurements
                 pa.field(
                     "wmom_obj_flags",
@@ -333,7 +345,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 pa.field(
                     "wmom_g_1",
                     pa.float32(),
@@ -352,7 +363,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 pa.field(
                     "wmom_T_flags",
                     pa.uint32(),
@@ -362,7 +372,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 pa.field(
                     "wmom_T",
                     pa.float32(),
@@ -390,7 +399,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 pa.field(
                     "wmom_band_flux_flags_1",
                     pa.uint32(),
@@ -427,7 +435,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 # pa.field(
                 #     "row0",
                 #     pa.float32(),
@@ -482,7 +489,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 pa.field(
                     "ra",
                     pa.float64(),
@@ -501,7 +507,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "degrees",
                     },
                 ),
-
                 pa.field(
                     "bmask",
                     pa.uint32(),
@@ -520,7 +525,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
                 pa.field(
                     "mfrac",
                     pa.float32(),
@@ -530,7 +534,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-
             ]
         )
 
@@ -549,15 +552,31 @@ class MetadetectionShearTask(PipelineTask):
         idGenerator = self.config.idGenerator.apply(qc.quantum.dataId)
         seed = idGenerator.catalog_id
 
+        ref_loader = ReferenceObjectLoader(
+            dataIds=[ref.datasetRef.dataId for ref in inputRefs.ref_cat],
+            refCats=[qc.get(ref) for ref in inputRefs.ref_cat],
+            name=self.config.connections.ref_cat,
+            config=self.config.ref_loader,
+            log=self.log,
+        )
+        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region)
+
         coadds_by_band = {
             ref.dataId["band"]: qc.get(ref) for ref in inputRefs.input_coadds
         }
         outputs = self.run(
-            [coadds_by_band[b] for b in self.config.required_bands], seed,
+            [coadds_by_band[b] for b in self.config.required_bands],
+            seed,
+            ref_cat=ref_cat,
         )
         qc.put(outputs, outputRefs)
 
-    def run(self, patch_coadds: Sequence[MultipleCellCoadd], seed: int) -> Struct:
+    def run(
+        self,
+        patch_coadds: Sequence[MultipleCellCoadd],
+        seed: int,
+        ref_cat: SimpleCatalog,
+    ) -> Struct:
         """Run metadetection on a patch.
 
         Parameters
@@ -569,6 +588,8 @@ class MetadetectionShearTask(PipelineTask):
         seed: int
             A seed for random number generator, used for simulation, and/or
             fitting.
+        ref_cat : `lsst.afw.table.SimpleCatalog`
+            Reference catalog to use when masking bright stars.
 
         Returns
         -------
@@ -578,7 +599,6 @@ class MetadetectionShearTask(PipelineTask):
             - ``object_catalog`` [ `pyarrow.Table` ]: the output object
               catalog for the patch, with schema equal to `object_schema`.
         """
-
         # TODO figure out how to use a config to switch to simulation mode
         # in that case also need to fake the id info
         self.rng = np.random.RandomState(seed)
@@ -594,7 +614,7 @@ class MetadetectionShearTask(PipelineTask):
 
             # TODO figure out how to make the object ids
             if len(res) > 0:
-                res['id'] = np.arange(idstart, idstart + len(res))
+                res["id"] = np.arange(idstart, idstart + len(res))
                 da = _dictify(res)
                 table = pa.Table.from_pydict(da, self.object_schema)
 
@@ -610,7 +630,8 @@ class MetadetectionShearTask(PipelineTask):
         )
 
     def process_cell(
-        self, cell_coadds: Sequence[SingleCellCoadd],
+        self,
+        cell_coadds: Sequence[SingleCellCoadd],
         simulate=False,
     ) -> pa.Table:
         """Run metadetection on a single cell.
@@ -648,13 +669,10 @@ class MetadetectionShearTask(PipelineTask):
         apply_apodized_edge_masks_mbexp(**coadd_data)
 
         if len(bright_info) > 0:
-            apply_apodized_bright_masks_mbexp(
-                bright_info=bright_info,
-                **coadd_data
-            )
+            apply_apodized_bright_masks_mbexp(bright_info=bright_info, **coadd_data)
 
         mask_frac = _get_mask_frac(
-            coadd_data['mfrac_mbexp'],
+            coadd_data["mfrac_mbexp"],
             trim_pixels=0,
         )
 
@@ -668,7 +686,7 @@ class MetadetectionShearTask(PipelineTask):
         comb_res = _make_comb_data(
             cell_coadd=cell_coadds[0],
             res=res,
-            meas_type=mdet_config['meas_type'],
+            meas_type=mdet_config["meas_type"],
             mask_frac=mask_frac,
             full_output=True,
         )
@@ -682,32 +700,34 @@ class MetadetectionShearTask(PipelineTask):
         patch_y = idinfo.patch.y
         cell_x = idinfo.cell.x
         cell_y = idinfo.cell.y
-        mess = (
-            f'tract: {tract} patch: {patch_x},{patch_y} cell: {cell_x},{cell_y}'
-        )
+        mess = f"tract: {tract} patch: {patch_x},{patch_y} cell: {cell_x},{cell_y}"
         self.log.info(mess)
 
     # these are implemented as methods to the class to access task logging
     # in _get_cell_psf
 
     def _cell_to_coadd_data(self, cell_coadds: Sequence[SingleCellCoadd]):
-
         coadd_data_list = []
         for cell_coadd in cell_coadds:
             coadd_data = {}
-            coadd_data['coadd_exp'] = self._make_main_exposure(cell_coadd)
-            coadd_data['coadd_noise_exp'] = self._make_noise_exposure(cell_coadd, index=0)
-            coadd_data['coadd_mfrac_exp'] = self._make_mfrac_exposure(cell_coadd)
+            coadd_data["coadd_exp"] = self._make_main_exposure(cell_coadd)
+            coadd_data["coadd_noise_exp"] = self._make_noise_exposure(
+                cell_coadd, index=0
+            )
+            coadd_data["coadd_mfrac_exp"] = self._make_mfrac_exposure(cell_coadd)
             coadd_data_list.append(coadd_data)
 
         return extract_multiband_coadd_data(coadd_data_list)
 
     def _make_main_exposure(self, cell_coadd: SingleCellCoadd) -> ExposureF:
         return self._make_cell_exposure(
-            cell_coadd.outer.image, cell_coadd,
+            cell_coadd.outer.image,
+            cell_coadd,
         )
 
-    def _make_noise_exposure(self, cell_coadd: SingleCellCoadd, index: int) -> ExposureF:
+    def _make_noise_exposure(
+        self, cell_coadd: SingleCellCoadd, index: int
+    ) -> ExposureF:
         # TODO: cell coadds will have real noise realization
         fake_noise_image = ImageF(cell_coadd.outer.image, True)
         noise = np.median(cell_coadd.outer.variance.array[:, :])
@@ -716,7 +736,8 @@ class MetadetectionShearTask(PipelineTask):
             size=fake_noise_image.array.shape,
         )
         return self._make_cell_exposure(
-            fake_noise_image, cell_coadd,
+            fake_noise_image,
+            cell_coadd,
         )
         # return self._make_cell_exposure(
         #     cell_coadd.outer.noise_realizations[index], cell_coadd,
@@ -728,15 +749,19 @@ class MetadetectionShearTask(PipelineTask):
         fake_mfrac_image = ImageF(cell_coadd.outer.image, True)
         fake_mfrac_image.array[:, :] = 0
         return self._make_cell_exposure(
-            fake_mfrac_image, cell_coadd,
+            fake_mfrac_image,
+            cell_coadd,
         )
 
     def _make_cell_exposure(
-        self, image: ImageF, cell_coadd: SingleCellCoadd,
+        self,
+        image: ImageF,
+        cell_coadd: SingleCellCoadd,
     ) -> ExposureF:
-
         masked_image = MaskedImageF(
-            image, cell_coadd.outer.mask, cell_coadd.outer.variance,
+            image,
+            cell_coadd.outer.mask,
+            cell_coadd.outer.variance,
         )
 
         exposure = ExposureF(masked_image)
@@ -752,20 +777,19 @@ class MetadetectionShearTask(PipelineTask):
         return exposure
 
     def _get_cell_psf(self, cell_coadd: SingleCellCoadd) -> KernelPsf:
-
         # this makes a deep copy
         psf_image = cell_coadd.psf_image.convertD()
         psf_array = psf_image.array
 
         wbad = np.where(~np.isfinite(psf_array))
         if wbad[0].size == psf_array.size:
-            raise ValueError('no good pixels in the psf')
+            raise ValueError("no good pixels in the psf")
 
         if wbad[0].size > 0:
-            self.log.debug('zeroing %d bad psf pixels' % wbad[0].size)
+            self.log.debug("zeroing %d bad psf pixels" % wbad[0].size)
             psf_array[wbad] = 0.0
 
-        psf_array *= 1/psf_array.sum()
+        psf_array *= 1 / psf_array.sum()
         # assert np.all(psf_image.array[:, :] == psf_array)
         kernel = FixedKernel(psf_image)
         return KernelPsf(kernel)
@@ -791,61 +815,60 @@ def _make_comb_data(
 
     copy_dt = [
         # we will copy out of arrays to these
-        ('psfrec_g_1', 'f4'),
-        ('psfrec_g_2', 'f4'),
-        ('wmom_psf_g_1', 'f4'),
-        ('wmom_psf_g_2', 'f4'),
-        ('wmom_g_1', 'f4'),
-        ('wmom_g_2', 'f4'),
-        ('wmom_band_flux_flags_1', 'i4'),
-        ('wmom_band_flux_1', 'f4'),
-        ('wmom_band_flux_err_1', 'f4'),
+        ("psfrec_g_1", "f4"),
+        ("psfrec_g_2", "f4"),
+        ("wmom_psf_g_1", "f4"),
+        ("wmom_psf_g_2", "f4"),
+        ("wmom_g_1", "f4"),
+        ("wmom_g_2", "f4"),
+        ("wmom_band_flux_flags_1", "i4"),
+        ("wmom_band_flux_1", "f4"),
+        ("wmom_band_flux_err_1", "f4"),
     ]
 
     add_dt = [
-        ('id', 'u8'),
-        ('tract', 'u4'),
-        ('patch_x', 'u1'),
-        ('patch_y', 'u1'),
-        ('cell_x', 'u1'),
-        ('cell_y', 'u1'),
-        ('shear_type', 'U2'),
-        ('mask_frac', 'f4'),
-        ('primary', bool),
+        ("id", "u8"),
+        ("tract", "u4"),
+        ("patch_x", "u1"),
+        ("patch_y", "u1"),
+        ("cell_x", "u1"),
+        ("cell_y", "u1"),
+        ("shear_type", "U2"),
+        ("mask_frac", "f4"),
+        ("primary", bool),
     ] + copy_dt
 
-    if not hasattr(res, 'keys'):
-        res = {'noshear': res}
+    if not hasattr(res, "keys"):
+        res = {"noshear": res}
 
     dlist = []
     for stype in res.keys():
         data = res[stype]
         if data is not None:
-
             if not full_output:
                 data = _trim_output_columns(data, meas_type)
 
             newdata = eu.numpy_util.add_fields(data, add_dt)
-            newdata['psfrec_g_1'] = newdata['psfrec_g'][:, 0]
-            newdata['psfrec_g_2'] = newdata['psfrec_g'][:, 1]
-            newdata['wmom_psf_g_1'] = newdata['wmom_psf_g'][:, 0]
-            newdata['wmom_psf_g_2'] = newdata['wmom_psf_g'][:, 1]
-            newdata['wmom_g_1'] = newdata['wmom_g'][:, 0]
-            newdata['wmom_g_2'] = newdata['wmom_g'][:, 1]
-            newdata['wmom_band_flux_flags_1'] = newdata['wmom_band_flux_flags']
-            newdata['wmom_band_flux_1'] = newdata['wmom_band_flux']
-            newdata['wmom_band_flux_err_1'] = newdata['wmom_band_flux_err']
+            newdata["psfrec_g_1"] = newdata["psfrec_g"][:, 0]
+            newdata["psfrec_g_2"] = newdata["psfrec_g"][:, 1]
+            newdata["wmom_psf_g_1"] = newdata["wmom_psf_g"][:, 0]
+            newdata["wmom_psf_g_2"] = newdata["wmom_psf_g"][:, 1]
+            newdata["wmom_g_1"] = newdata["wmom_g"][:, 0]
+            newdata["wmom_g_2"] = newdata["wmom_g"][:, 1]
+            newdata["wmom_band_flux_flags_1"] = newdata["wmom_band_flux_flags"]
+            newdata["wmom_band_flux_1"] = newdata["wmom_band_flux"]
+            newdata["wmom_band_flux_err_1"] = newdata["wmom_band_flux_err"]
 
-            newdata['tract'] = idinfo.tract
-            newdata['patch_x'] = idinfo.patch.x
-            newdata['patch_y'] = idinfo.patch.y
-            newdata['cell_x'] = idinfo.cell.x
-            newdata['cell_y'] = idinfo.cell.y
+            newdata["tract"] = idinfo.tract
+            newdata["patch_x"] = idinfo.patch.x
+            newdata["patch_y"] = idinfo.patch.y
+            newdata["cell_x"] = idinfo.cell.x
+            newdata["cell_y"] = idinfo.cell.y
 
-            if stype == 'noshear':
-                newdata['shear_type'] = 'ns'
+            if stype == "noshear":
+                newdata["shear_type"] = "ns"
             else:
-                newdata['shear_type'] = stype
+                newdata["shear_type"] = stype
 
             dlist.append(newdata)
 
@@ -860,7 +883,7 @@ def _make_comb_data(
 
 def _trim_output_columns(data, meas_type):
     # TODO decide what to keep
-    raise NotImplementedError('implement trim output')
+    raise NotImplementedError("implement trim output")
 
     # if meas_type == 'admom':
     #     meas_type = 'am'
@@ -897,8 +920,8 @@ def _get_mask_frac(mfrac_mbexp, trim_pixels=0):
         mfrac = mfrac_exp.image.array
         dim = mfrac.shape[0]
         mfrac = mfrac[
-            trim_pixels:dim - trim_pixels - 1,
-            trim_pixels:dim - trim_pixels - 1,
+            trim_pixels: dim - trim_pixels - 1,
+            trim_pixels: dim - trim_pixels - 1,
         ]
         mask_fracs.append(mfrac.mean())
 
@@ -927,37 +950,38 @@ def _simulate_coadd(rng):
     g1, g2 = 0.02, 0.00
 
     sim_config = get_sim_config()
-    if sim_config['se_dim'] is None:
-        sim_config['se_dim'] = get_se_dim(
-            coadd_dim=sim_config['coadd_dim'],
-            dither=sim_config['dither'],
-            rotate=sim_config['rotate'],
+    if sim_config["se_dim"] is None:
+        sim_config["se_dim"] = get_se_dim(
+            coadd_dim=sim_config["coadd_dim"],
+            dither=sim_config["dither"],
+            rotate=sim_config["rotate"],
         )
 
-    if sim_config['gal_type'] != 'wldeblend':
-        gal_config = sim_config.get('gal_config', None)
+    if sim_config["gal_type"] != "wldeblend":
+        gal_config = sim_config.get("gal_config", None)
     else:
         sim_config["layout"] = None
         gal_config = None
 
     galaxy_catalog = make_galaxy_catalog(
         rng=rng,
-        gal_type=sim_config['gal_type'],
-        coadd_dim=sim_config['coadd_dim'],
-        buff=sim_config['buff'],
-        layout=sim_config['layout'],
-        sep=sim_config['sep'],  # for layout='pair'
+        gal_type=sim_config["gal_type"],
+        coadd_dim=sim_config["coadd_dim"],
+        buff=sim_config["buff"],
+        layout=sim_config["layout"],
+        sep=sim_config["sep"],  # for layout='pair'
         gal_config=gal_config,
     )
-    if sim_config['psf_type'] == 'ps':
+    if sim_config["psf_type"] == "ps":
         psf = make_ps_psf(
             rng=rng,
-            dim=sim_config['se_dim'],
-            variation_factor=sim_config['psf_variation_factor'],
+            dim=sim_config["se_dim"],
+            variation_factor=sim_config["psf_variation_factor"],
         )
-    elif sim_config['randomize_psf']:
+    elif sim_config["randomize_psf"]:
         psf = make_rand_psf(
-            psf_type=sim_config["psf_type"], rng=rng,
+            psf_type=sim_config["psf_type"],
+            rng=rng,
         )
     else:
         psf = make_fixed_psf(psf_type=sim_config["psf_type"])
@@ -965,36 +989,32 @@ def _simulate_coadd(rng):
     sim_data = make_sim(
         rng=rng,
         galaxy_catalog=galaxy_catalog,
-        coadd_dim=sim_config['coadd_dim'],
-        se_dim=sim_config['se_dim'],
+        coadd_dim=sim_config["coadd_dim"],
+        se_dim=sim_config["se_dim"],
         g1=g1,
         g2=g2,
         psf=psf,
-        draw_stars=sim_config['draw_stars'],
-        psf_dim=sim_config['psf_dim'],
-        dither=sim_config['dither'],
-        rotate=sim_config['rotate'],
-        bands=sim_config['bands'],
-        epochs_per_band=sim_config['epochs_per_band'],
-        noise_factor=sim_config['noise_factor'],
-        cosmic_rays=sim_config['cosmic_rays'],
-        bad_columns=sim_config['bad_columns'],
-        star_bleeds=sim_config['star_bleeds'],
-        sky_n_sigma=sim_config['sky_n_sigma'],
+        draw_stars=sim_config["draw_stars"],
+        psf_dim=sim_config["psf_dim"],
+        dither=sim_config["dither"],
+        rotate=sim_config["rotate"],
+        bands=sim_config["bands"],
+        epochs_per_band=sim_config["epochs_per_band"],
+        noise_factor=sim_config["noise_factor"],
+        cosmic_rays=sim_config["cosmic_rays"],
+        bad_columns=sim_config["bad_columns"],
+        star_bleeds=sim_config["star_bleeds"],
+        sky_n_sigma=sim_config["sky_n_sigma"],
     )
 
-    bands = list(sim_data['band_data'].keys())
-    exps = sim_data['band_data'][bands[0]]
-    assert (
-        not sim_config['dither']
-        and not sim_config['rotate']
-        and len(exps) == 1
-    )
+    bands = list(sim_data["band_data"].keys())
+    exps = sim_data["band_data"][bands[0]]
+    assert not sim_config["dither"] and not sim_config["rotate"] and len(exps) == 1
 
     coadd_data_list = [
         make_coadd_nowarp(
             exp=exps[0],
-            psf_dims=sim_data['psf_dims'],
+            psf_dims=sim_data["psf_dims"],
             rng=rng,
             remove_poisson=False,
         )
@@ -1002,12 +1022,12 @@ def _simulate_coadd(rng):
     ]
 
     coadd_data = extract_multiband_coadd_data(coadd_data_list)
-    bright_info = sim_data['bright_info']
+    bright_info = sim_data["bright_info"]
     if len(bright_info) > 0:
         # Note padding due to apodization, otherwise we get donuts the
         # radii coming out of the sim code are not super conservative,
         # just going to the noise level
         ap_padding = get_ap_range(AP_RAD)
-        sim_data['bright_info']['radius_pixels'] += ap_padding
+        sim_data["bright_info"]["radius_pixels"] += ap_padding
 
     return coadd_data, bright_info
