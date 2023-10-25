@@ -160,9 +160,11 @@ class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig,
         self.measurement.copyColumns["parent"] = "parent"
         self.measurement.plugins.names |= ['base_InputCount', 'base_Variance']
         self.measurement.plugins['base_PixelFlags'].masksFpAnywhere = ['CLIPPED', 'SENSOR_EDGE',
-                                                                       'REJECTED', 'INEXACT_PSF']
+                                                                       'REJECTED', 'INEXACT_PSF',
+                                                                       'STREAK']
         self.measurement.plugins['base_PixelFlags'].masksFpCenter = ['CLIPPED', 'SENSOR_EDGE',
-                                                                     'REJECTED', 'INEXACT_PSF']
+                                                                     'REJECTED', 'INEXACT_PSF',
+                                                                     'STREAK']
 
 
 class ForcedPhotCoaddTask(pipeBase.PipelineTask):
