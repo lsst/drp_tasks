@@ -40,11 +40,7 @@ from lsst.pipe.tasks.coaddBase import reorderAndPadList
 from lsst.pipe.tasks.maskStreaks import MaskStreaksTask
 from lsst.utils.timer import timeMethod
 
-from .assemble_coadd import (
-    AssembleCoaddConfig,
-    AssembleCoaddConnections,
-    AssembleCoaddTask,
-)
+from .assemble_coadd import AssembleCoaddConnections, AssembleCoaddTask, BaseAssembleCoaddConfig
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +76,7 @@ class CompareWarpAssembleCoaddConnections(AssembleCoaddConnections):
 
 
 class CompareWarpAssembleCoaddConfig(
-    AssembleCoaddConfig, pipelineConnections=CompareWarpAssembleCoaddConnections
+    BaseAssembleCoaddConfig, pipelineConnections=CompareWarpAssembleCoaddConnections
 ):
     assembleStaticSkyModel = pexConfig.ConfigurableField(
         target=AssembleCoaddTask,

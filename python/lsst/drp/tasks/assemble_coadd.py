@@ -50,7 +50,7 @@ from lsst.utils.timer import timeMethod
 log = logging.getLogger(__name__)
 
 
-class AssembleCoaddConnections(
+class BaseAssembleCoaddConnections(
     pipeBase.PipelineTaskConnections,
     dimensions=("tract", "patch", "band", "skymap"),
     defaultTemplates={
@@ -60,6 +60,8 @@ class AssembleCoaddConnections(
         "warpTypeSuffix": "",
     },
 ):
+    """Connections to define common input connections for coaddition tasks."""
+
     inputWarps = pipeBase.connectionTypes.Input(
         doc=(
             "Input list of warps to be assemebled i.e. stacked."
@@ -94,54 +96,20 @@ class AssembleCoaddConnections(
         dimensions=("tract", "patch", "skymap", "band"),
         minimum=0,
     )
-    coaddExposure = pipeBase.connectionTypes.Output(
-        doc="Output coadded exposure, produced by stacking input warps",
-        name="{outputCoaddName}Coadd{warpTypeSuffix}",
-        storageClass="ExposureF",
-        dimensions=("tract", "patch", "skymap", "band"),
-    )
-    nImage = pipeBase.connectionTypes.Output(
-        doc="Output image of number of input images per pixel",
-        name="{outputCoaddName}Coadd_nImage",
-        storageClass="ImageU",
-        dimensions=("tract", "patch", "skymap", "band"),
-    )
-    inputMap = pipeBase.connectionTypes.Output(
-        doc="Output healsparse map of input images",
-        name="{outputCoaddName}Coadd_inputMap",
-        storageClass="HealSparseMap",
-        dimensions=("tract", "patch", "skymap", "band"),
-    )
-
-    def __init__(self, *, config=None):
-        super().__init__(config=config)
-
-        if not config.doMaskBrightObjects:
-            self.prerequisiteInputs.remove("brightObjectMask")
-
-        if not config.doSelectVisits:
-            self.inputs.remove("selectedVisits")
-
-        if not config.doNImage:
-            self.outputs.remove("nImage")
-
-        if not self.config.doInputMap:
-            self.outputs.remove("inputMap")
 
 
-class AssembleCoaddConfig(
-    CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig, pipelineConnections=AssembleCoaddConnections
+class BaseAssembleCoaddConfig(
+    CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig, pipelineConnections=BaseAssembleCoaddConnections
 ):
     warpType = pexConfig.Field(
         doc="Warp name: one of 'direct' or 'psfMatched'",
         dtype=str,
         default="direct",
     )
-    subregionSize = pexConfig.ListField(
-        dtype=int,
+    subregionSize = pexConfig.ListField[int](
         doc="Width, height of stack subregion size; "
         "make small enough that a full stack of images will fit into memory "
-        " at once.",
+        " at once. Relevant only if `doOnlineForMean` is False.",
         length=2,
         default=(2000, 2000),
     )
@@ -198,8 +166,8 @@ class AssembleCoaddConfig(
     )
     doNImage = pexConfig.Field(
         doc="Create image of number of contributing exposures for each pixel",
-        dtype=bool,
         default=False,
+        dtype=bool,
     )
     doUsePsfMatchedPolygons = pexConfig.Field(
         doc="Use ValidPolygons from shrunk Psf-Matched Calexps? Should be set "
@@ -296,7 +264,7 @@ class AssembleCoaddConfig(
             )
 
 
-class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
+class BaseAssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     """Assemble a coadded image from a set of warps.
 
     Each Warp that goes into a coadd will typically have an independent
@@ -332,8 +300,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     documentation for the subtasks for further information.
     """
 
-    ConfigClass = AssembleCoaddConfig
-    _DefaultName = "assembleCoadd"
+    ConfigClass = BaseAssembleCoaddConfig
+    _DefaultName = "baseAssembleCoadd"
 
     def __init__(self, *args, **kwargs):
         # TODO: DM-17415 better way to handle previously allowed passed args
@@ -573,225 +541,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         statsFlags = afwMath.stringToStatisticsProperty(self.config.statistic)
         return pipeBase.Struct(ctrl=statsCtrl, flags=statsFlags)
 
-    @timeMethod
-    def run(
-        self,
-        skyInfo,
-        tempExpRefList,
-        imageScalerList,
-        weightList,
-        altMaskList=None,
-        mask=None,
-        supplementaryData=None,
-    ):
-        """Assemble a coadd from input warps.
-
-        Assemble the coadd using the provided list of coaddTempExps. Since
-        the full coadd covers a patch (a large area), the assembly is
-        performed over small areas on the image at a time in order to
-        conserve memory usage. Iterate over subregions within the outer
-        bbox of the patch using `assembleSubregion` to stack the corresponding
-        subregions from the coaddTempExps with the statistic specified.
-        Set the edge bits the coadd mask based on the weight map.
-
-        Parameters
-        ----------
-        skyInfo : `~lsst.pipe.base.Struct`
-            Struct with geometric information about the patch.
-        tempExpRefList : `list`
-            List of data references to Warps (previously called CoaddTempExps).
-        imageScalerList : `list`
-            List of image scalers.
-        weightList : `list`
-            List of weights.
-        altMaskList : `list`, optional
-            List of alternate masks to use rather than those stored with
-            tempExp.
-        mask : `int`, optional
-            Bit mask value to exclude from coaddition.
-        supplementaryData : `~lsst.pipe.base.Struct`, optional
-            Struct with additional data products needed to assemble coadd.
-            Only used by subclasses that implement ``_makeSupplementaryData``
-            and override `run`.
-
-        Returns
-        -------
-        result : `~lsst.pipe.base.Struct`
-            Results as a struct with attributes:
-
-            ``coaddExposure``
-                Coadded exposure (`~lsst.afw.image.Exposure`).
-            ``nImage``
-                Exposure count image (`~lsst.afw.image.Image`), if requested.
-            ``inputMap``
-                Bit-wise map of inputs, if requested.
-            ``warpRefList``
-                Input list of refs to the warps
-                (`~lsst.daf.butler.DeferredDatasetHandle`) (unmodified).
-            ``imageScalerList``
-                Input list of image scalers (`list`) (unmodified).
-            ``weightList``
-                Input list of weights (`list`) (unmodified).
-
-        Raises
-        ------
-        lsst.pipe.base.NoWorkFound
-            Raised if no data references are provided.
-        """
-        tempExpName = self.getTempExpDatasetName(self.warpType)
-        self.log.info("Assembling %s %s", len(tempExpRefList), tempExpName)
-        if not tempExpRefList:
-            raise pipeBase.NoWorkFound("No exposures provided for co-addition.")
-
-        stats = self.prepareStats(mask=mask)
-
-        if altMaskList is None:
-            altMaskList = [None] * len(tempExpRefList)
-
-        coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
-        coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
-        coaddExposure.getInfo().setCoaddInputs(self.inputRecorder.makeCoaddInputs())
-        self.assembleMetadata(coaddExposure, tempExpRefList, weightList)
-        coaddMaskedImage = coaddExposure.getMaskedImage()
-        subregionSizeArr = self.config.subregionSize
-        subregionSize = geom.Extent2I(subregionSizeArr[0], subregionSizeArr[1])
-        # if nImage is requested, create a zero one which can be passed to
-        # assembleSubregion.
-        if self.config.doNImage:
-            nImage = afwImage.ImageU(skyInfo.bbox)
-        else:
-            nImage = None
-        # If inputMap is requested, create the initial version that can be
-        # masked in assembleSubregion.
-        if self.config.doInputMap:
-            self.inputMapper.build_ccd_input_map(
-                skyInfo.bbox, skyInfo.wcs, coaddExposure.getInfo().getCoaddInputs().ccds
-            )
-
-        if self.config.doOnlineForMean and self.config.statistic == "MEAN":
-            try:
-                self.assembleOnlineMeanCoadd(
-                    coaddExposure,
-                    tempExpRefList,
-                    imageScalerList,
-                    weightList,
-                    altMaskList,
-                    stats.ctrl,
-                    nImage=nImage,
-                )
-            except Exception as e:
-                self.log.exception("Cannot compute online coadd %s", e)
-                raise
-        else:
-            for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
-                try:
-                    self.assembleSubregion(
-                        coaddExposure,
-                        subBBox,
-                        tempExpRefList,
-                        imageScalerList,
-                        weightList,
-                        altMaskList,
-                        stats.flags,
-                        stats.ctrl,
-                        nImage=nImage,
-                    )
-                except Exception as e:
-                    self.log.exception("Cannot compute coadd %s: %s", subBBox, e)
-                    raise
-
-        # If inputMap is requested, we must finalize the map after the
-        # accumulation.
-        if self.config.doInputMap:
-            self.inputMapper.finalize_ccd_input_map_mask()
-            inputMap = self.inputMapper.ccd_input_map
-        else:
-            inputMap = None
-
-        self.setInexactPsf(coaddMaskedImage.getMask())
-        # Despite the name, the following doesn't really deal with "EDGE"
-        # pixels: it identifies pixels that didn't receive any unmasked inputs
-        # (as occurs around the edge of the field).
-        coaddUtils.setCoaddEdgeBits(coaddMaskedImage.getMask(), coaddMaskedImage.getVariance())
-        return pipeBase.Struct(
-            coaddExposure=coaddExposure,
-            nImage=nImage,
-            warpRefList=tempExpRefList,
-            imageScalerList=imageScalerList,
-            weightList=weightList,
-            inputMap=inputMap,
-        )
-
-    def assembleMetadata(self, coaddExposure, tempExpRefList, weightList):
-        """Set the metadata for the coadd.
-
-        This basic implementation sets the filter from the first input.
-
-        Parameters
-        ----------
-        coaddExposure : `lsst.afw.image.Exposure`
-            The target exposure for the coadd.
-        tempExpRefList : `list`
-            List of data references to tempExp.
-        weightList : `list`
-            List of weights.
-
-        Raises
-        ------
-        AssertionError
-            Raised if there is a length mismatch.
-        """
-        assert len(tempExpRefList) == len(weightList), "Length mismatch"
-
-        # We load a single pixel of each coaddTempExp, because we just want to
-        # get at the metadata (and we need more than just the PropertySet that
-        # contains the header), which is not possible with the current butler
-        # (see #2777).
-        bbox = geom.Box2I(coaddExposure.getBBox().getMin(), geom.Extent2I(1, 1))
-
-        tempExpList = [tempExpRef.get(parameters={"bbox": bbox}) for tempExpRef in tempExpRefList]
-
-        numCcds = sum(len(tempExp.getInfo().getCoaddInputs().ccds) for tempExp in tempExpList)
-
-        # Set the coadd FilterLabel to the band of the first input exposure:
-        # Coadds are calibrated, so the physical label is now meaningless.
-        coaddExposure.setFilter(afwImage.FilterLabel(tempExpList[0].getFilter().bandLabel))
-        coaddInputs = coaddExposure.getInfo().getCoaddInputs()
-        coaddInputs.ccds.reserve(numCcds)
-        coaddInputs.visits.reserve(len(tempExpList))
-
-        for tempExp, weight in zip(tempExpList, weightList):
-            self.inputRecorder.addVisitToCoadd(coaddInputs, tempExp, weight)
-
-        if self.config.doUsePsfMatchedPolygons:
-            self.shrinkValidPolygons(coaddInputs)
-
-        coaddInputs.visits.sort()
-        coaddInputs.ccds.sort()
-        if self.warpType == "psfMatched":
-            # The modelPsf BBox for a psfMatchedWarp/coaddTempExp was
-            # dynamically defined by ModelPsfMatchTask as the square box
-            # bounding its spatially-variable, pre-matched WarpedPsf.
-            # Likewise, set the PSF of a PSF-Matched Coadd to the modelPsf
-            # having the maximum width (sufficient because square)
-            modelPsfList = [tempExp.getPsf() for tempExp in tempExpList]
-            modelPsfWidthList = [
-                modelPsf.computeBBox(modelPsf.getAveragePosition()).getWidth() for modelPsf in modelPsfList
-            ]
-            psf = modelPsfList[modelPsfWidthList.index(max(modelPsfWidthList))]
-        else:
-            psf = measAlg.CoaddPsf(
-                coaddInputs.ccds, coaddExposure.getWcs(), self.config.coaddPsf.makeControl()
-            )
-        coaddExposure.setPsf(psf)
-        apCorrMap = measAlg.makeCoaddApCorrMap(
-            coaddInputs.ccds, coaddExposure.getBBox(afwImage.PARENT), coaddExposure.getWcs()
-        )
-        coaddExposure.getInfo().setApCorrMap(apCorrMap)
-        if self.config.doAttachTransmissionCurve:
-            transmissionCurve = measAlg.makeCoaddTransmissionCurve(coaddExposure.getWcs(), coaddInputs.ccds)
-            coaddExposure.getInfo().setTransmissionCurve(transmissionCurve)
-
     def assembleSubregion(
         self,
         coaddExposure,
@@ -883,75 +632,75 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         if nImage is not None:
             nImage.assign(subNImage, bbox)
 
-    def assembleOnlineMeanCoadd(
-        self, coaddExposure, tempExpRefList, imageScalerList, weightList, altMaskList, statsCtrl, nImage=None
-    ):
-        """Assemble the coadd using the "online" method.
+    def assembleMetadata(self, coaddExposure, tempExpRefList, weightList):
+        """Set the metadata for the coadd.
 
-        This method takes a running sum of images and weights to save memory.
-        It only works for MEAN statistics.
+        This basic implementation sets the filter from the first input.
 
         Parameters
         ----------
-        coaddExposure : `lsst.afw.image.Exposure`
+        coaddExposure : `~lsst.afw.image.Exposure`
             The target exposure for the coadd.
         tempExpRefList : `list`
-            List of data reference to tempExp.
-        imageScalerList : `list`
-            List of image scalers.
+            List of data references to tempExp.
         weightList : `list`
             List of weights.
-        altMaskList : `list`
-            List of alternate masks to use rather than those stored with
-            tempExp, or None.  Each element is dict with keys = mask plane
-            name to which to add the spans.
-        statsCtrl : `lsst.afw.math.StatisticsControl`
-            Statistics control object for coadd.
-        nImage : `lsst.afw.image.ImageU`, optional
-            Keeps track of exposure count for each pixel.
+
+        Raises
+        ------
+        AssertionError
+            Raised if there is a length mismatch.
         """
-        self.log.debug("Computing online coadd.")
+        assert len(tempExpRefList) == len(weightList), "Length mismatch"
 
-        coaddExposure.mask.addMaskPlane("REJECTED")
-        coaddExposure.mask.addMaskPlane("CLIPPED")
-        coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
-        thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
+        # We load a single pixel of each coaddTempExp, because we just want to
+        # get at the metadata (and we need more than just the PropertySet that
+        # contains the header), which is not possible with the current butler
+        # (see #2777).
+        bbox = geom.Box2I(coaddExposure.getBBox().getMin(), geom.Extent2I(1, 1))
 
-        bbox = coaddExposure.maskedImage.getBBox()
+        tempExpList = [tempExpRef.get(parameters={"bbox": bbox}) for tempExpRef in tempExpRefList]
 
-        stacker = AccumulatorMeanStack(
-            coaddExposure.image.array.shape,
-            statsCtrl.getAndMask(),
-            mask_threshold_dict=thresholdDict,
-            mask_map=maskMap,
-            no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
-            calc_error_from_input_variance=self.config.calcErrorFromInputVariance,
-            compute_n_image=(nImage is not None),
+        numCcds = sum(len(tempExp.getInfo().getCoaddInputs().ccds) for tempExp in tempExpList)
+
+        # Set the coadd FilterLabel to the band of the first input exposure:
+        # Coadds are calibrated, so the physical label is now meaningless.
+        coaddExposure.setFilter(afwImage.FilterLabel(tempExpList[0].getFilter().bandLabel))
+        coaddInputs = coaddExposure.getInfo().getCoaddInputs()
+        coaddInputs.ccds.reserve(numCcds)
+        coaddInputs.visits.reserve(len(tempExpList))
+
+        for tempExp, weight in zip(tempExpList, weightList):
+            self.inputRecorder.addVisitToCoadd(coaddInputs, tempExp, weight)
+
+        if self.config.doUsePsfMatchedPolygons:
+            self.shrinkValidPolygons(coaddInputs)
+
+        coaddInputs.visits.sort()
+        coaddInputs.ccds.sort()
+        if self.warpType == "psfMatched":
+            # The modelPsf BBox for a psfMatchedWarp/coaddTempExp was
+            # dynamically defined by ModelPsfMatchTask as the square box
+            # bounding its spatially-variable, pre-matched WarpedPsf.
+            # Likewise, set the PSF of a PSF-Matched Coadd to the modelPsf
+            # having the maximum width (sufficient because square)
+            modelPsfList = [tempExp.getPsf() for tempExp in tempExpList]
+            modelPsfWidthList = [
+                modelPsf.computeBBox(modelPsf.getAveragePosition()).getWidth() for modelPsf in modelPsfList
+            ]
+            psf = modelPsfList[modelPsfWidthList.index(max(modelPsfWidthList))]
+        else:
+            psf = measAlg.CoaddPsf(
+                coaddInputs.ccds, coaddExposure.getWcs(), self.config.coaddPsf.makeControl()
+            )
+        coaddExposure.setPsf(psf)
+        apCorrMap = measAlg.makeCoaddApCorrMap(
+            coaddInputs.ccds, coaddExposure.getBBox(afwImage.PARENT), coaddExposure.getWcs()
         )
-
-        for tempExpRef, imageScaler, altMask, weight in zip(
-            tempExpRefList, imageScalerList, altMaskList, weightList
-        ):
-            exposure = tempExpRef.get()
-            maskedImage = exposure.getMaskedImage()
-            mask = maskedImage.getMask()
-            if altMask is not None:
-                self.applyAltMaskPlanes(mask, altMask)
-            imageScaler.scaleMaskedImage(maskedImage)
-            if self.config.removeMaskPlanes:
-                self.removeMaskPlanes(maskedImage)
-
-            stacker.add_masked_image(maskedImage, weight=weight)
-
-            if self.config.doInputMap:
-                visit = exposure.getInfo().getCoaddInputs().visits[0].getId()
-                self.inputMapper.mask_warp_bbox(bbox, visit, mask, statsCtrl.getAndMask())
-
-        stacker.fill_stacked_masked_image(coaddExposure.maskedImage)
-
-        if nImage is not None:
-            nImage.array[:, :] = stacker.n_image
+        coaddExposure.getInfo().setApCorrMap(apCorrMap)
+        if self.config.doAttachTransmissionCurve:
+            transmissionCurve = measAlg.makeCoaddTransmissionCurve(coaddExposure.getWcs(), coaddInputs.ccds)
+            coaddExposure.getInfo().setTransmissionCurve(transmissionCurve)
 
     def removeMaskPlanes(self, maskedImage):
         """Unset the mask of an image for mask planes specified in the config.
@@ -1104,27 +853,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 continue
             spans.clippedTo(mask.getBBox()).setMask(mask, self.brightObjectBitmask)
 
-    def setInexactPsf(self, mask):
-        """Set INEXACT_PSF mask plane.
-
-        If any of the input images isn't represented in the coadd (due to
-        clipped pixels or chip gaps), the `CoaddPsf` will be inexact. Flag
-        these pixels.
-
-        Parameters
-        ----------
-        mask : `lsst.afw.image.Mask`
-            Coadded exposure's mask, modified in-place.
-        """
-        mask.addMaskPlane("INEXACT_PSF")
-        inexactPsf = mask.getPlaneBitMask("INEXACT_PSF")
-        sensorEdge = mask.getPlaneBitMask("SENSOR_EDGE")  # chip edges (so PSF is discontinuous)
-        clipped = mask.getPlaneBitMask("CLIPPED")  # pixels clipped from coadd
-        rejected = mask.getPlaneBitMask("REJECTED")  # pixels rejected from coadd due to masks
-        array = mask.getArray()
-        selected = array & (sensorEdge | clipped | rejected) > 0
-        array[selected] |= inexactPsf
-
     def filterWarps(self, inputs, goodVisits):
         """Return list of only inputRefs with visitId in goodVisits ordered by
         goodVisit.
@@ -1149,6 +877,305 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             if visit in inputWarpDict:
                 filteredInputs.append(inputWarpDict[visit])
         return filteredInputs
+
+
+class AssembleCoaddConnections(BaseAssembleCoaddConnections):
+    """Connections to define input and output connections for coaddition
+    tasks.
+    """
+
+    coaddExposure = pipeBase.connectionTypes.Output(
+        doc="Output coadded exposure, produced by stacking input warps",
+        name="{outputCoaddName}Coadd{warpTypeSuffix}",
+        storageClass="ExposureF",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
+    nImage = pipeBase.connectionTypes.Output(
+        doc="Output image of number of input images per pixel",
+        name="{outputCoaddName}Coadd_nImage",
+        storageClass="ImageU",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
+    inputMap = pipeBase.connectionTypes.Output(
+        doc="Output healsparse map of input images",
+        name="{outputCoaddName}Coadd_inputMap",
+        storageClass="HealSparseMap",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
+
+    def __init__(self, *, config=None):
+        super().__init__(config=config)
+
+        if not config.doMaskBrightObjects:
+            self.prerequisiteInputs.remove("brightObjectMask")
+
+        if not config.doSelectVisits:
+            self.inputs.remove("selectedVisits")
+
+        if not config.doNImage:
+            self.outputs.remove("nImage")
+
+        if not self.config.doInputMap:
+            self.outputs.remove("inputMap")
+
+
+class AssembleCoaddConfig(BaseAssembleCoaddConfig):
+    doNImage = pexConfig.Field[bool](
+        doc="Create image of number of contributing exposures for each pixel",
+        default=False,
+    )
+    subregionSize = pexConfig.ListField[int](
+        doc="Width, height of stack subregion size; "
+        "make small enough that a full stack of images will fit into memory "
+        " at once. Relevant only if `doOnlineForMean` is False.",
+        length=2,
+        default=(2000, 2000),
+    )
+
+
+class AssembleCoaddTask(BaseAssembleCoaddTask):
+    ConfigClass = AssembleCoaddConfig
+    _DefaultName = "assembleCoadd"
+
+    @timeMethod
+    def run(
+        self,
+        skyInfo,
+        tempExpRefList,
+        imageScalerList,
+        weightList,
+        altMaskList=None,
+        mask=None,
+        supplementaryData=None,
+    ):
+        """Assemble a coadd from input warps.
+
+        Assemble the coadd using the provided list of coaddTempExps. Since
+        the full coadd covers a patch (a large area), the assembly is
+        performed over small areas on the image at a time in order to
+        conserve memory usage. Iterate over subregions within the outer
+        bbox of the patch using `assembleSubregion` to stack the corresponding
+        subregions from the coaddTempExps with the statistic specified.
+        Set the edge bits the coadd mask based on the weight map.
+
+        Parameters
+        ----------
+        skyInfo : `~lsst.pipe.base.Struct`
+            Struct with geometric information about the patch.
+        tempExpRefList : `list`
+            List of data references to Warps (previously called CoaddTempExps).
+        imageScalerList : `list`
+            List of image scalers.
+        weightList : `list`
+            List of weights.
+        altMaskList : `list`, optional
+            List of alternate masks to use rather than those stored with
+            tempExp.
+        mask : `int`, optional
+            Bit mask value to exclude from coaddition.
+        supplementaryData : `~lsst.pipe.base.Struct`, optional
+            Struct with additional data products needed to assemble coadd.
+            Only used by subclasses that implement ``_makeSupplementaryData``
+            and override `run`.
+
+        Returns
+        -------
+        result : `~lsst.pipe.base.Struct`
+            Results as a struct with attributes:
+
+            ``coaddExposure``
+                Coadded exposure (`~lsst.afw.image.Exposure`).
+            ``nImage``
+                Exposure count image (`~lsst.afw.image.Image`), if requested.
+            ``inputMap``
+                Bit-wise map of inputs, if requested.
+            ``warpRefList``
+                Input list of refs to the warps
+                (`~lsst.daf.butler.DeferredDatasetHandle`) (unmodified).
+            ``imageScalerList``
+                Input list of image scalers (`list`) (unmodified).
+            ``weightList``
+                Input list of weights (`list`) (unmodified).
+
+        Raises
+        ------
+        lsst.pipe.base.NoWorkFound
+            Raised if no data references are provided.
+        """
+        tempExpName = self.getTempExpDatasetName(self.warpType)
+        self.log.info("Assembling %s %s", len(tempExpRefList), tempExpName)
+        if not tempExpRefList:
+            raise pipeBase.NoWorkFound("No exposures provided for co-addition.")
+
+        stats = self.prepareStats(mask=mask)
+
+        if altMaskList is None:
+            altMaskList = [None] * len(tempExpRefList)
+
+        coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
+        # coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
+        coaddExposure.getInfo().setCoaddInputs(self.inputRecorder.makeCoaddInputs())
+        self.assembleMetadata(coaddExposure, tempExpRefList, weightList)
+        coaddMaskedImage = coaddExposure.getMaskedImage()
+        subregionSizeArr = self.config.subregionSize
+        subregionSize = geom.Extent2I(subregionSizeArr[0], subregionSizeArr[1])
+        # if nImage is requested, create a zero one which can be passed to
+        # assembleSubregion.
+        if self.config.doNImage:
+            nImage = afwImage.ImageU(skyInfo.bbox)
+        else:
+            nImage = None
+        # If inputMap is requested, create the initial version that can be
+        # masked in assembleSubregion.
+        if self.config.doInputMap:
+            self.inputMapper.build_ccd_input_map(
+                skyInfo.bbox, skyInfo.wcs, coaddExposure.getInfo().getCoaddInputs().ccds
+            )
+
+        if self.config.doOnlineForMean and self.config.statistic == "MEAN":
+            try:
+                self.assembleOnlineMeanCoadd(
+                    coaddExposure,
+                    tempExpRefList,
+                    imageScalerList,
+                    weightList,
+                    altMaskList,
+                    stats.ctrl,
+                    nImage=nImage,
+                )
+            except Exception as e:
+                self.log.exception("Cannot compute online coadd %s", e)
+                raise
+        else:
+            for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
+                try:
+                    self.assembleSubregion(
+                        coaddExposure,
+                        subBBox,
+                        tempExpRefList,
+                        imageScalerList,
+                        weightList,
+                        altMaskList,
+                        stats.flags,
+                        stats.ctrl,
+                        nImage=nImage,
+                    )
+                except Exception as e:
+                    self.log.exception("Cannot compute coadd %s: %s", subBBox, e)
+                    raise
+
+        # If inputMap is requested, we must finalize the map after the
+        # accumulation.
+        if self.config.doInputMap:
+            self.inputMapper.finalize_ccd_input_map_mask()
+            inputMap = self.inputMapper.ccd_input_map
+        else:
+            inputMap = None
+
+        self.setInexactPsf(coaddMaskedImage.getMask())
+        # Despite the name, the following doesn't really deal with "EDGE"
+        # pixels: it identifies pixels that didn't receive any unmasked inputs
+        # (as occurs around the edge of the field).
+        coaddUtils.setCoaddEdgeBits(coaddMaskedImage.getMask(), coaddMaskedImage.getVariance())
+        return pipeBase.Struct(
+            coaddExposure=coaddExposure,
+            nImage=nImage,
+            warpRefList=tempExpRefList,
+            imageScalerList=imageScalerList,
+            weightList=weightList,
+            inputMap=inputMap,
+        )
+
+    def assembleOnlineMeanCoadd(
+        self, coaddExposure, tempExpRefList, imageScalerList, weightList, altMaskList, statsCtrl, nImage=None
+    ):
+        """Assemble the coadd using the "online" method.
+
+        This method takes a running sum of images and weights to save memory.
+        It only works for MEAN statistics.
+
+        Parameters
+        ----------
+        coaddExposure : `lsst.afw.image.Exposure`
+            The target exposure for the coadd.
+        tempExpRefList : `list`
+            List of data reference to tempExp.
+        imageScalerList : `list`
+            List of image scalers.
+        weightList : `list`
+            List of weights.
+        altMaskList : `list`
+            List of alternate masks to use rather than those stored with
+            tempExp, or None.  Each element is dict with keys = mask plane
+            name to which to add the spans.
+        statsCtrl : `lsst.afw.math.StatisticsControl`
+            Statistics control object for coadd.
+        nImage : `lsst.afw.image.ImageU`, optional
+            Keeps track of exposure count for each pixel.
+        """
+        self.log.debug("Computing online coadd.")
+
+        coaddExposure.mask.addMaskPlane("REJECTED")
+        coaddExposure.mask.addMaskPlane("CLIPPED")
+        coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
+        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
+
+        bbox = coaddExposure.maskedImage.getBBox()
+
+        stacker = AccumulatorMeanStack(
+            coaddExposure.image.array.shape,
+            statsCtrl.getAndMask(),
+            mask_threshold_dict=thresholdDict,
+            mask_map=maskMap,
+            no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
+            calc_error_from_input_variance=self.config.calcErrorFromInputVariance,
+            compute_n_image=(nImage is not None),
+        )
+
+        for tempExpRef, imageScaler, altMask, weight in zip(
+            tempExpRefList, imageScalerList, altMaskList, weightList
+        ):
+            exposure = tempExpRef.get()
+            maskedImage = exposure.getMaskedImage()
+            mask = maskedImage.getMask()
+            if altMask is not None:
+                self.applyAltMaskPlanes(mask, altMask)
+            imageScaler.scaleMaskedImage(maskedImage)
+            if self.config.removeMaskPlanes:
+                self.removeMaskPlanes(maskedImage)
+
+            stacker.add_masked_image(maskedImage, weight=weight)
+
+            if self.config.doInputMap:
+                visit = exposure.getInfo().getCoaddInputs().visits[0].getId()
+                self.inputMapper.mask_warp_bbox(bbox, visit, mask, statsCtrl.getAndMask())
+
+        stacker.fill_stacked_masked_image(coaddExposure.maskedImage)
+
+        if nImage is not None:
+            nImage.array[:, :] = stacker.n_image
+
+    def setInexactPsf(self, mask):
+        """Set INEXACT_PSF mask plane.
+
+        If any of the input images isn't represented in the coadd (due to
+        clipped pixels or chip gaps), the `CoaddPsf` will be inexact. Flag
+        these pixels.
+
+        Parameters
+        ----------
+        mask : `lsst.afw.image.Mask`
+            Coadded exposure's mask, modified in-place.
+        """
+        mask.addMaskPlane("INEXACT_PSF")
+        inexactPsf = mask.getPlaneBitMask("INEXACT_PSF")
+        sensorEdge = mask.getPlaneBitMask("SENSOR_EDGE")  # chip edges (so PSF is discontinuous)
+        clipped = mask.getPlaneBitMask("CLIPPED")  # pixels clipped from coadd
+        rejected = mask.getPlaneBitMask("REJECTED")  # pixels rejected from coadd due to masks
+        array = mask.getArray()
+        selected = array & (sensorEdge | clipped | rejected) > 0
+        array[selected] |= inexactPsf
 
 
 def countMaskFromFootprint(mask, footprint, bitmask, ignoreMask):
