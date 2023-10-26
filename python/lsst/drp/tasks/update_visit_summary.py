@@ -194,9 +194,7 @@ class PerTractInput(PossiblyMultipleInput):
             if record is None:
                 continue
             if center is None:
-                center_for_record = compute_center_for_detector_record(
-                    record, bbox=bbox
-                )
+                center_for_record = compute_center_for_detector_record(record, bbox=bbox)
                 if center_for_record is None:
                     continue
             else:
@@ -357,9 +355,7 @@ class UpdateVisitSummaryConnections(
             case "global":
                 self.inputs.remove("wcs_overrides_tract")
             case bad:
-                raise ValueError(
-                    f"Invalid value wcs_provider={bad!r}; config was not validated."
-                )
+                raise ValueError(f"Invalid value wcs_provider={bad!r}; config was not validated.")
         match self.config.photo_calib_provider:
             case "input_summary":
                 self.inputs.remove("photo_calib_overrides_tract")
@@ -369,9 +365,7 @@ class UpdateVisitSummaryConnections(
             case "global":
                 self.inputs.remove("photo_calib_overrides_tract")
             case bad:
-                raise ValueError(
-                    f"Invalid value photo_calib_provider={bad!r}; config was not validated."
-                )
+                raise ValueError(f"Invalid value photo_calib_provider={bad!r}; config was not validated.")
         match self.config.background_provider:
             case "input_summary":
                 self.inputs.remove("background_originals")
@@ -379,14 +373,10 @@ class UpdateVisitSummaryConnections(
             case "replacement":
                 pass
             case bad:
-                raise ValueError(
-                    f"Invalid value background_provider={bad!r}; config was not validated."
-                )
+                raise ValueError(f"Invalid value background_provider={bad!r}; config was not validated.")
 
 
-class UpdateVisitSummaryConfig(
-    PipelineTaskConfig, pipelineConnections=UpdateVisitSummaryConnections
-):
+class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVisitSummaryConnections):
     """Configuration for UpdateVisitSummaryTask.
 
     Notes
@@ -520,9 +510,7 @@ class UpdateVisitSummaryTask(PipelineTask):
         self.schema_mapper.addMinimalSchema(input_summary_schema)
         self.schema = self.schema_mapper.getOutputSchema()
         if self.config.wcs_provider == "tract":
-            self.schema.addField(
-                "wcsTractId", type="L", doc="ID of the tract that provided the WCS."
-            )
+            self.schema.addField("wcsTractId", type="L", doc="ID of the tract that provided the WCS.")
         if self.config.photo_calib_provider == "tract":
             self.schema.addField(
                 "photoCalibTractId",
@@ -546,14 +534,10 @@ class UpdateVisitSummaryTask(PipelineTask):
         # objects).
         match self.config.wcs_provider:
             case "tract":
-                inputs["wcs_overrides"] = PerTractInput.load(
-                    butlerQC, sky_map, inputRefs.wcs_overrides_tract
-                )
+                inputs["wcs_overrides"] = PerTractInput.load(butlerQC, sky_map, inputRefs.wcs_overrides_tract)
                 del inputRefs.wcs_overrides_tract
             case "global":
-                inputs["wcs_overrides"] = GlobalInput(
-                    butlerQC.get(inputRefs.wcs_overrides_global)
-                )
+                inputs["wcs_overrides"] = GlobalInput(butlerQC.get(inputRefs.wcs_overrides_global))
                 del inputRefs.wcs_overrides_global
             case "input_summary":
                 inputs["wcs_overrides"] = None
@@ -582,9 +566,7 @@ class UpdateVisitSummaryTask(PipelineTask):
         # deferLoad=True connections into mappings keyed by detector ID.
         for name in deferred_dataset_types:
             handles_list = inputs[name]
-            inputs[name] = {
-                handle.dataId["detector"]: handle for handle in handles_list
-            }
+            inputs[name] = {handle.dataId["detector"]: handle for handle in handles_list}
             for record in inputs["input_summary_catalog"]:
                 detector_id = record.getId()
                 if detector_id not in inputs[name]:
@@ -703,9 +685,7 @@ class UpdateVisitSummaryTask(PipelineTask):
             bbox = exposure.getBBox()
 
             if wcs_overrides:
-                wcs_tract, wcs_record = wcs_overrides.best_for_detector(
-                    detector_id, bbox=bbox
-                )
+                wcs_tract, wcs_record = wcs_overrides.best_for_detector(detector_id, bbox=bbox)
                 if wcs_record is not None:
                     wcs = wcs_record.getWcs()
                 else:
@@ -755,9 +735,7 @@ class UpdateVisitSummaryTask(PipelineTask):
                 if self.config.photo_calib_provider == "tract":
                     output_record["photoCalibTractId"] = photo_calib_tract
                 output_record.setPhotoCalib(photo_calib)
-                self.compute_summary_stats.update_photo_calib_stats(
-                    summary_stats, photo_calib
-                )
+                self.compute_summary_stats.update_photo_calib_stats(summary_stats, photo_calib)
 
             if background_overrides is not None:
                 if (handle := background_overrides.get(detector_id)) is not None:
@@ -771,9 +749,7 @@ class UpdateVisitSummaryTask(PipelineTask):
                     for layer in new_bkg:
                         full_bkg.append(layer)
                     exposure.image -= new_bkg.getImage()
-                    self.compute_summary_stats.update_background_stats(
-                        summary_stats, full_bkg
-                    )
+                    self.compute_summary_stats.update_background_stats(summary_stats, full_bkg)
                     self.compute_summary_stats.update_masked_image_stats(
                         summary_stats, exposure.getMaskedImage()
                     )

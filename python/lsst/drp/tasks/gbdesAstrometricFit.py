@@ -37,11 +37,12 @@ from lsst.meas.algorithms import (LoadReferenceObjectsConfig, ReferenceObjectLoa
                                   ReferenceSourceSelectorTask)
 from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
 
-__all__ = ['GbdesAstrometricFitConnections', 'GbdesAstrometricFitConfig', 'GbdesAstrometricFitTask']
+__all__ = ["GbdesAstrometricFitConnections", "GbdesAstrometricFitConfig", "GbdesAstrometricFitTask"]
 
 
-def _make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.marcsec,
-                                outputPMUnit=u.marcsec, version=1):
+def _make_ref_covariance_matrix(
+    refCat, inputUnit=u.radian, outputCoordUnit=u.marcsec, outputPMUnit=u.marcsec, version=1
+):
     """Make a covariance matrix for the reference catalog including proper
     motion and parallax.
 
@@ -76,16 +77,18 @@ def _make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.ma
         #                   the string in Gaia column names for this
         #                   the ordering in the Gaia catalog
         # and the ordering of the tuples is the order we want in our cov matrix
-        raErr = (refCat['coord_raErr'] * inputUnit).to(outputCoordUnit).to_value()
-        decErr = (refCat['coord_decErr'] * inputUnit).to(outputCoordUnit).to_value()
-        raPMErr = (refCat['pm_raErr'] * inputUnit).to(outputPMUnit).to_value()
-        decPMErr = (refCat['pm_decErr'] * inputUnit).to(outputPMUnit).to_value()
-        parallaxErr = (refCat['parallaxErr'] * inputUnit).to(outputPMUnit).to_value()
-        stdOrder = ((raErr, 'ra', 0),
-                    (decErr, 'dec', 1),
-                    (raPMErr, 'pmra', 3),
-                    (decPMErr, 'pmdec', 4),
-                    (parallaxErr, 'parallax', 2))
+        raErr = (refCat["coord_raErr"] * inputUnit).to(outputCoordUnit).to_value()
+        decErr = (refCat["coord_decErr"] * inputUnit).to(outputCoordUnit).to_value()
+        raPMErr = (refCat["pm_raErr"] * inputUnit).to(outputPMUnit).to_value()
+        decPMErr = (refCat["pm_decErr"] * inputUnit).to(outputPMUnit).to_value()
+        parallaxErr = (refCat["parallaxErr"] * inputUnit).to(outputPMUnit).to_value()
+        stdOrder = (
+            (raErr, "ra", 0),
+            (decErr, "dec", 1),
+            (raPMErr, "pmra", 3),
+            (decPMErr, "pmdec", 4),
+            (parallaxErr, "parallax", 2),
+        )
 
         k = 0
         for i, pr1 in enumerate(stdOrder):
@@ -97,20 +100,20 @@ def _make_ref_covariance_matrix(refCat, inputUnit=u.radian, outputCoordUnit=u.ma
                 else:
                     # diagnonal element
                     cov[:, k] = pr1[0] * pr2[0]
-                k = k+1
+                k = k + 1
 
     elif version == 2:
-        positionParameters = ['coord_ra', 'coord_dec', 'pm_ra', 'pm_dec', 'parallax']
+        positionParameters = ["coord_ra", "coord_dec", "pm_ra", "pm_dec", "parallax"]
         units = [outputCoordUnit, outputCoordUnit, outputPMUnit, outputPMUnit, outputPMUnit]
         k = 0
         for i, pi in enumerate(positionParameters):
             for j, pj in enumerate(positionParameters):
                 if i == j:
-                    cov[:, k] = (refCat[f'{pi}Err']**2 * inputUnit**2).to_value(units[j] * units[j])
+                    cov[:, k] = (refCat[f"{pi}Err"] ** 2 * inputUnit**2).to_value(units[j] * units[j])
                 elif i > j:
-                    cov[:, k] = (refCat[f'{pj}_{pi}_Cov'] * inputUnit**2).to_value(units[i] * units[j])
+                    cov[:, k] = (refCat[f"{pj}_{pi}_Cov"] * inputUnit**2).to_value(units[i] * units[j])
                 else:
-                    cov[:, k] = (refCat[f'{pi}_{pj}_Cov'] * inputUnit**2).to_value(units[i] * units[j])
+                    cov[:, k] = (refCat[f"{pi}_{pj}_Cov"] * inputUnit**2).to_value(units[i] * units[j])
 
                 k += 1
     return cov
@@ -138,14 +141,14 @@ def _convert_to_ast_polymap_coefficients(coefficients):
     N = len(coefficients) / 2
     # Get the degree of the polynomial by applying the quadratic formula to the
     # formula for calculating the number of coefficients of the polynomial.
-    degree = int(-1.5 + 0.5 * (1 + 8 * N)**0.5)
+    degree = int(-1.5 + 0.5 * (1 + 8 * N) ** 0.5)
 
     for outVar in [1, 2]:
         for i in range(degree + 1):
             for j in range(degree + 1):
                 if (i + j) > degree:
                     continue
-                vectorIndex = int(((i+j)*(i+j+1))/2+j + N * (outVar - 1))
+                vectorIndex = int(((i + j) * (i + j + 1)) / 2 + j + N * (outVar - 1))
                 polyArray[vectorIndex, 0] = coefficients[vectorIndex]
                 polyArray[vectorIndex, 1] = outVar
                 polyArray[vectorIndex, 2] = i
@@ -169,197 +172,198 @@ def _get_wcs_from_sip(butlerWcs):
         WCS object in TPV format.
     """
     fits_metadata = butlerWcs.getFitsMetadata()
-    if not ((fits_metadata.get('CTYPE1') == 'RA---TAN-SIP')
-            and (fits_metadata.get('CTYPE2') == 'DEC--TAN-SIP')):
-        raise ValueError(f"CTYPES {fits_metadata.get('CTYPE1')} and {fits_metadata.get('CTYPE2')}"
-                         "do not match SIP convention")
+    if not (
+        (fits_metadata.get("CTYPE1") == "RA---TAN-SIP") and (fits_metadata.get("CTYPE2") == "DEC--TAN-SIP")
+    ):
+        raise ValueError(
+            f"CTYPES {fits_metadata.get('CTYPE1')} and {fits_metadata.get('CTYPE2')}"
+            "do not match SIP convention"
+        )
 
     # Correct CRPIX values to correspond to source table pixel indexing
     # convention
-    crpix1 = fits_metadata.get('CRPIX1')
-    crpix2 = fits_metadata.get('CRPIX2')
-    fits_metadata.set('CRPIX1', crpix1 - 1)
-    fits_metadata.set('CRPIX2', crpix2 - 1)
+    crpix1 = fits_metadata.get("CRPIX1")
+    crpix2 = fits_metadata.get("CRPIX2")
+    fits_metadata.set("CRPIX1", crpix1 - 1)
+    fits_metadata.set("CRPIX2", crpix2 - 1)
 
     floatDict = {k: fits_metadata[k] for k in fits_metadata if isinstance(fits_metadata[k], (int, float))}
 
-    wcs = wcsfit.readTPVFromSIP(floatDict, 'SIP')
+    wcs = wcsfit.readTPVFromSIP(floatDict, "SIP")
 
     return wcs
 
 
-class GbdesAstrometricFitConnections(pipeBase.PipelineTaskConnections,
-                                     dimensions=('skymap', 'tract', 'instrument', 'physical_filter')):
+class GbdesAstrometricFitConnections(
+    pipeBase.PipelineTaskConnections, dimensions=("skymap", "tract", "instrument", "physical_filter")
+):
     """Middleware input/output connections for task data."""
+
     inputCatalogRefs = pipeBase.connectionTypes.Input(
         doc="Source table in parquet format, per visit.",
-        name='preSourceTable_visit',
-        storageClass='DataFrame',
-        dimensions=('instrument', 'visit'),
+        name="preSourceTable_visit",
+        storageClass="DataFrame",
+        dimensions=("instrument", "visit"),
         deferLoad=True,
         multiple=True,
     )
     inputVisitSummaries = pipeBase.connectionTypes.Input(
-        doc=("Per-visit consolidated exposure metadata built from calexps. "
-             "These catalogs use detector id for the id and must be sorted for "
-             "fast lookups of a detector."),
-        name='visitSummary',
-        storageClass='ExposureCatalog',
-        dimensions=('instrument', 'visit'),
+        doc=(
+            "Per-visit consolidated exposure metadata built from calexps. "
+            "These catalogs use detector id for the id and must be sorted for "
+            "fast lookups of a detector."
+        ),
+        name="visitSummary",
+        storageClass="ExposureCatalog",
+        dimensions=("instrument", "visit"),
         multiple=True,
     )
     referenceCatalog = pipeBase.connectionTypes.PrerequisiteInput(
         doc="The astrometry reference catalog to match to loaded input catalog sources.",
-        name='gaia_dr3_20230707',
-        storageClass='SimpleCatalog',
-        dimensions=('skypix',),
+        name="gaia_dr3_20230707",
+        storageClass="SimpleCatalog",
+        dimensions=("skypix",),
         deferLoad=True,
         multiple=True,
     )
     outputWcs = pipeBase.connectionTypes.Output(
-        doc=("Per-tract, per-visit world coordinate systems derived from the fitted model."
-             " These catalogs only contain entries for detectors with an output, and use"
-             " the detector id for the catalog id, sorted on id for fast lookups of a detector."),
-        name='gbdesAstrometricFitSkyWcsCatalog',
-        storageClass='ExposureCatalog',
-        dimensions=('instrument', 'visit', 'skymap', 'tract'),
-        multiple=True
+        doc=(
+            "Per-tract, per-visit world coordinate systems derived from the fitted model."
+            " These catalogs only contain entries for detectors with an output, and use"
+            " the detector id for the catalog id, sorted on id for fast lookups of a detector."
+        ),
+        name="gbdesAstrometricFitSkyWcsCatalog",
+        storageClass="ExposureCatalog",
+        dimensions=("instrument", "visit", "skymap", "tract"),
+        multiple=True,
     )
     outputCatalog = pipeBase.connectionTypes.Output(
-        doc=("Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
-             "plane coordinates and chisq values."),
-        name='gbdesAstrometricFit_fitStars',
-        storageClass='ArrowNumpyDict',
-        dimensions=('instrument', 'skymap', 'tract', 'physical_filter'),
+        doc=(
+            "Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
+            "plane coordinates and chisq values."
+        ),
+        name="gbdesAstrometricFit_fitStars",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     starCatalog = pipeBase.connectionTypes.Output(
         doc="Star catalog.",
-        name='gbdesAstrometricFit_starCatalog',
-        storageClass='ArrowNumpyDict',
-        dimensions=('instrument', 'skymap', 'tract', 'physical_filter')
+        name="gbdesAstrometricFit_starCatalog",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
 
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
 
 
-class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
-                                pipelineConnections=GbdesAstrometricFitConnections):
+class GbdesAstrometricFitConfig(
+    pipeBase.PipelineTaskConfig, pipelineConnections=GbdesAstrometricFitConnections
+):
     """Configuration for GbdesAstrometricFitTask"""
+
     sourceSelector = sourceSelectorRegistry.makeField(
-        doc="How to select sources for cross-matching.",
-        default='science'
+        doc="How to select sources for cross-matching.", default="science"
     )
     referenceSelector = pexConfig.ConfigurableField(
         target=ReferenceSourceSelectorTask,
         doc="How to down-select the loaded astrometry reference catalog.",
     )
     matchRadius = pexConfig.Field(
-        doc="Matching tolerance between associated objects (arcseconds).",
-        dtype=float,
-        default=1.0
+        doc="Matching tolerance between associated objects (arcseconds).", dtype=float, default=1.0
     )
     minMatches = pexConfig.Field(
-        doc="Number of matches required to keep a source object.",
-        dtype=int,
-        default=2
+        doc="Number of matches required to keep a source object.", dtype=int, default=2
     )
     allowSelfMatches = pexConfig.Field(
         doc="Allow multiple sources from the same visit to be associated with the same object.",
         dtype=bool,
-        default=False
+        default=False,
     )
     sourceFluxType = pexConfig.Field(
         dtype=str,
         doc="Source flux field to use in source selection and to get fluxes from the catalog.",
-        default='apFlux_12_0'
+        default="apFlux_12_0",
     )
     systematicError = pexConfig.Field(
         dtype=float,
-        doc=("Systematic error padding added in quadrature for the science catalogs (marcsec). The default"
-             "value is equivalent to 0.02 pixels for HSC."),
-        default=0.0034
+        doc=(
+            "Systematic error padding added in quadrature for the science catalogs (marcsec). The default"
+            "value is equivalent to 0.02 pixels for HSC."
+        ),
+        default=0.0034,
     )
     referenceSystematicError = pexConfig.Field(
         dtype=float,
         doc="Systematic error padding added in quadrature for the reference catalog (marcsec).",
-        default=0.0
+        default=0.0,
     )
     modelComponents = pexConfig.ListField(
         dtype=str,
-        doc=("List of mappings to apply to transform from pixels to sky, in order of their application."
-             "Supported options are 'INSTRUMENT/DEVICE' and 'EXPOSURE'."),
-        default=['INSTRUMENT/DEVICE', 'EXPOSURE']
+        doc=(
+            "List of mappings to apply to transform from pixels to sky, in order of their application."
+            "Supported options are 'INSTRUMENT/DEVICE' and 'EXPOSURE'."
+        ),
+        default=["INSTRUMENT/DEVICE", "EXPOSURE"],
     )
     deviceModel = pexConfig.ListField(
         dtype=str,
-        doc=("List of mappings to apply to transform from detector pixels to intermediate frame. Map names"
-             "should match the format 'BAND/DEVICE/<map name>'."),
-        default=['BAND/DEVICE/poly']
+        doc=(
+            "List of mappings to apply to transform from detector pixels to intermediate frame. Map names"
+            "should match the format 'BAND/DEVICE/<map name>'."
+        ),
+        default=["BAND/DEVICE/poly"],
     )
     exposureModel = pexConfig.ListField(
         dtype=str,
-        doc=("List of mappings to apply to transform from intermediate frame to sky coordinates. Map names"
-             "should match the format 'EXPOSURE/<map name>'."),
-        default=['EXPOSURE/poly']
+        doc=(
+            "List of mappings to apply to transform from intermediate frame to sky coordinates. Map names"
+            "should match the format 'EXPOSURE/<map name>'."
+        ),
+        default=["EXPOSURE/poly"],
     )
-    devicePolyOrder = pexConfig.Field(
-        dtype=int,
-        doc="Order of device polynomial model.",
-        default=4
-    )
-    exposurePolyOrder = pexConfig.Field(
-        dtype=int,
-        doc="Order of exposure polynomial model.",
-        default=6
-    )
-    fitProperMotion = pexConfig.Field(
-        dtype=bool,
-        doc="Fit the proper motions of the objects.",
-        default=False
-    )
+    devicePolyOrder = pexConfig.Field(dtype=int, doc="Order of device polynomial model.", default=4)
+    exposurePolyOrder = pexConfig.Field(dtype=int, doc="Order of exposure polynomial model.", default=6)
+    fitProperMotion = pexConfig.Field(dtype=bool, doc="Fit the proper motions of the objects.", default=False)
     excludeNonPMObjects = pexConfig.Field(
-        dtype=bool,
-        doc="Exclude reference objects without proper motion/parallax information.",
-        default=True
+        dtype=bool, doc="Exclude reference objects without proper motion/parallax information.", default=True
     )
     fitReserveFraction = pexConfig.Field(
-        dtype=float,
-        default=0.2,
-        doc="Fraction of objects to reserve from fit for validation."
+        dtype=float, default=0.2, doc="Fraction of objects to reserve from fit for validation."
     )
     fitReserveRandomSeed = pexConfig.Field(
         dtype=int,
         doc="Set the random seed for selecting data points to reserve from the fit for validation.",
-        default=1234
+        default=1234,
     )
 
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
         # depend on seeing.
-        self.sourceSelector['science'].doUnresolved = True
-        self.sourceSelector['science'].unresolved.name = 'extendedness'
+        self.sourceSelector["science"].doUnresolved = True
+        self.sourceSelector["science"].unresolved.name = "extendedness"
 
         # Use only isolated sources.
-        self.sourceSelector['science'].doIsolated = True
-        self.sourceSelector['science'].isolated.parentName = 'parentSourceId'
-        self.sourceSelector['science'].isolated.nChildName = 'deblend_nChild'
+        self.sourceSelector["science"].doIsolated = True
+        self.sourceSelector["science"].isolated.parentName = "parentSourceId"
+        self.sourceSelector["science"].isolated.nChildName = "deblend_nChild"
         # Do not use either flux or centroid measurements with flags,
         # chosen from the usual QA flags for stars.
-        self.sourceSelector['science'].doFlags = True
-        badFlags = ['pixelFlags_edge',
-                    'pixelFlags_saturated',
-                    'pixelFlags_interpolatedCenter',
-                    'pixelFlags_interpolated',
-                    'pixelFlags_crCenter',
-                    'pixelFlags_bad',
-                    'hsmPsfMoments_flag',
-                    f'{self.sourceFluxType}_flag',
-                    ]
-        self.sourceSelector['science'].flags.bad = badFlags
+        self.sourceSelector["science"].doFlags = True
+        badFlags = [
+            "pixelFlags_edge",
+            "pixelFlags_saturated",
+            "pixelFlags_interpolatedCenter",
+            "pixelFlags_interpolated",
+            "pixelFlags_crCenter",
+            "pixelFlags_bad",
+            "hsmPsfMoments_flag",
+            f"{self.sourceFluxType}_flag",
+        ]
+        self.sourceSelector["science"].flags.bad = badFlags
 
         # Use only primary sources.
-        self.sourceSelector['science'].doRequirePrimary = True
+        self.sourceSelector["science"].doRequirePrimary = True
 
     def validate(self):
         super().validate()
@@ -367,14 +371,20 @@ class GbdesAstrometricFitConfig(pipeBase.PipelineTaskConfig,
         # Check if all components of the device and exposure models are
         # supported.
         for component in self.deviceModel:
-            if not (('poly' in component.lower()) or ('identity' in component.lower())):
-                raise pexConfig.FieldValidationError(GbdesAstrometricFitConfig.deviceModel, self,
-                                                     f'deviceModel component {component} is not supported.')
+            if not (("poly" in component.lower()) or ("identity" in component.lower())):
+                raise pexConfig.FieldValidationError(
+                    GbdesAstrometricFitConfig.deviceModel,
+                    self,
+                    f"deviceModel component {component} is not supported.",
+                )
 
         for component in self.exposureModel:
-            if not (('poly' in component.lower()) or ('identity' in component.lower())):
-                raise pexConfig.FieldValidationError(GbdesAstrometricFitConfig.exposureModel, self,
-                                                     f'exposureModel component {component} is not supported.')
+            if not (("poly" in component.lower()) or ("identity" in component.lower())):
+                raise pexConfig.FieldValidationError(
+                    GbdesAstrometricFitConfig.exposureModel,
+                    self,
+                    f"exposureModel component {component} is not supported.",
+                )
 
 
 class GbdesAstrometricFitTask(pipeBase.PipelineTask):
@@ -383,52 +393,55 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
     """
 
     ConfigClass = GbdesAstrometricFitConfig
-    _DefaultName = 'gbdesAstrometricFit'
+    _DefaultName = "gbdesAstrometricFit"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.makeSubtask('sourceSelector')
-        self.makeSubtask('referenceSelector')
+        self.makeSubtask("sourceSelector")
+        self.makeSubtask("referenceSelector")
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # We override runQuantum to set up the refObjLoaders
         inputs = butlerQC.get(inputRefs)
 
-        instrumentName = butlerQC.quantum.dataId['instrument']
+        instrumentName = butlerQC.quantum.dataId["instrument"]
 
         # Ensure the inputs are in a consistent order
-        inputCatVisits = np.array([inputCat.dataId['visit'] for inputCat in inputs['inputCatalogRefs']])
-        inputs['inputCatalogRefs'] = [inputs['inputCatalogRefs'][v] for v in inputCatVisits.argsort()]
-        inputSumVisits = np.array([inputSum[0]['visit'] for inputSum in inputs['inputVisitSummaries']])
-        inputs['inputVisitSummaries'] = [inputs['inputVisitSummaries'][v] for v in inputSumVisits.argsort()]
-        inputRefHtm7s = np.array([inputRefCat.dataId['htm7'] for inputRefCat in inputRefs.referenceCatalog])
+        inputCatVisits = np.array([inputCat.dataId["visit"] for inputCat in inputs["inputCatalogRefs"]])
+        inputs["inputCatalogRefs"] = [inputs["inputCatalogRefs"][v] for v in inputCatVisits.argsort()]
+        inputSumVisits = np.array([inputSum[0]["visit"] for inputSum in inputs["inputVisitSummaries"]])
+        inputs["inputVisitSummaries"] = [inputs["inputVisitSummaries"][v] for v in inputSumVisits.argsort()]
+        inputRefHtm7s = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputRefs.referenceCatalog])
         inputRefCatRefs = [inputRefs.referenceCatalog[htm7] for htm7 in inputRefHtm7s.argsort()]
-        inputRefCats = np.array([inputRefCat.dataId['htm7'] for inputRefCat in inputs['referenceCatalog']])
-        inputs['referenceCatalog'] = [inputs['referenceCatalog'][v] for v in inputRefCats.argsort()]
+        inputRefCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputs["referenceCatalog"]])
+        inputs["referenceCatalog"] = [inputs["referenceCatalog"][v] for v in inputRefCats.argsort()]
 
-        sampleRefCat = inputs['referenceCatalog'][0].get()
-        refEpoch = sampleRefCat[0]['epoch']
+        sampleRefCat = inputs["referenceCatalog"][0].get()
+        refEpoch = sampleRefCat[0]["epoch"]
 
         refConfig = LoadReferenceObjectsConfig()
-        refConfig.anyFilterMapsToThis = 'phot_g_mean'
+        refConfig.anyFilterMapsToThis = "phot_g_mean"
         refConfig.requireProperMotion = True
-        refObjectLoader = ReferenceObjectLoader(dataIds=[ref.datasetRef.dataId
-                                                         for ref in inputRefCatRefs],
-                                                refCats=inputs.pop('referenceCatalog'),
-                                                config=refConfig,
-                                                log=self.log)
+        refObjectLoader = ReferenceObjectLoader(
+            dataIds=[ref.datasetRef.dataId for ref in inputRefCatRefs],
+            refCats=inputs.pop("referenceCatalog"),
+            config=refConfig,
+            log=self.log,
+        )
 
-        output = self.run(**inputs, instrumentName=instrumentName, refEpoch=refEpoch,
-                          refObjectLoader=refObjectLoader)
+        output = self.run(
+            **inputs, instrumentName=instrumentName, refEpoch=refEpoch, refObjectLoader=refObjectLoader
+        )
 
         for outputRef in outputRefs.outputWcs:
-            visit = outputRef.dataId['visit']
+            visit = outputRef.dataId["visit"]
             butlerQC.put(output.outputWCSs[visit], outputRef)
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
 
-    def run(self, inputCatalogRefs, inputVisitSummaries, instrumentName="", refEpoch=None,
-            refObjectLoader=None):
+    def run(
+        self, inputCatalogRefs, inputVisitSummaries, instrumentName="", refEpoch=None, refObjectLoader=None
+    ):
         """Run the WCS fit for a given set of visits
 
         Parameters
@@ -462,8 +475,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         instrument = wcsfit.Instrument(instrumentName)
 
         # Get RA, Dec, MJD, etc., for the input visits
-        exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(inputVisitSummaries,
-                                                                               instrument)
+        exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(
+            inputVisitSummaries, instrument
+        )
 
         # Get information about the extent of the input visits
         fields, fieldCenter, fieldRadius = self._prep_sky(inputVisitSummaries, exposureInfo.medianEpoch)
@@ -471,18 +485,24 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self.log.info("Load catalogs and associate sources")
         # Set up class to associate sources into matches using a
         # friends-of-friends algorithm
-        associations = wcsfit.FoFClass(fields, [instrument], exposuresHelper,
-                                       [fieldRadius.asDegrees()],
-                                       (self.config.matchRadius * u.arcsec).to(u.degree).value)
+        associations = wcsfit.FoFClass(
+            fields,
+            [instrument],
+            exposuresHelper,
+            [fieldRadius.asDegrees()],
+            (self.config.matchRadius * u.arcsec).to(u.degree).value,
+        )
 
         # Add the reference catalog to the associator
-        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format='decimalyear').mjd
-        refObjects, refCovariance = self._load_refcat(associations, refObjectLoader, fieldCenter, fieldRadius,
-                                                      extensionInfo, epoch=medianEpoch)
+        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="decimalyear").mjd
+        refObjects, refCovariance = self._load_refcat(
+            associations, refObjectLoader, fieldCenter, fieldRadius, extensionInfo, epoch=medianEpoch
+        )
 
         # Add the science catalogs and associate new sources as they are added
-        sourceIndices, usedColumns = self._load_catalogs_and_associate(associations, inputCatalogRefs,
-                                                                       extensionInfo)
+        sourceIndices, usedColumns = self._load_catalogs_and_associate(
+            associations, inputCatalogRefs, extensionInfo
+        )
 
         self.log.info("Fit the WCSs")
         # Set up a YAML-type string using the config variables and a sample
@@ -501,33 +521,42 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             verbose = 2
 
         # Set up the WCS-fitting class using the results of the FOF associator
-        wcsf = wcsfit.WCSFit(fields, [instrument], exposuresHelper,
-                             extensionInfo.visitIndex, extensionInfo.detectorIndex,
-                             inputYAML, extensionInfo.wcs, associations.sequence, associations.extn,
-                             associations.obj, sysErr=self.config.systematicError,
-                             refSysErr=self.config.referenceSystematicError,
-                             usePM=self.config.fitProperMotion,
-                             verbose=verbose)
+        wcsf = wcsfit.WCSFit(
+            fields,
+            [instrument],
+            exposuresHelper,
+            extensionInfo.visitIndex,
+            extensionInfo.detectorIndex,
+            inputYAML,
+            extensionInfo.wcs,
+            associations.sequence,
+            associations.extn,
+            associations.obj,
+            sysErr=self.config.systematicError,
+            refSysErr=self.config.referenceSystematicError,
+            usePM=self.config.fitProperMotion,
+            verbose=verbose,
+        )
 
         # Add the science and reference sources
         self._add_objects(wcsf, inputCatalogRefs, sourceIndices, extensionInfo, usedColumns)
         self._add_ref_objects(wcsf, refObjects, refCovariance, extensionInfo)
 
         # Do the WCS fit
-        wcsf.fit(reserveFraction=self.config.fitReserveFraction,
-                 randomNumberSeed=self.config.fitReserveRandomSeed)
+        wcsf.fit(
+            reserveFraction=self.config.fitReserveFraction, randomNumberSeed=self.config.fitReserveRandomSeed
+        )
         self.log.info("WCS fitting done")
 
         outputWCSs = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo)
         outputCatalog = wcsf.getOutputCatalog()
         starCatalog = wcsf.getStarCatalog()
 
-        return pipeBase.Struct(outputWCSs=outputWCSs,
-                               fitModel=wcsf,
-                               outputCatalog=outputCatalog,
-                               starCatalog=starCatalog)
+        return pipeBase.Struct(
+            outputWCSs=outputWCSs, fitModel=wcsf, outputCatalog=outputCatalog, starCatalog=starCatalog
+        )
 
-    def _prep_sky(self, inputVisitSummaries, epoch, fieldName='Field'):
+    def _prep_sky(self, inputVisitSummaries, epoch, fieldName="Field"):
         """Get center and radius of the input tract. This assumes that all
         visits will be put into the same `wcsfit.Field` and fit together.
 
@@ -551,8 +580,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         """
         allDetectorCorners = []
         for visSum in inputVisitSummaries:
-            detectorCorners = [lsst.geom.SpherePoint(ra, dec, lsst.geom.degrees).getVector() for (ra, dec)
-                               in zip(visSum['raCorners'].ravel(), visSum['decCorners'].ravel())]
+            detectorCorners = [
+                lsst.geom.SpherePoint(ra, dec, lsst.geom.degrees).getVector()
+                for (ra, dec) in zip(visSum["raCorners"].ravel(), visSum["decCorners"].ravel())
+            ]
             allDetectorCorners.extend(detectorCorners)
         boundingCircle = lsst.sphgeom.ConvexPolygon.convexHull(allDetectorCorners).getBoundingCircle()
         center = lsst.geom.SpherePoint(boundingCircle.getCenter())
@@ -566,8 +597,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         return fields, center, radius
 
-    def _get_exposure_info(self, inputVisitSummaries, instrument, fieldNumber=0, instrumentNumber=0,
-                           refEpoch=None):
+    def _get_exposure_info(
+        self, inputVisitSummaries, instrument, fieldNumber=0, instrumentNumber=0, refEpoch=None
+    ):
         """Get various information about the input visits to feed to the
         fitting routines.
 
@@ -636,7 +668,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         # Get information for all the science visits
         for v, visitSummary in enumerate(inputVisitSummaries):
             visitInfo = visitSummary[0].getVisitInfo()
-            visit = visitSummary[0]['visit']
+            visit = visitSummary[0]["visit"]
             visits.append(visit)
             exposureNames.append(str(visit))
             raDec = visitInfo.getBoresightRaDec()
@@ -652,17 +684,18 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             obsLat = visitInfo.observatory.getLatitude().asDegrees()
             obsElev = visitInfo.observatory.getElevation()
             earthLocation = astropy.coordinates.EarthLocation.from_geodetic(obsLon, obsLat, obsElev)
-            observatory_gcrs = earthLocation.get_gcrs(astropy.time.Time(obsMJD, format='mjd'))
+            observatory_gcrs = earthLocation.get_gcrs(astropy.time.Time(obsMJD, format="mjd"))
             observatory_icrs = observatory_gcrs.transform_to(astropy.coordinates.ICRS())
             # We want the position in AU in Cartesian coordinates
             observatories.append(observatory_icrs.cartesian.xyz.to(u.AU).value)
 
             for row in visitSummary:
-                detector = row['id']
+                detector = row["id"]
                 if detector not in detectors:
                     detectors.append(detector)
-                    detectorBounds = wcsfit.Bounds(row['bbox_min_x'], row['bbox_max_x'],
-                                                   row['bbox_min_y'], row['bbox_max_y'])
+                    detectorBounds = wcsfit.Bounds(
+                        row["bbox_min_x"], row["bbox_max_x"], row["bbox_min_y"], row["bbox_max_y"]
+                    )
                     instrument.addDevice(str(detector), detectorBounds)
 
                 detectorIndex = np.flatnonzero(detector == np.array(detectors))[0]
@@ -670,7 +703,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 extensionDetectorIndices.append(detectorIndex)
                 extensionVisits.append(visit)
                 extensionDetectors.append(detector)
-                extensionType.append('SCIENCE')
+                extensionType.append("SCIENCE")
 
                 wcs = row.getWcs()
                 wcss.append(_get_wcs_from_sip(wcs))
@@ -681,11 +714,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         # Set the reference epoch to be the median of the science visits.
         # The reference catalog will be shifted to this date.
         medianMJD = np.median(mjds)
-        medianEpoch = astropy.time.Time(medianMJD, format='mjd').decimalyear
+        medianEpoch = astropy.time.Time(medianMJD, format="mjd").decimalyear
 
         # Add information for the reference catalog. Most of the values are
         # not used.
-        exposureNames.append('REFERENCE')
+        exposureNames.append("REFERENCE")
         visits.append(-1)
         fieldNumbers.append(0)
         if self.config.fitProperMotion:
@@ -700,44 +733,47 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         observatories.append(np.array([0, 0, 0]))
         identity = wcsfit.IdentityMap()
         icrs = wcsfit.SphericalICRS()
-        refWcs = wcsfit.Wcs(identity, icrs, 'Identity', np.pi / 180.)
+        refWcs = wcsfit.Wcs(identity, icrs, "Identity", np.pi / 180.0)
         wcss.append(refWcs)
 
         extensionVisitIndices.append(len(exposureNames) - 1)
         extensionDetectorIndices.append(-1)  # REFERENCE device must be -1
         extensionVisits.append(-1)
         extensionDetectors.append(-1)
-        extensionType.append('REFERENCE')
+        extensionType.append("REFERENCE")
 
         # Make a table of information to use elsewhere in the class
-        extensionInfo = pipeBase.Struct(visit=np.array(extensionVisits),
-                                        detector=np.array(extensionDetectors),
-                                        visitIndex=np.array(extensionVisitIndices),
-                                        detectorIndex=np.array(extensionDetectorIndices),
-                                        wcs=np.array(wcss),
-                                        extensionType=np.array(extensionType))
+        extensionInfo = pipeBase.Struct(
+            visit=np.array(extensionVisits),
+            detector=np.array(extensionDetectors),
+            visitIndex=np.array(extensionVisitIndices),
+            detectorIndex=np.array(extensionDetectorIndices),
+            wcs=np.array(wcss),
+            extensionType=np.array(extensionType),
+        )
 
         # Make the exposureHelper object to use in the fitting routines
-        exposuresHelper = wcsfit.ExposuresHelper(exposureNames,
-                                                 fieldNumbers,
-                                                 instrumentNumbers,
-                                                 ras,
-                                                 decs,
-                                                 airmasses,
-                                                 exposureTimes,
-                                                 mjds,
-                                                 observatories)
+        exposuresHelper = wcsfit.ExposuresHelper(
+            exposureNames,
+            fieldNumbers,
+            instrumentNumbers,
+            ras,
+            decs,
+            airmasses,
+            exposureTimes,
+            mjds,
+            observatories,
+        )
 
-        exposureInfo = pipeBase.Struct(visits=visits,
-                                       detectors=detectors,
-                                       ras=ras,
-                                       decs=decs,
-                                       medianEpoch=medianEpoch)
+        exposureInfo = pipeBase.Struct(
+            visits=visits, detectors=detectors, ras=ras, decs=decs, medianEpoch=medianEpoch
+        )
 
         return exposureInfo, exposuresHelper, extensionInfo
 
-    def _load_refcat(self, associations, refObjectLoader, center, radius, extensionInfo, epoch=None,
-                     fieldIndex=0):
+    def _load_refcat(
+        self, associations, refObjectLoader, center, radius, extensionInfo, epoch=None, fieldIndex=0
+    ):
         """Load the reference catalog and add reference objects to the
         `wcsfit.FoFClass` object.
 
@@ -766,7 +802,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refCovariance : `list` of `float`
             Flattened output covariance matrix.
         """
-        formattedEpoch = astropy.time.Time(epoch, format='mjd')
+        formattedEpoch = astropy.time.Time(epoch, format="mjd")
 
         refFilter = refObjectLoader.config.anyFilterMapsToThis
         skyCircle = refObjectLoader.loadSkyCircle(center, radius, refFilter, epoch=formattedEpoch)
@@ -779,54 +815,68 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             refCat = selected.sourceCat
 
         # In Gaia DR3, missing values are denoted by NaNs.
-        finiteInd = np.isfinite(refCat['coord_ra']) & np.isfinite(refCat['coord_dec'])
+        finiteInd = np.isfinite(refCat["coord_ra"]) & np.isfinite(refCat["coord_dec"])
         refCat = refCat[finiteInd]
 
         if self.config.excludeNonPMObjects:
             # Gaia DR2 has zeros for missing data, while Gaia DR3 has NaNs:
-            hasPM = ((refCat['pm_raErr'] != 0) & np.isfinite(refCat['pm_raErr'])
-                     & np.isfinite(refCat['pm_decErr']))
+            hasPM = (
+                (refCat["pm_raErr"] != 0) & np.isfinite(refCat["pm_raErr"]) & np.isfinite(refCat["pm_decErr"])
+            )
             refCat = refCat[hasPM]
 
-        ra = (refCat['coord_ra'] * u.radian).to(u.degree).to_value().tolist()
-        dec = (refCat['coord_dec'] * u.radian).to(u.degree).to_value().tolist()
-        raCov = ((refCat['coord_raErr'] * u.radian).to(u.degree).to_value()**2).tolist()
-        decCov = ((refCat['coord_decErr'] * u.radian).to(u.degree).to_value()**2).tolist()
+        ra = (refCat["coord_ra"] * u.radian).to(u.degree).to_value().tolist()
+        dec = (refCat["coord_dec"] * u.radian).to(u.degree).to_value().tolist()
+        raCov = ((refCat["coord_raErr"] * u.radian).to(u.degree).to_value() ** 2).tolist()
+        decCov = ((refCat["coord_decErr"] * u.radian).to(u.degree).to_value() ** 2).tolist()
 
         # Get refcat version from refcat metadata
         refCatMetadata = refObjectLoader.refCats[0].get().getMetadata()
-        refCatVersion = refCatMetadata['REFCAT_FORMAT_VERSION']
+        refCatVersion = refCatMetadata["REFCAT_FORMAT_VERSION"]
         if refCatVersion == 2:
-            raDecCov = (refCat['coord_ra_coord_dec_Cov'] * u.radian**2).to(u.degree**2).to_value().tolist()
+            raDecCov = (
+                (refCat["coord_ra_coord_dec_Cov"] * u.radian**2).to(u.degree**2).to_value().tolist()
+            )
         else:
             raDecCov = np.zeros(len(ra))
 
-        refObjects = {'ra': ra, 'dec': dec, 'raCov': raCov, 'decCov': decCov, 'raDecCov': raDecCov}
+        refObjects = {"ra": ra, "dec": dec, "raCov": raCov, "decCov": decCov, "raDecCov": raDecCov}
         refCovariance = []
 
         if self.config.fitProperMotion:
-            raPM = (refCat['pm_ra'] * u.radian).to(u.marcsec).to_value().tolist()
-            decPM = (refCat['pm_dec'] * u.radian).to(u.marcsec).to_value().tolist()
-            parallax = (refCat['parallax'] * u.radian).to(u.marcsec).to_value().tolist()
+            raPM = (refCat["pm_ra"] * u.radian).to(u.marcsec).to_value().tolist()
+            decPM = (refCat["pm_dec"] * u.radian).to(u.marcsec).to_value().tolist()
+            parallax = (refCat["parallax"] * u.radian).to(u.marcsec).to_value().tolist()
             cov = _make_ref_covariance_matrix(refCat, version=refCatVersion)
-            pmDict = {'raPM': raPM, 'decPM': decPM, 'parallax': parallax}
+            pmDict = {"raPM": raPM, "decPM": decPM, "parallax": parallax}
             refObjects.update(pmDict)
             refCovariance = cov
 
-        extensionIndex = np.flatnonzero(extensionInfo.extensionType == 'REFERENCE')[0]
+        extensionIndex = np.flatnonzero(extensionInfo.extensionType == "REFERENCE")[0]
         visitIndex = extensionInfo.visitIndex[extensionIndex]
         detectorIndex = extensionInfo.detectorIndex[extensionIndex]
         instrumentIndex = -1  # -1 indicates the reference catalog
         refWcs = extensionInfo.wcs[extensionIndex]
 
-        associations.addCatalog(refWcs, 'STELLAR', visitIndex, fieldIndex, instrumentIndex, detectorIndex,
-                                extensionIndex, np.ones(len(refCat), dtype=bool),
-                                ra, dec, np.arange(len(ra)))
+        associations.addCatalog(
+            refWcs,
+            "STELLAR",
+            visitIndex,
+            fieldIndex,
+            instrumentIndex,
+            detectorIndex,
+            extensionIndex,
+            np.ones(len(refCat), dtype=bool),
+            ra,
+            dec,
+            np.arange(len(ra)),
+        )
 
         return refObjects, refCovariance
 
-    def _load_catalogs_and_associate(self, associations, inputCatalogRefs, extensionInfo,
-                                     fieldIndex=0, instrumentIndex=0):
+    def _load_catalogs_and_associate(
+        self, associations, inputCatalogRefs, extensionInfo, fieldIndex=0, instrumentIndex=0
+    ):
         """Load the science catalogs and add the sources to the associator
         class `wcsfit.FoFClass`, associating them into matches as you go.
 
@@ -853,8 +903,19 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         columns : `list` of `str`
             List of columns needed from source tables.
         """
-        columns = ['detector', 'sourceId', 'x', 'xErr', 'y', 'yErr', 'ixx', 'iyy', 'ixy',
-                   f'{self.config.sourceFluxType}_instFlux', f'{self.config.sourceFluxType}_instFluxErr']
+        columns = [
+            "detector",
+            "sourceId",
+            "x",
+            "xErr",
+            "y",
+            "yErr",
+            "ixx",
+            "iyy",
+            "ixy",
+            f"{self.config.sourceFluxType}_instFlux",
+            f"{self.config.sourceFluxType}_instFluxErr",
+        ]
         if self.sourceSelector.config.doFlags:
             columns.extend(self.sourceSelector.config.flags.bad)
         if self.sourceSelector.config.doUnresolved:
@@ -867,25 +928,27 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         sourceIndices = [None] * len(extensionInfo.visit)
         for inputCatalogRef in inputCatalogRefs:
-            visit = inputCatalogRef.dataId['visit']
-            inputCatalog = inputCatalogRef.get(parameters={'columns': columns})
+            visit = inputCatalogRef.dataId["visit"]
+            inputCatalog = inputCatalogRef.get(parameters={"columns": columns})
             # Get a sorted array of detector names
-            detectors = np.unique(inputCatalog['detector'])
+            detectors = np.unique(inputCatalog["detector"])
 
             for detector in detectors:
-                detectorSources = inputCatalog[inputCatalog['detector'] == detector]
-                xCov = detectorSources['xErr']**2
-                yCov = detectorSources['yErr']**2
-                xyCov = (detectorSources['ixy'] * (xCov + yCov)
-                         / (detectorSources['ixx'] + detectorSources['iyy']))
+                detectorSources = inputCatalog[inputCatalog["detector"] == detector]
+                xCov = detectorSources["xErr"] ** 2
+                yCov = detectorSources["yErr"] ** 2
+                xyCov = (
+                    detectorSources["ixy"] * (xCov + yCov) / (detectorSources["ixx"] + detectorSources["iyy"])
+                )
                 # Remove sources with bad shape measurements
                 goodShapes = xyCov**2 <= (xCov * yCov)
                 selected = self.sourceSelector.run(detectorSources)
                 goodInds = selected.selected & goodShapes
 
                 isStar = np.ones(goodInds.sum())
-                extensionIndex = np.flatnonzero((extensionInfo.visit == visit)
-                                                & (extensionInfo.detector == detector))[0]
+                extensionIndex = np.flatnonzero(
+                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                )[0]
                 detectorIndex = extensionInfo.detectorIndex[extensionIndex]
                 visitIndex = extensionInfo.visitIndex[extensionIndex]
 
@@ -894,14 +957,23 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 wcs = extensionInfo.wcs[extensionIndex]
                 associations.reprojectWCS(wcs, fieldIndex)
 
-                associations.addCatalog(wcs, 'STELLAR', visitIndex, fieldIndex,
-                                        instrumentIndex, detectorIndex, extensionIndex, isStar,
-                                        detectorSources[goodInds]['x'].to_list(),
-                                        detectorSources[goodInds]['y'].to_list(),
-                                        np.arange(goodInds.sum()))
+                associations.addCatalog(
+                    wcs,
+                    "STELLAR",
+                    visitIndex,
+                    fieldIndex,
+                    instrumentIndex,
+                    detectorIndex,
+                    extensionIndex,
+                    isStar,
+                    detectorSources[goodInds]["x"].to_list(),
+                    detectorSources[goodInds]["y"].to_list(),
+                    np.arange(goodInds.sum()),
+                )
 
-        associations.sortMatches(fieldIndex, minMatches=self.config.minMatches,
-                                 allowSelfMatches=self.config.allowSelfMatches)
+        associations.sortMatches(
+            fieldIndex, minMatches=self.config.minMatches, allowSelfMatches=self.config.allowSelfMatches
+        )
 
         return sourceIndices, columns
 
@@ -922,50 +994,53 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             YAML object containing the model description.
         """
         if inputFile is not None:
-            inputYAML = wcsfit.YAMLCollector(inputFile, 'PixelMapCollection')
+            inputYAML = wcsfit.YAMLCollector(inputFile, "PixelMapCollection")
         else:
-            inputYAML = wcsfit.YAMLCollector('', 'PixelMapCollection')
+            inputYAML = wcsfit.YAMLCollector("", "PixelMapCollection")
         inputDict = {}
-        modelComponents = ['INSTRUMENT/DEVICE', 'EXPOSURE']
-        baseMap = {'Type': 'Composite', 'Elements': modelComponents}
-        inputDict['EXPOSURE/DEVICE/base'] = baseMap
+        modelComponents = ["INSTRUMENT/DEVICE", "EXPOSURE"]
+        baseMap = {"Type": "Composite", "Elements": modelComponents}
+        inputDict["EXPOSURE/DEVICE/base"] = baseMap
 
-        xMin = str(inputVisitSummary['bbox_min_x'].min())
-        xMax = str(inputVisitSummary['bbox_max_x'].max())
-        yMin = str(inputVisitSummary['bbox_min_y'].min())
-        yMax = str(inputVisitSummary['bbox_max_y'].max())
+        xMin = str(inputVisitSummary["bbox_min_x"].min())
+        xMax = str(inputVisitSummary["bbox_max_x"].max())
+        yMin = str(inputVisitSummary["bbox_min_y"].min())
+        yMax = str(inputVisitSummary["bbox_max_y"].max())
 
-        deviceModel = {'Type': 'Composite', 'Elements': self.config.deviceModel.list()}
-        inputDict['INSTRUMENT/DEVICE'] = deviceModel
+        deviceModel = {"Type": "Composite", "Elements": self.config.deviceModel.list()}
+        inputDict["INSTRUMENT/DEVICE"] = deviceModel
         for component in self.config.deviceModel:
-            if 'poly' in component.lower():
-                componentDict = {'Type': 'Poly',
-                                 'XPoly': {'OrderX': self.config.devicePolyOrder,
-                                           'SumOrder': True},
-                                 'YPoly': {'OrderX': self.config.devicePolyOrder,
-                                           'SumOrder': True},
-                                 'XMin': xMin, 'XMax': xMax, 'YMin': yMin, 'YMax': yMax}
-            elif 'identity' in component.lower():
-                componentDict = {'Type': 'Identity'}
+            if "poly" in component.lower():
+                componentDict = {
+                    "Type": "Poly",
+                    "XPoly": {"OrderX": self.config.devicePolyOrder, "SumOrder": True},
+                    "YPoly": {"OrderX": self.config.devicePolyOrder, "SumOrder": True},
+                    "XMin": xMin,
+                    "XMax": xMax,
+                    "YMin": yMin,
+                    "YMax": yMax,
+                }
+            elif "identity" in component.lower():
+                componentDict = {"Type": "Identity"}
 
             inputDict[component] = componentDict
 
-        exposureModel = {'Type': 'Composite', 'Elements': self.config.exposureModel.list()}
-        inputDict['EXPOSURE'] = exposureModel
+        exposureModel = {"Type": "Composite", "Elements": self.config.exposureModel.list()}
+        inputDict["EXPOSURE"] = exposureModel
         for component in self.config.exposureModel:
-            if 'poly' in component.lower():
-                componentDict = {'Type': 'Poly',
-                                 'XPoly': {'OrderX': self.config.exposurePolyOrder,
-                                           'SumOrder': 'true'},
-                                 'YPoly': {'OrderX': self.config.exposurePolyOrder,
-                                           'SumOrder': 'true'}}
-            elif 'identity' in component.lower():
-                componentDict = {'Type': 'Identity'}
+            if "poly" in component.lower():
+                componentDict = {
+                    "Type": "Poly",
+                    "XPoly": {"OrderX": self.config.exposurePolyOrder, "SumOrder": "true"},
+                    "YPoly": {"OrderX": self.config.exposurePolyOrder, "SumOrder": "true"},
+                }
+            elif "identity" in component.lower():
+                componentDict = {"Type": "Identity"}
 
             inputDict[component] = componentDict
 
         inputYAML.addInput(yaml.dump(inputDict))
-        inputYAML.addInput('Identity:\n  Type:  Identity\n')
+        inputYAML.addInput("Identity:\n  Type:  Identity\n")
 
         return inputYAML
 
@@ -987,27 +1062,32 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             List of columns needed from source tables.
         """
         for inputCatalogRef in inputCatalogRefs:
-            visit = inputCatalogRef.dataId['visit']
-            inputCatalog = inputCatalogRef.get(parameters={'columns': columns})
-            detectors = np.unique(inputCatalog['detector'])
+            visit = inputCatalogRef.dataId["visit"]
+            inputCatalog = inputCatalogRef.get(parameters={"columns": columns})
+            detectors = np.unique(inputCatalog["detector"])
 
             for detector in detectors:
-                detectorSources = inputCatalog[inputCatalog['detector'] == detector]
+                detectorSources = inputCatalog[inputCatalog["detector"] == detector]
 
-                extensionIndex = np.flatnonzero((extensionInfo.visit == visit)
-                                                & (extensionInfo.detector == detector))[0]
+                extensionIndex = np.flatnonzero(
+                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                )[0]
                 sourceCat = detectorSources[sourceIndices[extensionIndex]]
 
-                xCov = sourceCat['xErr']**2
-                yCov = sourceCat['yErr']**2
-                xyCov = (sourceCat['ixy'] * (xCov + yCov)
-                         / (sourceCat['ixx'] + sourceCat['iyy']))
+                xCov = sourceCat["xErr"] ** 2
+                yCov = sourceCat["yErr"] ** 2
+                xyCov = sourceCat["ixy"] * (xCov + yCov) / (sourceCat["ixx"] + sourceCat["iyy"])
                 # TODO: add correct xyErr if DM-7101 is ever done.
 
-                d = {'x': sourceCat['x'].to_numpy(), 'y': sourceCat['y'].to_numpy(),
-                     'xCov': xCov.to_numpy(), 'yCov': yCov.to_numpy(), 'xyCov': xyCov.to_numpy()}
+                d = {
+                    "x": sourceCat["x"].to_numpy(),
+                    "y": sourceCat["y"].to_numpy(),
+                    "xCov": xCov.to_numpy(),
+                    "yCov": yCov.to_numpy(),
+                    "xyCov": xyCov.to_numpy(),
+                }
 
-                wcsf.setObjects(extensionIndex, d, 'x', 'y', ['xCov', 'yCov', 'xyCov'])
+                wcsf.setObjects(extensionIndex, d, "x", "y", ["xCov", "yCov", "xyCov"])
 
     def _add_ref_objects(self, wcsf, refObjects, refCovariance, extensionInfo):
         """Add reference sources to the wcsfit.WCSFit object.
@@ -1023,14 +1103,23 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         extensionInfo : `lsst.pipe.base.Struct`
             Struct containing properties for each extension.
         """
-        extensionIndex = np.flatnonzero(extensionInfo.extensionType == 'REFERENCE')[0]
+        extensionIndex = np.flatnonzero(extensionInfo.extensionType == "REFERENCE")[0]
 
         if self.config.fitProperMotion:
-            wcsf.setObjects(extensionIndex, refObjects, 'ra', 'dec', ['raCov', 'decCov', 'raDecCov'],
-                            pmDecKey='decPM', pmRaKey='raPM', parallaxKey='parallax', pmCovKey='fullCov',
-                            pmCov=refCovariance)
+            wcsf.setObjects(
+                extensionIndex,
+                refObjects,
+                "ra",
+                "dec",
+                ["raCov", "decCov", "raDecCov"],
+                pmDecKey="decPM",
+                pmRaKey="raPM",
+                parallaxKey="parallax",
+                pmCovKey="fullCov",
+                pmCov=refCovariance,
+            )
         else:
-            wcsf.setObjects(extensionIndex, refObjects, 'ra', 'dec', ['raCov', 'decCov', 'raDecCov'])
+            wcsf.setObjects(extensionIndex, refObjects, "ra", "dec", ["raCov", "decCov", "raDecCov"])
 
     def _make_afw_wcs(self, mapDict, centerRA, centerDec, doNormalizePixels=False, xScale=1, yScale=1):
         """Make an `lsst.afw.geom.SkyWcs` from a dictionary of mappings.
@@ -1058,13 +1147,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             WCS constructed from the input mappings
         """
         # Set up pixel frames
-        pixelFrame = astshim.Frame(2, 'Domain=PIXELS')
-        normedPixelFrame = astshim.Frame(2, 'Domain=NORMEDPIXELS')
+        pixelFrame = astshim.Frame(2, "Domain=PIXELS")
+        normedPixelFrame = astshim.Frame(2, "Domain=NORMEDPIXELS")
 
         if doNormalizePixels:
             # Pixels will need to be rescaled before going into the mappings
-            normCoefficients = [-1.0, 2.0/xScale, 0,
-                                -1.0, 0, 2.0/yScale]
+            normCoefficients = [-1.0, 2.0 / xScale, 0, -1.0, 0, 2.0 / yScale]
             normMap = _convert_to_ast_polymap_coefficients(normCoefficients)
         else:
             normMap = astshim.UnitMap(2)
@@ -1073,34 +1161,34 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         tangentPoint = lsst.geom.SpherePoint(centerRA, centerDec)
         cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0 * lsst.geom.degrees, True)
         iwcToSkyWcs = afwgeom.makeSkyWcs(lsst.geom.Point2D(0, 0), tangentPoint, cdMatrix)
-        iwcToSkyMap = iwcToSkyWcs.getFrameDict().getMapping('PIXELS', 'SKY')
-        skyFrame = iwcToSkyWcs.getFrameDict().getFrame('SKY')
+        iwcToSkyMap = iwcToSkyWcs.getFrameDict().getMapping("PIXELS", "SKY")
+        skyFrame = iwcToSkyWcs.getFrameDict().getFrame("SKY")
 
         frameDict = astshim.FrameDict(pixelFrame)
-        frameDict.addFrame('PIXELS', normMap, normedPixelFrame)
+        frameDict.addFrame("PIXELS", normMap, normedPixelFrame)
 
-        currentFrameName = 'NORMEDPIXELS'
+        currentFrameName = "NORMEDPIXELS"
 
         # Dictionary values are ordered according to the maps' application.
         for m, mapElement in enumerate(mapDict.values()):
-            mapType = mapElement['Type']
+            mapType = mapElement["Type"]
 
-            if mapType == 'Poly':
-                mapCoefficients = mapElement['Coefficients']
+            if mapType == "Poly":
+                mapCoefficients = mapElement["Coefficients"]
                 astMap = _convert_to_ast_polymap_coefficients(mapCoefficients)
-            elif mapType == 'Identity':
+            elif mapType == "Identity":
                 astMap = astshim.UnitMap(2)
             else:
                 raise ValueError(f"Converting map type {mapType} to WCS is not supported")
 
             if m == len(mapDict) - 1:
-                newFrameName = 'IWC'
+                newFrameName = "IWC"
             else:
-                newFrameName = 'INTERMEDIATE' + str(m)
-            newFrame = astshim.Frame(2, f'Domain={newFrameName}')
+                newFrameName = "INTERMEDIATE" + str(m)
+            newFrame = astshim.Frame(2, f"Domain={newFrameName}")
             frameDict.addFrame(currentFrameName, astMap, newFrame)
             currentFrameName = newFrameName
-        frameDict.addFrame('IWC', iwcToSkyMap, skyFrame)
+        frameDict.addFrame("IWC", iwcToSkyMap, skyFrame)
 
         outWCS = afwgeom.SkyWcs(frameDict)
         return outWCS
@@ -1129,40 +1217,44 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # Set up the schema for the output catalogs
         schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
-        schema.addField('visit', type='L', doc='Visit number')
+        schema.addField("visit", type="L", doc="Visit number")
 
         # Pixels will need to be rescaled before going into the mappings
         sampleDetector = visitSummaryTables[0][0]
-        xscale = sampleDetector['bbox_max_x'] - sampleDetector['bbox_min_x']
-        yscale = sampleDetector['bbox_max_y'] - sampleDetector['bbox_min_y']
+        xscale = sampleDetector["bbox_max_x"] - sampleDetector["bbox_min_x"]
+        yscale = sampleDetector["bbox_max_y"] - sampleDetector["bbox_min_y"]
 
         catalogs = {}
         for v, visitSummary in enumerate(visitSummaryTables):
-            visit = visitSummary[0]['visit']
+            visit = visitSummary[0]["visit"]
 
             catalog = lsst.afw.table.ExposureCatalog(schema)
             catalog.resize(len(exposureInfo.detectors))
-            catalog['visit'] = visit
+            catalog["visit"] = visit
 
-            for d, detector in enumerate(visitSummary['id']):
-                mapName = f'{visit}/{detector}'
+            for d, detector in enumerate(visitSummary["id"]):
+                mapName = f"{visit}/{detector}"
 
-                mapElements = wcsf.mapCollection.orderAtoms(f'{mapName}/base')
+                mapElements = wcsf.mapCollection.orderAtoms(f"{mapName}/base")
                 mapDict = {}
                 for m, mapElement in enumerate(mapElements):
                     mapType = wcsf.mapCollection.getMapType(mapElement)
-                    mapDict[mapElement] = {'Type': mapType}
+                    mapDict[mapElement] = {"Type": mapType}
 
-                    if mapType == 'Poly':
+                    if mapType == "Poly":
                         mapCoefficients = mapParams[mapElement]
-                        mapDict[mapElement]['Coefficients'] = mapCoefficients
+                        mapDict[mapElement]["Coefficients"] = mapCoefficients
 
                 # The RA and Dec of the visit are needed for the last step of
                 # the mapping from the visit tangent plane to RA and Dec
-                outWCS = self._make_afw_wcs(mapDict, exposureInfo.ras[v] * lsst.geom.radians,
-                                            exposureInfo.decs[v] * lsst.geom.radians,
-                                            doNormalizePixels=True,
-                                            xScale=xscale, yScale=yscale)
+                outWCS = self._make_afw_wcs(
+                    mapDict,
+                    exposureInfo.ras[v] * lsst.geom.radians,
+                    exposureInfo.decs[v] * lsst.geom.radians,
+                    doNormalizePixels=True,
+                    xScale=xscale,
+                    yScale=yscale,
+                )
 
                 catalog[d].setId(detector)
                 catalog[d].setWcs(outWCS)

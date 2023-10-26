@@ -42,10 +42,8 @@ TESTDIR = os.path.abspath(os.path.dirname(__file__))
 
 
 class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
-
     @classmethod
     def setUpClass(cls):
-
         # Set random seed
         np.random.seed(1234)
 
@@ -58,7 +56,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.datadir = os.path.join(TESTDIR, "data")
 
         cls.fieldNumber = 0
-        cls.instrumentName = 'HSC'
+        cls.instrumentName = "HSC"
         cls.instrument = wcsfit.Instrument(cls.instrumentName)
         cls.refEpoch = 57205.5
 
@@ -67,8 +65,9 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.testVisits = [1176, 17900, 17930, 17934]
         cls.inputVisitSummary = []
         for testVisit in cls.testVisits:
-            visSum = afwTable.ExposureCatalog.readFits(os.path.join(cls.datadir,
-                                                                    f'visitSummary_{testVisit}.fits'))
+            visSum = afwTable.ExposureCatalog.readFits(
+                os.path.join(cls.datadir, f"visitSummary_{testVisit}.fits")
+            )
             cls.inputVisitSummary.append(visSum)
 
         cls.config = GbdesAstrometricFitConfig()
@@ -80,28 +79,32 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
         cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
-            cls.inputVisitSummary, cls.instrument, refEpoch=cls.refEpoch)
+            cls.inputVisitSummary, cls.instrument, refEpoch=cls.refEpoch
+        )
 
         cls.fields, cls.fieldCenter, cls.fieldRadius = cls.task._prep_sky(
-            cls.inputVisitSummary, cls.exposureInfo.medianEpoch)
+            cls.inputVisitSummary, cls.exposureInfo.medianEpoch
+        )
 
         # Bounding box of observations:
         raMins, raMaxs = [], []
         decMins, decMaxs = [], []
         for visSum in cls.inputVisitSummary:
-            raMins.append(visSum['raCorners'].min())
-            raMaxs.append(visSum['raCorners'].max())
-            decMins.append(visSum['decCorners'].min())
-            decMaxs.append(visSum['decCorners'].max())
+            raMins.append(visSum["raCorners"].min())
+            raMaxs.append(visSum["raCorners"].max())
+            decMins.append(visSum["decCorners"].min())
+            decMaxs.append(visSum["decCorners"].max())
         raMin = min(raMins)
         raMax = max(raMaxs)
         decMin = min(decMins)
         decMax = max(decMaxs)
 
-        corners = [lsst.geom.SpherePoint(raMin, decMin, lsst.geom.degrees).getVector(),
-                   lsst.geom.SpherePoint(raMax, decMin, lsst.geom.degrees).getVector(),
-                   lsst.geom.SpherePoint(raMax, decMax, lsst.geom.degrees).getVector(),
-                   lsst.geom.SpherePoint(raMin, decMax, lsst.geom.degrees).getVector()]
+        corners = [
+            lsst.geom.SpherePoint(raMin, decMin, lsst.geom.degrees).getVector(),
+            lsst.geom.SpherePoint(raMax, decMin, lsst.geom.degrees).getVector(),
+            lsst.geom.SpherePoint(raMax, decMax, lsst.geom.degrees).getVector(),
+            lsst.geom.SpherePoint(raMin, decMax, lsst.geom.degrees).getVector(),
+        ]
         cls.boundingPolygon = sphgeom.ConvexPolygon(corners)
 
         # Make random set of data in a bounding box determined by input visits
@@ -115,23 +118,26 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         refDataId, deferredRefCat = cls._make_refCat(starIds, starRAs, starDecs, inReferenceFraction)
         cls.refObjectLoader = ReferenceObjectLoader([refDataId], [deferredRefCat])
         cls.refObjectLoader.config.requireProperMotion = False
-        cls.refObjectLoader.config.anyFilterMapsToThis = 'test_filter'
+        cls.refObjectLoader.config.anyFilterMapsToThis = "test_filter"
 
         cls.task.refObjectLoader = cls.refObjectLoader
 
         # Get True WCS for stars:
-        with open(os.path.join(cls.datadir, 'sample_wcs.yaml'), 'r') as f:
+        with open(os.path.join(cls.datadir, "sample_wcs.yaml"), "r") as f:
             cls.trueModel = yaml.load(f, Loader=yaml.Loader)
 
         trueWCSs = cls._make_wcs(cls.trueModel, cls.inputVisitSummary)
 
         # Make source catalogs:
-        cls.inputCatalogRefs = cls._make_sourceCat(starIds, starRAs, starDecs, trueWCSs,
-                                                   inScienceFraction)
+        cls.inputCatalogRefs = cls._make_sourceCat(starIds, starRAs, starDecs, trueWCSs, inScienceFraction)
 
-        cls.outputs = cls.task.run(cls.inputCatalogRefs, cls.inputVisitSummary,
-                                   instrumentName=cls.instrumentName, refEpoch=cls.refEpoch,
-                                   refObjectLoader=cls.refObjectLoader)
+        cls.outputs = cls.task.run(
+            cls.inputCatalogRefs,
+            cls.inputVisitSummary,
+            instrumentName=cls.instrumentName,
+            refEpoch=cls.refEpoch,
+            refObjectLoader=cls.refObjectLoader,
+        )
 
     @classmethod
     def _make_refCat(cls, starIds, starRas, starDecs, inReferenceFraction):
@@ -161,7 +167,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         # determined by bounding box used in above simulate.
         refSchema = afwTable.SimpleTable.makeMinimalSchema()
         idKey = refSchema.addField("sourceId", type="I")
-        fluxKey = refSchema.addField("test_filter_flux", units='nJy', type=np.float64)
+        fluxKey = refSchema.addField("test_filter_flux", units="nJy", type=np.float64)
         raErrKey = refSchema.addField("coord_raErr", type=np.float64)
         decErrKey = refSchema.addField("coord_decErr", type=np.float64)
         pmraErrKey = refSchema.addField("pm_raErr", type=np.float64)
@@ -211,10 +217,14 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         inputCatalogRefs = []
         # Take a subset of the simulated data
         # Use true wcs objects to put simulated data into ccds
-        bbox = lsst.geom.BoxD(lsst.geom.Point2D(cls.inputVisitSummary[0][0]['bbox_min_x'],
-                                                cls.inputVisitSummary[0][0]['bbox_min_y']),
-                              lsst.geom.Point2D(cls.inputVisitSummary[0][0]['bbox_max_x'],
-                                                cls.inputVisitSummary[0][0]['bbox_max_y']))
+        bbox = lsst.geom.BoxD(
+            lsst.geom.Point2D(
+                cls.inputVisitSummary[0][0]["bbox_min_x"], cls.inputVisitSummary[0][0]["bbox_min_y"]
+            ),
+            lsst.geom.Point2D(
+                cls.inputVisitSummary[0][0]["bbox_max_x"], cls.inputVisitSummary[0][0]["bbox_max_y"]
+            ),
+        )
         bboxCorners = bbox.getCorners()
         cls.inputCatalogRefs = []
         for v, visit in enumerate(cls.testVisits):
@@ -226,51 +236,64 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
             sourceCats = []
             for detector in trueWCSs[visit]:
                 detWcs = detector.getWcs()
-                detectorId = detector['id']
+                detectorId = detector["id"]
                 radecCorners = detWcs.pixelToSky(bboxCorners)
                 detectorFootprint = sphgeom.ConvexPolygon([rd.getVector() for rd in radecCorners])
-                detectorIndices = detectorFootprint.contains((visitStarRas*u.degree).to(u.radian),
-                                                             (visitStarDecs*u.degree).to(u.radian))
+                detectorIndices = detectorFootprint.contains(
+                    (visitStarRas * u.degree).to(u.radian), (visitStarDecs * u.degree).to(u.radian)
+                )
                 nDetectorStars = detectorIndices.sum()
-                detectorArray = np.ones(nDetectorStars, dtype=bool) * detector['id']
+                detectorArray = np.ones(nDetectorStars, dtype=bool) * detector["id"]
 
                 ones_like = np.ones(nDetectorStars)
                 zeros_like = np.zeros(nDetectorStars, dtype=bool)
 
-                x, y = detWcs.skyToPixelArray(visitStarRas[detectorIndices], visitStarDecs[detectorIndices],
-                                              degrees=True)
+                x, y = detWcs.skyToPixelArray(
+                    visitStarRas[detectorIndices], visitStarDecs[detectorIndices], degrees=True
+                )
 
-                origWcs = (cls.inputVisitSummary[v][cls.inputVisitSummary[v]['id'] == detectorId])[0].getWcs()
+                origWcs = (cls.inputVisitSummary[v][cls.inputVisitSummary[v]["id"] == detectorId])[0].getWcs()
                 inputRa, inputDec = origWcs.pixelToSkyArray(x, y, degrees=True)
 
                 sourceDict = {}
-                sourceDict['detector'] = detectorArray
-                sourceDict['sourceId'] = visitStarIds[detectorIndices]
-                sourceDict['x'] = x
-                sourceDict['y'] = y
-                sourceDict['xErr'] = 1e-3 * ones_like
-                sourceDict['yErr'] = 1e-3 * ones_like
-                sourceDict['inputRA'] = inputRa
-                sourceDict['inputDec'] = inputDec
-                sourceDict['trueRA'] = visitStarRas[detectorIndices]
-                sourceDict['trueDec'] = visitStarDecs[detectorIndices]
-                for key in ['apFlux_12_0_flux', 'apFlux_12_0_instFlux', 'ixx', 'iyy']:
+                sourceDict["detector"] = detectorArray
+                sourceDict["sourceId"] = visitStarIds[detectorIndices]
+                sourceDict["x"] = x
+                sourceDict["y"] = y
+                sourceDict["xErr"] = 1e-3 * ones_like
+                sourceDict["yErr"] = 1e-3 * ones_like
+                sourceDict["inputRA"] = inputRa
+                sourceDict["inputDec"] = inputDec
+                sourceDict["trueRA"] = visitStarRas[detectorIndices]
+                sourceDict["trueDec"] = visitStarDecs[detectorIndices]
+                for key in ["apFlux_12_0_flux", "apFlux_12_0_instFlux", "ixx", "iyy"]:
                     sourceDict[key] = ones_like
-                for key in ['pixelFlags_edge', 'pixelFlags_saturated', 'pixelFlags_interpolatedCenter',
-                            'pixelFlags_interpolated', 'pixelFlags_crCenter', 'pixelFlags_bad',
-                            'hsmPsfMoments_flag', 'apFlux_12_0_flag', 'extendedness', 'parentSourceId',
-                            'deblend_nChild', 'ixy']:
+                for key in [
+                    "pixelFlags_edge",
+                    "pixelFlags_saturated",
+                    "pixelFlags_interpolatedCenter",
+                    "pixelFlags_interpolated",
+                    "pixelFlags_crCenter",
+                    "pixelFlags_bad",
+                    "hsmPsfMoments_flag",
+                    "apFlux_12_0_flag",
+                    "extendedness",
+                    "parentSourceId",
+                    "deblend_nChild",
+                    "ixy",
+                ]:
                     sourceDict[key] = zeros_like
-                sourceDict['apFlux_12_0_instFluxErr'] = 1e-3 * ones_like
-                sourceDict['detect_isPrimary'] = ones_like.astype(bool)
+                sourceDict["apFlux_12_0_instFluxErr"] = 1e-3 * ones_like
+                sourceDict["detect_isPrimary"] = ones_like.astype(bool)
 
                 sourceCat = pd.DataFrame(sourceDict)
                 sourceCats.append(sourceCat)
 
             visitSourceTable = pd.concat(sourceCats)
 
-            inputCatalogRef = InMemoryDatasetHandle(visitSourceTable, storageClass="DataFrame",
-                                                    dataId={"visit": visit})
+            inputCatalogRef = InMemoryDatasetHandle(
+                visitSourceTable, storageClass="DataFrame", dataId={"visit": visit}
+            )
 
             inputCatalogRefs.append(inputCatalogRef)
 
@@ -293,45 +316,50 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         """
 
         # Pixels will need to be rescaled before going into the mappings
-        xscale = inputVisitSummaries[0][0]['bbox_max_x'] - inputVisitSummaries[0][0]['bbox_min_x']
-        yscale = inputVisitSummaries[0][0]['bbox_max_y'] - inputVisitSummaries[0][0]['bbox_min_y']
+        xscale = inputVisitSummaries[0][0]["bbox_max_x"] - inputVisitSummaries[0][0]["bbox_min_x"]
+        yscale = inputVisitSummaries[0][0]["bbox_max_y"] - inputVisitSummaries[0][0]["bbox_min_y"]
 
         catalogs = {}
         schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
-        schema.addField('visit', type='L', doc='Visit number')
+        schema.addField("visit", type="L", doc="Visit number")
         for visitSum in inputVisitSummaries:
-            visit = visitSum[0]['visit']
-            visitMapName = f'{visit}/poly'
+            visit = visitSum[0]["visit"]
+            visitMapName = f"{visit}/poly"
             visitModel = model[visitMapName]
 
             catalog = lsst.afw.table.ExposureCatalog(schema)
             catalog.resize(len(visitSum))
-            catalog['visit'] = visit
+            catalog["visit"] = visit
 
             raDec = visitSum[0].getVisitInfo().getBoresightRaDec()
 
-            visitMapType = visitModel['Type']
-            visitDict = {'Type': visitMapType}
-            if visitMapType == 'Poly':
-                mapCoefficients = (visitModel['XPoly']['Coefficients']
-                                   + visitModel['YPoly']['Coefficients'])
+            visitMapType = visitModel["Type"]
+            visitDict = {"Type": visitMapType}
+            if visitMapType == "Poly":
+                mapCoefficients = visitModel["XPoly"]["Coefficients"] + visitModel["YPoly"]["Coefficients"]
                 visitDict["Coefficients"] = mapCoefficients
 
             for d, detector in enumerate(visitSum):
-                detectorId = detector['id']
-                detectorMapName = f'HSC/{detectorId}/poly'
+                detectorId = detector["id"]
+                detectorMapName = f"HSC/{detectorId}/poly"
                 detectorModel = model[detectorMapName]
 
-                detectorMapType = detectorModel['Type']
-                mapDict = {detectorMapName: {'Type': detectorMapType},
-                           visitMapName: visitDict}
-                if detectorMapType == 'Poly':
-                    mapCoefficients = (detectorModel['XPoly']['Coefficients']
-                                       + detectorModel['YPoly']['Coefficients'])
-                    mapDict[detectorMapName]['Coefficients'] = mapCoefficients
+                detectorMapType = detectorModel["Type"]
+                mapDict = {detectorMapName: {"Type": detectorMapType}, visitMapName: visitDict}
+                if detectorMapType == "Poly":
+                    mapCoefficients = (
+                        detectorModel["XPoly"]["Coefficients"] + detectorModel["YPoly"]["Coefficients"]
+                    )
+                    mapDict[detectorMapName]["Coefficients"] = mapCoefficients
 
-                outWCS = cls.task._make_afw_wcs(mapDict, raDec.getRa(), raDec.getDec(),
-                                                doNormalizePixels=True, xScale=xscale, yScale=yscale)
+                outWCS = cls.task._make_afw_wcs(
+                    mapDict,
+                    raDec.getRa(),
+                    raDec.getDec(),
+                    doNormalizePixels=True,
+                    xScale=xscale,
+                    yScale=yscale,
+                )
                 catalog[d].setId(detectorId)
                 catalog[d].setWcs(outWCS)
 
@@ -359,25 +387,27 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         yy = np.linspace(0, 4000, 6)
         xgrid, ygrid = np.meshgrid(xx, yy)
         for visSum in self.inputVisitSummary:
-            visit = visSum[0]['visit']
+            visit = visSum[0]["visit"]
             for detectorInfo in visSum:
-                detector = detectorInfo['id']
-                extensionIndex = np.flatnonzero((self.extensionInfo.visit == visit)
-                                                & (self.extensionInfo.detector == detector))[0]
+                detector = detectorInfo["id"]
+                extensionIndex = np.flatnonzero(
+                    (self.extensionInfo.visit == visit) & (self.extensionInfo.detector == detector)
+                )[0]
                 fitWcs = self.extensionInfo.wcs[extensionIndex]
                 calexpWcs = detectorInfo.getWcs()
 
-                tanPlaneXY = np.array([fitWcs.toWorld(x, y) for (x, y) in zip(xgrid.ravel(),
-                                                                              ygrid.ravel())])
+                tanPlaneXY = np.array([fitWcs.toWorld(x, y) for (x, y) in zip(xgrid.ravel(), ygrid.ravel())])
 
                 calexpra, calexpdec = calexpWcs.pixelToSkyArray(xgrid.ravel(), ygrid.ravel(), degrees=True)
 
-                tangentPoint = calexpWcs.pixelToSky(calexpWcs.getPixelOrigin().getX(),
-                                                    calexpWcs.getPixelOrigin().getY())
+                tangentPoint = calexpWcs.pixelToSky(
+                    calexpWcs.getPixelOrigin().getX(), calexpWcs.getPixelOrigin().getY()
+                )
                 cdMatrix = afwgeom.makeCdMatrix(1.0 * lsst.geom.degrees, 0 * lsst.geom.degrees, True)
                 iwcToSkyWcs = afwgeom.makeSkyWcs(lsst.geom.Point2D(0, 0), tangentPoint, cdMatrix)
-                newRAdeg, newDecdeg = iwcToSkyWcs.pixelToSkyArray(tanPlaneXY[:, 0], tanPlaneXY[:, 1],
-                                                                  degrees=True)
+                newRAdeg, newDecdeg = iwcToSkyWcs.pixelToSkyArray(
+                    tanPlaneXY[:, 0], tanPlaneXY[:, 1], degrees=True
+                )
 
                 # One WCS is in SIP and the other is TPV. The pixel-to-sky
                 # conversion is not exactly the same but should be close.
@@ -385,20 +415,29 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                 # particularly for detector # >= 100. See if we can improve/if
                 # improving is necessary. Check if matching in corner detectors
                 # is ok.
-                rtol = (1e-3 if (detector >= 100) else 1e-5)
+                rtol = 1e-3 if (detector >= 100) else 1e-5
                 np.testing.assert_allclose(calexpra, newRAdeg, rtol=rtol)
                 np.testing.assert_allclose(calexpdec, newDecdeg, rtol=rtol)
 
     def test_refCatLoader(self):
-        """Test that we can load objects from refCat
-        """
+        """Test that we can load objects from refCat"""
 
-        tmpAssociations = wcsfit.FoFClass(self.fields, [self.instrument], self.exposuresHelper,
-                                          [self.fieldRadius.asDegrees()],
-                                          (self.task.config.matchRadius * u.arcsec).to(u.degree).value)
+        tmpAssociations = wcsfit.FoFClass(
+            self.fields,
+            [self.instrument],
+            self.exposuresHelper,
+            [self.fieldRadius.asDegrees()],
+            (self.task.config.matchRadius * u.arcsec).to(u.degree).value,
+        )
 
-        self.task._load_refcat(tmpAssociations, self.refObjectLoader, self.fieldCenter, self.fieldRadius,
-                               self.extensionInfo, epoch=2015)
+        self.task._load_refcat(
+            tmpAssociations,
+            self.refObjectLoader,
+            self.fieldCenter,
+            self.fieldRadius,
+            self.extensionInfo,
+            epoch=2015,
+        )
 
         # We have only loaded one catalog, so getting the 'matches' should just
         # return the same objects we put in, except some random objects that
@@ -411,46 +450,48 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         self.assertGreater(nMatches, self.nStars * 0.9)
 
     def test_load_catalogs_and_associate(self):
-
-        tmpAssociations = wcsfit.FoFClass(self.fields, [self.instrument], self.exposuresHelper,
-                                          [self.fieldRadius.asDegrees()],
-                                          (self.task.config.matchRadius * u.arcsec).to(u.degree).value)
+        tmpAssociations = wcsfit.FoFClass(
+            self.fields,
+            [self.instrument],
+            self.exposuresHelper,
+            [self.fieldRadius.asDegrees()],
+            (self.task.config.matchRadius * u.arcsec).to(u.degree).value,
+        )
         self.task._load_catalogs_and_associate(tmpAssociations, self.inputCatalogRefs, self.extensionInfo)
 
         tmpAssociations.sortMatches(self.fieldNumber, minMatches=2)
 
         matchIds = []
         correctMatches = []
-        for (s, e, o) in zip(tmpAssociations.sequence, tmpAssociations.extn, tmpAssociations.obj):
+        for s, e, o in zip(tmpAssociations.sequence, tmpAssociations.extn, tmpAssociations.obj):
             objVisitInd = self.extensionInfo.visitIndex[e]
             objDet = self.extensionInfo.detector[e]
-            ExtnInds = self.inputCatalogRefs[objVisitInd].get()['detector'] == objDet
+            ExtnInds = self.inputCatalogRefs[objVisitInd].get()["detector"] == objDet
             objInfo = self.inputCatalogRefs[objVisitInd].get()[ExtnInds].iloc[o]
             if s == 0:
                 if len(matchIds) > 0:
                     correctMatches.append(len(set(matchIds)) == 1)
                 matchIds = []
 
-            matchIds.append(objInfo['sourceId'])
+            matchIds.append(objInfo["sourceId"])
 
         # A few matches may incorrectly associate sources because of the random
         # positions
         self.assertGreater(sum(correctMatches), len(correctMatches) * 0.95)
 
     def test_make_outputs(self):
-        """Test that the run method recovers the input model parameters.
-        """
+        """Test that the run method recovers the input model parameters."""
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
             outputWcsCatalog = self.outputs.outputWCSs[visit]
             visitSources = self.inputCatalogRefs[v].get()
             for d, detectorRow in enumerate(visitSummary):
-                detectorId = detectorRow['id']
+                detectorId = detectorRow["id"]
                 fitwcs = outputWcsCatalog[d].getWcs()
-                detSources = visitSources[visitSources['detector'] == detectorId]
-                fitRA, fitDec = fitwcs.pixelToSkyArray(detSources['x'], detSources['y'], degrees=True)
-                dRA = fitRA - detSources['trueRA']
-                dDec = fitDec - detSources['trueDec']
+                detSources = visitSources[visitSources["detector"] == detectorId]
+                fitRA, fitDec = fitwcs.pixelToSkyArray(detSources["x"], detSources["y"], degrees=True)
+                dRA = fitRA - detSources["trueRA"]
+                dDec = fitDec - detSources["trueDec"]
                 # Check that input coordinates match the output coordinates
                 self.assertAlmostEqual(np.mean(dRA), 0)
                 self.assertAlmostEqual(np.std(dRA), 0)
@@ -458,21 +499,20 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                 self.assertAlmostEqual(np.std(dDec), 0)
 
     def test_run(self):
-        """Test that run method recovers the input model parameters
-        """
+        """Test that run method recovers the input model parameters"""
         outputMaps = self.outputs.fitModel.mapCollection.getParamDict()
 
         for v, visit in enumerate(self.testVisits):
             visitSummary = self.inputVisitSummary[v]
-            visitMapName = f'{visit}/poly'
+            visitMapName = f"{visit}/poly"
 
             origModel = self.trueModel[visitMapName]
-            if origModel['Type'] != 'Identity':
+            if origModel["Type"] != "Identity":
                 fitModel = outputMaps[visitMapName]
-                origXPoly = origModel['XPoly']['Coefficients']
-                origYPoly = origModel['YPoly']['Coefficients']
-                fitXPoly = fitModel[:len(origXPoly)]
-                fitYPoly = fitModel[len(origXPoly):]
+                origXPoly = origModel["XPoly"]["Coefficients"]
+                origYPoly = origModel["YPoly"]["Coefficients"]
+                fitXPoly = fitModel[: len(origXPoly)]
+                fitYPoly = fitModel[len(origXPoly) :]
 
                 absDiffX = abs(fitXPoly - origXPoly)
                 absDiffY = abs(fitYPoly - origYPoly)
@@ -480,15 +520,15 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                 np.testing.assert_array_less(absDiffX, 1e-6)
                 np.testing.assert_array_less(absDiffY, 1e-6)
             for d, detectorRow in enumerate(visitSummary):
-                detectorId = detectorRow['id']
-                detectorMapName = f'HSC/{detectorId}/poly'
+                detectorId = detectorRow["id"]
+                detectorMapName = f"HSC/{detectorId}/poly"
                 origModel = self.trueModel[detectorMapName]
-                if (origModel['Type'] != 'Identity') and (v == 0):
+                if (origModel["Type"] != "Identity") and (v == 0):
                     fitModel = outputMaps[detectorMapName]
-                    origXPoly = origModel['XPoly']['Coefficients']
-                    origYPoly = origModel['YPoly']['Coefficients']
-                    fitXPoly = fitModel[:len(origXPoly)]
-                    fitYPoly = fitModel[len(origXPoly):]
+                    origXPoly = origModel["XPoly"]["Coefficients"]
+                    origYPoly = origModel["YPoly"]["Coefficients"]
+                    fitXPoly = fitModel[: len(origXPoly)]
+                    fitYPoly = fitModel[len(origXPoly) :]
                     absDiffX = abs(fitXPoly - origXPoly)
                     absDiffY = abs(fitYPoly - origYPoly)
                     # Check that input detector model matches fit

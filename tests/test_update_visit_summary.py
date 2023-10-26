@@ -31,15 +31,13 @@ from lsst.drp.tasks.update_visit_summary import (
 
 
 class UpdateVisitSummaryTestCase(unittest.TestCase):
-
     def setUp(self) -> None:
         self.input_schema = ExposureTable.makeMinimalSchema()
         ExposureSummaryStats.update_schema(self.input_schema)
         self.init_inputs = {"input_summary_schema": ExposureCatalog(self.input_schema)}
 
     def test_wcs_provider(self) -> None:
-        """Test the wcs_provider config option's effect on connections.
-        """
+        """Test the wcs_provider config's effect on connections."""
         config = UpdateVisitSummaryConfig()
         config.wcs_provider = "input_summary"
         connections = UpdateVisitSummaryConnections(config=config)
@@ -62,8 +60,7 @@ class UpdateVisitSummaryTestCase(unittest.TestCase):
         self.assertEqual(task.schema, self.input_schema)
 
     def test_photo_calib_provider(self) -> None:
-        """Test the photo_calib_provider config option's effect on connections.
-        """
+        """Test the photo_calib_provider config's effect on connections."""
         config = UpdateVisitSummaryConfig()
         config.photo_calib_provider = "input_summary"
         connections = UpdateVisitSummaryConnections(config=config)
@@ -86,8 +83,7 @@ class UpdateVisitSummaryTestCase(unittest.TestCase):
         self.assertEqual(task.schema, self.input_schema)
 
     def test_background_provider(self) -> None:
-        """Test the background_provider config option's effect on connections.
-        """
+        """Test the background_provider config's effect on connections."""
         config = UpdateVisitSummaryConfig()
         config.background_provider = "input_summary"
         connections = UpdateVisitSummaryConnections(config=config)

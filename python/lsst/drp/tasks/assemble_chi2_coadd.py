@@ -55,7 +55,7 @@ def calculateKernelSize(sigma: float, nSigmaForKernel: float = 7) -> int:
     size:
         Size of the smoothing kernel.
     """
-    return (int(sigma * nSigmaForKernel + 0.5)//2)*2 + 1  # make sure it is odd
+    return (int(sigma * nSigmaForKernel + 0.5) // 2) * 2 + 1  # make sure it is odd
 
 
 def convolveImage(image: afwImage.Image, psf: Psf) -> afwImage.Image:
@@ -97,16 +97,17 @@ def convolveImage(image: afwImage.Image, psf: Psf) -> afwImage.Image:
     return convolvedImage.Factory(convolvedImage, bbox, afwImage.PARENT, False)
 
 
-class AssembleChi2CoaddConnections(pipeBase.PipelineTaskConnections,
-                                   dimensions=("tract", "patch", "skymap"),
-                                   defaultTemplates={"inputCoaddName": "deep",
-                                                     "outputCoaddName": "deepChi2"}):
+class AssembleChi2CoaddConnections(
+    pipeBase.PipelineTaskConnections,
+    dimensions=("tract", "patch", "skymap"),
+    defaultTemplates={"inputCoaddName": "deep", "outputCoaddName": "deepChi2"},
+):
     inputCoadds = cT.Input(
         doc="Exposure on which to run deblending",
         name="{inputCoaddName}Coadd_calexp",
         storageClass="ExposureF",
         multiple=True,
-        dimensions=("tract", "patch", "band", "skymap")
+        dimensions=("tract", "patch", "band", "skymap"),
     )
     chi2Coadd = cT.Output(
         doc="Chi^2 exposure, produced by merging multiband coadds",
@@ -116,21 +117,20 @@ class AssembleChi2CoaddConnections(pipeBase.PipelineTaskConnections,
     )
 
 
-class AssembleChi2CoaddConfig(pipeBase.PipelineTaskConfig,
-                              pipelineConnections=AssembleChi2CoaddConnections):
+class AssembleChi2CoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=AssembleChi2CoaddConnections):
     outputPixelatedVariance = pexConfig.Field(
         dtype=bool,
         default=False,
         doc="Whether to output a pixelated variance map for the generated "
-            "chi^2 coadd, or to have a flat variance map defined by combining "
-            "the inverse variance maps of the coadds that were combined."
+        "chi^2 coadd, or to have a flat variance map defined by combining "
+        "the inverse variance maps of the coadds that were combined.",
     )
 
     useUnionForMask = pexConfig.Field(
         dtype=bool,
         default=True,
         doc="Whether to calculate the union of the mask plane in each band, "
-            "or the intersection of the mask plane in each band."
+        "or the intersection of the mask plane in each band.",
     )
 
 
@@ -151,6 +151,7 @@ class AssembleChi2CoaddTask(pipeBase.PipelineTask):
 
     .. [4] https://project.lsst.org/meetings/law/sites/lsst.org.meetings.law/files/Building%20and%20using%20coadds.pdf  # noqa: E501, W505
     """
+
     ConfigClass = AssembleChi2CoaddConfig
     _DefaultName = "assembleChi2Coadd"
 
@@ -224,10 +225,10 @@ class AssembleChi2CoaddTask(pipeBase.PipelineTask):
         variance = refExp.variance.Factory(bbox)
         if self.config.outputPixelatedVariance:
             # Write the per pixel variance to the output coadd
-            variance.array[:] = np.sum([1/coadd.variance for coadd in inputCoadds], axis=0)
+            variance.array[:] = np.sum([1 / coadd.variance for coadd in inputCoadds], axis=0)
         else:
             # Use a flat variance in each band
-            variance.array[:] = np.sum(1/np.array(variance_list))
+            variance.array[:] = np.sum(1 / np.array(variance_list))
         # Combine the masks planes to calculate the mask plae of the new coadd
         mask = self.combinedMasks([coadd.mask for coadd in inputCoadds])
         # Create the exposure
@@ -240,10 +241,7 @@ class AssembleChi2CoaddTask(pipeBase.PipelineTask):
 class DetectChi2SourcesConnections(
     pipeBase.PipelineTaskConnections,
     dimensions=("tract", "patch", "skymap"),
-    defaultTemplates={
-        "inputCoaddName": "deepChi2",
-        "outputCoaddName": "deepChi2"
-    }
+    defaultTemplates={"inputCoaddName": "deepChi2", "outputCoaddName": "deepChi2"},
 ):
     detectionSchema = cT.InitOutput(
         doc="Schema of the detection catalog",
@@ -265,10 +263,7 @@ class DetectChi2SourcesConnections(
 
 
 class DetectChi2SourcesConfig(pipeBase.PipelineTaskConfig, pipelineConnections=DetectChi2SourcesConnections):
-    detection = pexConfig.ConfigurableField(
-        target=SourceDetectionTask,
-        doc="Detect sources in chi2 coadd"
-    )
+    detection = pexConfig.ConfigurableField(target=SourceDetectionTask, doc="Detect sources in chi2 coadd")
 
     idGenerator = SkyMapIdGeneratorConfig.make_field()
 

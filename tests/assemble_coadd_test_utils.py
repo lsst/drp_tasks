@@ -60,8 +60,10 @@ def makeMockSkyInfo(bbox, wcs, patch):
     skyInfo : `lsst.pipe.base.Struct`
         Patch geometry information.
     """
+
     def getIndex():
         return patch
+
     patchInfo = pipeBase.Struct(getIndex=getIndex)
     skyInfo = pipeBase.Struct(bbox=bbox, wcs=wcs, patchInfo=patchInfo)
     return skyInfo
@@ -123,7 +125,8 @@ class MockCoaddTestData:
         `~lsst.meas.algorithms.testUtils.plantSources`
         lacking the option to specify the pixel origin.
     """
-    rotAngle = 0.*degrees
+
+    rotAngle = 0.0 * degrees
     """Rotation of the pixel grid on the sky, East from North
     (`lsst.geom.Angle`).
     """
@@ -161,12 +164,25 @@ class MockCoaddTestData:
     detector = None
     "Properties of the CCD for the exposure (`lsst.afw.cameraGeom.Detector`)."
 
-    def __init__(self, shape=geom.Extent2I(201, 301), offset=geom.Point2I(-123, -45),
-                 backgroundLevel=314.592, seed=42, nSrc=37,
-                 fluxRange=2., noiseLevel=5, sourceSigma=200.,
-                 minPsfSize=1.5, maxPsfSize=3.,
-                 pixelScale=0.2*arcseconds, ra=209.*degrees, dec=-20.25*degrees,
-                 ccd=37, patch=42, tract=0):
+    def __init__(
+        self,
+        shape=geom.Extent2I(201, 301),
+        offset=geom.Point2I(-123, -45),
+        backgroundLevel=314.592,
+        seed=42,
+        nSrc=37,
+        fluxRange=2.0,
+        noiseLevel=5,
+        sourceSigma=200.0,
+        minPsfSize=1.5,
+        maxPsfSize=3.0,
+        pixelScale=0.2 * arcseconds,
+        ra=209.0 * degrees,
+        dec=-20.25 * degrees,
+        ccd=37,
+        patch=42,
+        tract=0,
+    ):
         self.ra = ra
         self.dec = dec
         self.pixelScale = pixelScale
@@ -182,15 +198,15 @@ class MockCoaddTestData:
 
         # Set up properties of the simulations
         nSigmaForKernel = 5
-        self.kernelSize = (int(maxPsfSize*nSigmaForKernel + 0.5)//2)*2 + 1  # make sure it is odd
+        self.kernelSize = (int(maxPsfSize * nSigmaForKernel + 0.5) // 2) * 2 + 1  # make sure it is odd
 
-        bufferSize = self.kernelSize//2
+        bufferSize = self.kernelSize // 2
         x0, y0 = self.bbox.getBegin()
         xSize, ySize = self.bbox.getDimensions()
         # Set the pixel coordinates and fluxes of the simulated sources.
-        self.xLoc = self.rngData.random(nSrc)*(xSize - 2*bufferSize) + bufferSize + x0
-        self.yLoc = self.rngData.random(nSrc)*(ySize - 2*bufferSize) + bufferSize + y0
-        self.flux = (self.rngData.random(nSrc)*(fluxRange - 1.) + 1.)*sourceSigma*noiseLevel
+        self.xLoc = self.rngData.random(nSrc) * (xSize - 2 * bufferSize) + bufferSize + x0
+        self.yLoc = self.rngData.random(nSrc) * (ySize - 2 * bufferSize) + bufferSize + y0
+        self.flux = (self.rngData.random(nSrc) * (fluxRange - 1.0) + 1.0) * sourceSigma * noiseLevel
 
         self.backgroundLevel = backgroundLevel
         self.noiseLevel = noiseLevel
@@ -290,42 +306,54 @@ class MockCoaddTestData:
         visitInfo : `lsst.afw.image.VisitInfo`
             VisitInfo for the exposure.
         """
-        lsstLat = -30.244639*u.degree
-        lsstLon = -70.749417*u.degree
-        lsstAlt = 2663.*u.m
-        lsstTemperature = 20.*u.Celsius
-        lsstHumidity = 40.  # in percent
-        lsstPressure = 73892.*u.pascal
-        loc = EarthLocation(lat=lsstLat,
-                            lon=lsstLon,
-                            height=lsstAlt)
+        lsstLat = -30.244639 * u.degree
+        lsstLon = -70.749417 * u.degree
+        lsstAlt = 2663.0 * u.m
+        lsstTemperature = 20.0 * u.Celsius
+        lsstHumidity = 40.0  # in percent
+        lsstPressure = 73892.0 * u.pascal
+        loc = EarthLocation(lat=lsstLat, lon=lsstLon, height=lsstAlt)
 
         time = Time(2000.0, format="jyear", scale="tt")
         if randomizeTime:
             # Pick a random time within a 6 hour window
-            time += 6*u.hour*(self.rngMods.random() - 0.5)
-        radec = SkyCoord(dec=self.dec.asDegrees(), ra=self.ra.asDegrees(),
-                         unit='deg', obstime=time, frame='icrs', location=loc)
-        airmass = float(1.0/np.sin(radec.altaz.alt))
-        obsInfo = makeObservationInfo(location=loc,
-                                      detector_exposure_id=exposureId,
-                                      datetime_begin=time,
-                                      datetime_end=time,
-                                      boresight_airmass=airmass,
-                                      boresight_rotation_angle=Angle(0.*u.degree),
-                                      boresight_rotation_coord='sky',
-                                      temperature=lsstTemperature,
-                                      pressure=lsstPressure,
-                                      relative_humidity=lsstHumidity,
-                                      tracking_radec=radec,
-                                      altaz_begin=radec.altaz,
-                                      observation_type='science',
-                                      )
+            time += 6 * u.hour * (self.rngMods.random() - 0.5)
+        radec = SkyCoord(
+            dec=self.dec.asDegrees(),
+            ra=self.ra.asDegrees(),
+            unit="deg",
+            obstime=time,
+            frame="icrs",
+            location=loc,
+        )
+        airmass = float(1.0 / np.sin(radec.altaz.alt))
+        obsInfo = makeObservationInfo(
+            location=loc,
+            detector_exposure_id=exposureId,
+            datetime_begin=time,
+            datetime_end=time,
+            boresight_airmass=airmass,
+            boresight_rotation_angle=Angle(0.0 * u.degree),
+            boresight_rotation_coord="sky",
+            temperature=lsstTemperature,
+            pressure=lsstPressure,
+            relative_humidity=lsstHumidity,
+            tracking_radec=radec,
+            altaz_begin=radec.altaz,
+            observation_type="science",
+        )
         visitInfo = MakeRawVisitInfoViaObsInfo.observationInfo2visitInfo(obsInfo)
         return visitInfo
 
-    def makeTestImage(self, expId, noiseLevel=None, psfSize=None, backgroundLevel=None,
-                      detectionSigma=5., badRegionBox=None):
+    def makeTestImage(
+        self,
+        expId,
+        noiseLevel=None,
+        psfSize=None,
+        backgroundLevel=None,
+        detectionSigma=5.0,
+        badRegionBox=None,
+    ):
         """Make a reproduceable PSF-convolved masked image for testing.
 
         Parameters
@@ -346,29 +374,31 @@ class MockCoaddTestData:
         if backgroundLevel is None:
             backgroundLevel = self.backgroundLevel
         if noiseLevel is None:
-            noiseLevel = 5.
+            noiseLevel = 5.0
         visitInfo = self.makeDummyVisitInfo(expId, randomizeTime=True)
 
         if psfSize is None:
-            psfSize = self.rngMods.random()*(self.maxPsfSize - self.minPsfSize) + self.minPsfSize
+            psfSize = self.rngMods.random() * (self.maxPsfSize - self.minPsfSize) + self.minPsfSize
         nSrc = len(self.flux)
         sigmas = [psfSize for src in range(nSrc)]
         sigmasPsfMatched = [self.maxPsfSize for src in range(nSrc)]
         coordList = list(zip(self.xLoc, self.yLoc, self.flux, sigmas))
         coordListPsfMatched = list(zip(self.xLoc, self.yLoc, self.flux, sigmasPsfMatched))
         xSize, ySize = self.bbox.getDimensions()
-        model = plantSources(self.bbox, self.kernelSize, self.backgroundLevel,
-                             coordList, addPoissonNoise=False)
-        modelPsfMatched = plantSources(self.bbox, self.kernelSize, self.backgroundLevel,
-                                       coordListPsfMatched, addPoissonNoise=False)
+        model = plantSources(
+            self.bbox, self.kernelSize, self.backgroundLevel, coordList, addPoissonNoise=False
+        )
+        modelPsfMatched = plantSources(
+            self.bbox, self.kernelSize, self.backgroundLevel, coordListPsfMatched, addPoissonNoise=False
+        )
         model.variance.array = np.abs(model.image.array) + noiseLevel
         modelPsfMatched.variance.array = np.abs(modelPsfMatched.image.array) + noiseLevel
-        noise = self.rngData.random((ySize, xSize))*noiseLevel
+        noise = self.rngData.random((ySize, xSize)) * noiseLevel
         noise -= np.median(noise)
         model.image.array += noise
         modelPsfMatched.image.array += noise
         detectedMask = afwImage.Mask.getPlaneBitMask("DETECTED")
-        detectionThreshold = self.backgroundLevel + detectionSigma*noiseLevel
+        detectionThreshold = self.backgroundLevel + detectionSigma * noiseLevel
         model.mask.array[model.image.array > detectionThreshold] += detectedMask
 
         if badRegionBox is not None:
@@ -406,9 +436,9 @@ class MockCoaddTestData:
         """
         dataRefList = []
         for expId in exposures:
-            if warpType == 'direct':
+            if warpType == "direct":
                 exposure = exposures[expId]
-            elif warpType == 'psfMatched':
+            elif warpType == "psfMatched":
                 exposure = matchedExposures[expId]
             else:
                 raise ValueError("warpType must be one of 'direct' or 'psfMatched'")
@@ -419,7 +449,7 @@ class MockCoaddTestData:
                 tract=tract,
                 patch=patch,
                 visit=expId,
-                coaddName=coaddName
+                coaddName=coaddName,
             )
             dataRefList.append(dataRef)
         return dataRefList

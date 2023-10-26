@@ -44,23 +44,29 @@ from lsst.pipe.tasks.coaddBase import makeSkyInfo, subBBoxIter
 from lsst.pipe.tasks.measurePsf import MeasurePsfTask
 
 
-class DcrAssembleCoaddConnections(AssembleCoaddConnections,
-                                  dimensions=("tract", "patch", "band", "skymap"),
-                                  defaultTemplates={"inputWarpName": "deep",
-                                                    "inputCoaddName": "deep",
-                                                    "outputCoaddName": "dcr",
-                                                    "warpType": "direct",
-                                                    "warpTypeSuffix": "",
-                                                    "fakesType": ""}):
+class DcrAssembleCoaddConnections(
+    AssembleCoaddConnections,
+    dimensions=("tract", "patch", "band", "skymap"),
+    defaultTemplates={
+        "inputWarpName": "deep",
+        "inputCoaddName": "deep",
+        "outputCoaddName": "dcr",
+        "warpType": "direct",
+        "warpTypeSuffix": "",
+        "fakesType": "",
+    },
+):
     inputWarps = pipeBase.connectionTypes.Input(
-        doc=("Input list of warps to be assembled i.e. stacked."
-             "Note that this will often be different than the inputCoaddName."
-             "WarpType (e.g. direct, psfMatched) is controlled by the warpType config parameter"),
+        doc=(
+            "Input list of warps to be assembled i.e. stacked."
+            "Note that this will often be different than the inputCoaddName."
+            "WarpType (e.g. direct, psfMatched) is controlled by the warpType config parameter"
+        ),
         name="{inputWarpName}Coadd_{warpType}Warp",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "visit", "instrument"),
         deferLoad=True,
-        multiple=True
+        multiple=True,
     )
     templateExposure = pipeBase.connectionTypes.Input(
         doc="Input coadded exposure, produced by previous call to AssembleCoadd",
@@ -95,8 +101,7 @@ class DcrAssembleCoaddConnections(AssembleCoaddConnections,
         self.outputs.remove("nImage")
 
 
-class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig,
-                             pipelineConnections=DcrAssembleCoaddConnections):
+class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections=DcrAssembleCoaddConnections):
     dcrNumSubfilters = pexConfig.Field(
         dtype=int,
         doc="Number of sub-filters to forward model chromatic effects to fit the supplied exposures.",
@@ -122,18 +127,18 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig,
     useConvergence = pexConfig.Field(
         dtype=bool,
         doc="Use convergence test as a forward modeling end condition?"
-            "If not set, skips calculating convergence and runs for ``maxNumIter`` iterations",
+        "If not set, skips calculating convergence and runs for ``maxNumIter`` iterations",
         default=True,
     )
     baseGain = pexConfig.Field(
         dtype=float,
         optional=True,
         doc="Relative weight to give the new solution vs. the last solution when updating the model."
-            "A value of 1.0 gives equal weight to both solutions."
-            "Small values imply slower convergence of the solution, but can "
-            "help prevent overshooting and failures in the fit."
-            "If ``baseGain`` is None, a conservative gain "
-            "will be calculated from the number of subfilters. ",
+        "A value of 1.0 gives equal weight to both solutions."
+        "Small values imply slower convergence of the solution, but can "
+        "help prevent overshooting and failures in the fit."
+        "If ``baseGain`` is None, a conservative gain "
+        "will be calculated from the number of subfilters. ",
         default=None,
     )
     useProgressiveGain = pexConfig.Field(
@@ -160,37 +165,30 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig,
     )
     splitSubfilters = pexConfig.Field(
         dtype=bool,
-        doc="Calculate DCR for two evenly-spaced wavelengths in each subfilter."
-            "Instead of at the midpoint",
+        doc="Calculate DCR for two evenly-spaced wavelengths in each subfilter. Instead of at the midpoint",
         default=True,
     )
     splitThreshold = pexConfig.Field(
         dtype=float,
         doc="Minimum DCR difference within a subfilter to use ``splitSubfilters``, in pixels."
-            "Set to 0 to always split the subfilters.",
+        "Set to 0 to always split the subfilters.",
         default=0.1,
     )
     regularizeModelIterations = pexConfig.Field(
         dtype=float,
-        doc="Maximum relative change of the model allowed between iterations."
-            "Set to zero to disable.",
-        default=2.,
+        doc="Maximum relative change of the model allowed between iterations. Set to zero to disable.",
+        default=2.0,
     )
     regularizeModelFrequency = pexConfig.Field(
         dtype=float,
-        doc="Maximum relative change of the model allowed between subfilters."
-            "Set to zero to disable.",
-        default=4.,
+        doc="Maximum relative change of the model allowed between subfilters. Set to zero to disable.",
+        default=4.0,
     )
     convergenceMaskPlanes = pexConfig.ListField(
-        dtype=str,
-        default=["DETECTED"],
-        doc="Mask planes to use to calculate convergence."
+        dtype=str, default=["DETECTED"], doc="Mask planes to use to calculate convergence."
     )
     regularizationWidth = pexConfig.Field(
-        dtype=int,
-        default=2,
-        doc="Minimum radius of a region to include in regularization, in pixels."
+        dtype=int, default=2, doc="Minimum radius of a region to include in regularization, in pixels."
     )
     imageInterpOrder = pexConfig.Field(
         dtype=int,
@@ -214,7 +212,7 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig,
     )
     measurePsfSources = pexConfig.ConfigurableField(
         target=SingleFrameMeasurementTask,
-        doc="Task to measure sources for PSF measurement, if ``doCalculatePsf`` is set."
+        doc="Task to measure sources for PSF measurement, if ``doCalculatePsf`` is set.",
     )
     measurePsf = pexConfig.ConfigurableField(
         target=MeasurePsfTask,
@@ -252,8 +250,11 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig,
         # Use the variance plane to calculate signal to noise
         self.detectPsfSources.thresholdType = "pixel_stdev"
         # Ensure psf candidate size is as large as piff psf size.
-        if (self.doCalculatePsf and self.measurePsf.psfDeterminer.name == "piff"
-                and self.psfDeterminer["piff"].kernelSize > self.makePsfCandidates.kernelSize):
+        if (
+            self.doCalculatePsf
+            and self.measurePsf.psfDeterminer.name == "piff"
+            and self.psfDeterminer["piff"].kernelSize > self.makePsfCandidates.kernelSize
+        ):
             self.makePsfCandidates.kernelSize = self.psfDeterminer["piff"].kernelSize
 
 
@@ -340,30 +341,34 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         skyMap = inputData["skyMap"]
         outputDataId = butlerQC.quantum.dataId
 
-        inputData['skyInfo'] = makeSkyInfo(skyMap,
-                                           tractId=outputDataId['tract'],
-                                           patchId=outputDataId['patch'])
+        inputData["skyInfo"] = makeSkyInfo(
+            skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"]
+        )
 
         # Construct list of input Deferred Datasets
-        warpRefList = inputData['inputWarps']
+        warpRefList = inputData["inputWarps"]
 
         inputs = self.prepareInputs(warpRefList)
-        self.log.info("Found %d %s", len(inputs.tempExpRefList),
-                      self.getTempExpDatasetName(self.warpType))
+        self.log.info("Found %d %s", len(inputs.tempExpRefList), self.getTempExpDatasetName(self.warpType))
         if len(inputs.tempExpRefList) == 0:
             self.log.warning("No coadd temporary exposures found")
             return
 
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
-        retStruct = self.run(inputData['skyInfo'], inputs.tempExpRefList, inputs.imageScalerList,
-                             inputs.weightList, supplementaryData=supplementaryData)
+        retStruct = self.run(
+            inputData["skyInfo"],
+            inputs.tempExpRefList,
+            inputs.imageScalerList,
+            inputs.weightList,
+            supplementaryData=supplementaryData,
+        )
 
-        inputData.setdefault('brightObjectMask', None)
+        inputData.setdefault("brightObjectMask", None)
         for subfilter in range(self.config.dcrNumSubfilters):
             # Use the PSF of the stacked dcrModel, and do not recalculate the
             # PSF for each subfilter
             retStruct.dcrCoadds[subfilter].setPsf(retStruct.coaddExposure.getPsf())
-            self.processResults(retStruct.dcrCoadds[subfilter], inputData['brightObjectMask'], outputDataId)
+            self.processResults(retStruct.dcrCoadds[subfilter], inputData["brightObjectMask"], outputDataId)
 
         if self.config.doWrite:
             butlerQC.put(retStruct, outputRefs)
@@ -396,10 +401,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         table = afwTable.SourceTable.make(self.schema)
         detResults = self.detectPsfSources.run(table, coaddExposure, clearMask=False)
         coaddSources = detResults.sources
-        self.measurePsfSources.run(
-            measCat=coaddSources,
-            exposure=coaddExposure
-        )
+        self.measurePsfSources.run(measCat=coaddSources, exposure=coaddExposure)
         # Measure the PSF on the stacked subfilter coadds if possible.
         # We should already have a decent estimate of the coadd PSF, however,
         # so in case of any errors simply log them as a warning and use the
@@ -438,7 +440,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             If ``lambdaMin`` is missing from the Mapper class of the obs
             package being used.
         """
-        sigma2fwhm = 2.*np.sqrt(2.*np.log(2.))
+        sigma2fwhm = 2.0 * np.sqrt(2.0 * np.log(2.0))
         filterLabel = templateCoadd.getFilter()
         dcrShifts = []
         airmassDict = {}
@@ -450,7 +452,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             visit = warpExpRef.dataId["visit"]
             # Just need a rough estimate; average positions are fine
             psfAvgPos = psf.getAveragePosition()
-            psfSize = psf.computeShape(psfAvgPos).getDeterminantRadius()*sigma2fwhm
+            psfSize = psf.computeShape(psfAvgPos).getDeterminantRadius() * sigma2fwhm
             airmass = visitInfo.getBoresightAirmass()
             parallacticAngle = visitInfo.getBoresightParAngle().asDegrees()
             airmassDict[visit] = airmass
@@ -458,10 +460,19 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             psfSizeDict[visit] = psfSize
             if self.config.doAirmassWeight:
                 weightList[visitNum] *= airmass
-            dcrShifts.append(np.max(np.abs(calculateDcr(visitInfo, templateCoadd.getWcs(),
-                                                        self.config.effectiveWavelength,
-                                                        self.config.bandwidth,
-                                                        self.config.dcrNumSubfilters))))
+            dcrShifts.append(
+                np.max(
+                    np.abs(
+                        calculateDcr(
+                            visitInfo,
+                            templateCoadd.getWcs(),
+                            self.config.effectiveWavelength,
+                            self.config.bandwidth,
+                            self.config.dcrNumSubfilters,
+                        )
+                    )
+                )
+            )
         self.log.info("Selected airmasses:\n%s", airmassDict)
         self.log.info("Selected parallactic angles:\n%s", angleDict)
         self.log.info("Selected PSF sizes:\n%s", psfSizeDict)
@@ -472,18 +483,19 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             self.log.warning("Unable to calculate restricted PSF, using default coadd PSF: %s", e)
         else:
             psf = templateCoadd.getPsf()
-        dcrModels = DcrModel.fromImage(templateCoadd.maskedImage,
-                                       self.config.dcrNumSubfilters,
-                                       effectiveWavelength=self.config.effectiveWavelength,
-                                       bandwidth=self.config.bandwidth,
-                                       wcs=templateCoadd.getWcs(),
-                                       filterLabel=filterLabel,
-                                       psf=psf)
+        dcrModels = DcrModel.fromImage(
+            templateCoadd.maskedImage,
+            self.config.dcrNumSubfilters,
+            effectiveWavelength=self.config.effectiveWavelength,
+            bandwidth=self.config.bandwidth,
+            wcs=templateCoadd.getWcs(),
+            filterLabel=filterLabel,
+            psf=psf,
+        )
         return dcrModels
 
     @timeMethod
-    def run(self, skyInfo, warpRefList, imageScalerList, weightList,
-            supplementaryData=None):
+    def run(self, skyInfo, warpRefList, imageScalerList, weightList, supplementaryData=None):
         r"""Assemble the coadd.
 
         Requires additional inputs Struct ``supplementaryData`` to contain a
@@ -540,7 +552,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 `list` of exposure count images for each subfilter.
         """
         minNumIter = self.config.minNumIter or self.config.dcrNumSubfilters
-        maxNumIter = self.config.maxNumIter or self.config.dcrNumSubfilters*3
+        maxNumIter = self.config.maxNumIter or self.config.dcrNumSubfilters * 3
         templateCoadd = supplementaryData.templateCoadd
         baseMask = templateCoadd.mask.clone()
         # The variance plane is for each subfilter
@@ -562,8 +574,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         stats = self.prepareStats(mask=badPixelMask)
         dcrModels = self.prepareDcrInputs(templateCoadd, warpRefList, weightList)
         if self.config.doNImage:
-            dcrNImages, dcrWeights = self.calculateNImage(dcrModels, skyInfo.bbox, warpRefList,
-                                                          spanSetMaskList, stats.ctrl)
+            dcrNImages, dcrWeights = self.calculateNImage(
+                dcrModels, skyInfo.bbox, warpRefList, spanSetMaskList, stats.ctrl
+            )
             nImage = afwImage.ImageU(skyInfo.bbox)
             # Note that this nImage will be a factor of dcrNumSubfilters higher
             # than the nImage returned by assembleCoadd for most pixels. This
@@ -575,82 +588,134 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             dcrNImages = None
 
         subregionSize = geom.Extent2I(*self.config.subregionSize)
-        nSubregions = (ceil(skyInfo.bbox.getHeight()/subregionSize[1])
-                       * ceil(skyInfo.bbox.getWidth()/subregionSize[0]))
+        nSubregions = ceil(skyInfo.bbox.getHeight() / subregionSize[1]) * ceil(
+            skyInfo.bbox.getWidth() / subregionSize[0]
+        )
         subIter = 0
         for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
             modelIter = 0
             subIter += 1
-            self.log.info("Computing coadd over patch %s subregion %s of %s: %s",
-                          skyInfo.patchInfo.getIndex(), subIter, nSubregions, subBBox)
+            self.log.info(
+                "Computing coadd over patch %s subregion %s of %s: %s",
+                skyInfo.patchInfo.getIndex(),
+                subIter,
+                nSubregions,
+                subBBox,
+            )
             dcrBBox = geom.Box2I(subBBox)
             dcrBBox.grow(self.bufferSize)
             dcrBBox.clip(dcrModels.bbox)
             modelWeights = self.calculateModelWeights(dcrModels, dcrBBox)
-            subExposures = self.loadSubExposures(dcrBBox, stats.ctrl, warpRefList,
-                                                 imageScalerList, spanSetMaskList)
-            convergenceMetric = self.calculateConvergence(dcrModels, subExposures, subBBox,
-                                                          warpRefList, weightList, stats.ctrl)
+            subExposures = self.loadSubExposures(
+                dcrBBox, stats.ctrl, warpRefList, imageScalerList, spanSetMaskList
+            )
+            convergenceMetric = self.calculateConvergence(
+                dcrModels, subExposures, subBBox, warpRefList, weightList, stats.ctrl
+            )
             self.log.info("Initial convergence : %s", convergenceMetric)
             convergenceList = [convergenceMetric]
             gainList = []
-            convergenceCheck = 1.
+            convergenceCheck = 1.0
             refImage = templateCoadd.image
-            while (convergenceCheck > self.config.convergenceThreshold or modelIter <= minNumIter):
+            while convergenceCheck > self.config.convergenceThreshold or modelIter <= minNumIter:
                 gain = self.calculateGain(convergenceList, gainList)
-                self.dcrAssembleSubregion(dcrModels, subExposures, subBBox, dcrBBox, warpRefList,
-                                          stats.ctrl, convergenceMetric, gain,
-                                          modelWeights, refImage, dcrWeights)
+                self.dcrAssembleSubregion(
+                    dcrModels,
+                    subExposures,
+                    subBBox,
+                    dcrBBox,
+                    warpRefList,
+                    stats.ctrl,
+                    convergenceMetric,
+                    gain,
+                    modelWeights,
+                    refImage,
+                    dcrWeights,
+                )
                 if self.config.useConvergence:
-                    convergenceMetric = self.calculateConvergence(dcrModels, subExposures, subBBox,
-                                                                  warpRefList, weightList, stats.ctrl)
+                    convergenceMetric = self.calculateConvergence(
+                        dcrModels, subExposures, subBBox, warpRefList, weightList, stats.ctrl
+                    )
                     if convergenceMetric == 0:
-                        self.log.warning("Coadd patch %s subregion %s had convergence metric of 0.0 which is "
-                                         "most likely due to there being no valid data in the region.",
-                                         skyInfo.patchInfo.getIndex(), subIter)
+                        self.log.warning(
+                            "Coadd patch %s subregion %s had convergence metric of 0.0 which is "
+                            "most likely due to there being no valid data in the region.",
+                            skyInfo.patchInfo.getIndex(),
+                            subIter,
+                        )
                         break
-                    convergenceCheck = (convergenceList[-1] - convergenceMetric)/convergenceMetric
+                    convergenceCheck = (convergenceList[-1] - convergenceMetric) / convergenceMetric
                     if (convergenceCheck < 0) & (modelIter > minNumIter):
-                        self.log.warning("Coadd patch %s subregion %s diverged before reaching maximum "
-                                         "iterations or desired convergence improvement of %s."
-                                         " Divergence: %s",
-                                         skyInfo.patchInfo.getIndex(), subIter,
-                                         self.config.convergenceThreshold, convergenceCheck)
+                        self.log.warning(
+                            "Coadd patch %s subregion %s diverged before reaching maximum "
+                            "iterations or desired convergence improvement of %s."
+                            " Divergence: %s",
+                            skyInfo.patchInfo.getIndex(),
+                            subIter,
+                            self.config.convergenceThreshold,
+                            convergenceCheck,
+                        )
                         break
                     convergenceList.append(convergenceMetric)
                 if modelIter > maxNumIter:
                     if self.config.useConvergence:
-                        self.log.warning("Coadd patch %s subregion %s reached maximum iterations "
-                                         "before reaching desired convergence improvement of %s."
-                                         " Final convergence improvement: %s",
-                                         skyInfo.patchInfo.getIndex(), subIter,
-                                         self.config.convergenceThreshold, convergenceCheck)
+                        self.log.warning(
+                            "Coadd patch %s subregion %s reached maximum iterations "
+                            "before reaching desired convergence improvement of %s."
+                            " Final convergence improvement: %s",
+                            skyInfo.patchInfo.getIndex(),
+                            subIter,
+                            self.config.convergenceThreshold,
+                            convergenceCheck,
+                        )
                     break
 
                 if self.config.useConvergence:
-                    self.log.info("Iteration %s with convergence metric %s, %.4f%% improvement (gain: %.2f)",
-                                  modelIter, convergenceMetric, 100.*convergenceCheck, gain)
+                    self.log.info(
+                        "Iteration %s with convergence metric %s, %.4f%% improvement (gain: %.2f)",
+                        modelIter,
+                        convergenceMetric,
+                        100.0 * convergenceCheck,
+                        gain,
+                    )
                 modelIter += 1
             else:
                 if self.config.useConvergence:
-                    self.log.info("Coadd patch %s subregion %s finished with "
-                                  "convergence metric %s after %s iterations",
-                                  skyInfo.patchInfo.getIndex(), subIter, convergenceMetric, modelIter)
+                    self.log.info(
+                        "Coadd patch %s subregion %s finished with "
+                        "convergence metric %s after %s iterations",
+                        skyInfo.patchInfo.getIndex(),
+                        subIter,
+                        convergenceMetric,
+                        modelIter,
+                    )
                 else:
-                    self.log.info("Coadd patch %s subregion %s finished after %s iterations",
-                                  skyInfo.patchInfo.getIndex(), subIter, modelIter)
+                    self.log.info(
+                        "Coadd patch %s subregion %s finished after %s iterations",
+                        skyInfo.patchInfo.getIndex(),
+                        subIter,
+                        modelIter,
+                    )
             if self.config.useConvergence and convergenceMetric > 0:
-                self.log.info("Final convergence improvement was %.4f%% overall",
-                              100*(convergenceList[0] - convergenceMetric)/convergenceMetric)
+                self.log.info(
+                    "Final convergence improvement was %.4f%% overall",
+                    100 * (convergenceList[0] - convergenceMetric) / convergenceMetric,
+                )
 
-        dcrCoadds = self.fillCoadd(dcrModels, skyInfo, warpRefList, weightList,
-                                   calibration=self.scaleZeroPoint.getPhotoCalib(),
-                                   coaddInputs=templateCoadd.getInfo().getCoaddInputs(),
-                                   mask=baseMask,
-                                   variance=baseVariance)
+        dcrCoadds = self.fillCoadd(
+            dcrModels,
+            skyInfo,
+            warpRefList,
+            weightList,
+            calibration=self.scaleZeroPoint.getPhotoCalib(),
+            coaddInputs=templateCoadd.getInfo().getCoaddInputs(),
+            mask=baseMask,
+            variance=baseVariance,
+        )
         coaddExposure = self.stackCoadd(dcrCoadds)
-        return pipeBase.Struct(coaddExposure=coaddExposure, nImage=nImage,
-                               dcrCoadds=dcrCoadds, dcrNImages=dcrNImages)
+        return pipeBase.Struct(
+            coaddExposure=coaddExposure, nImage=nImage, dcrCoadds=dcrCoadds, dcrNImages=dcrNImages
+        )
 
     def calculateNImage(self, dcrModels, bbox, warpRefList, spanSetMaskList, statsCtrl):
         """Calculate the number of exposures contributing to each subfilter.
@@ -681,37 +746,49 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         dcrNImages = [afwImage.ImageU(bbox) for subfilter in range(self.config.dcrNumSubfilters)]
         dcrWeights = [afwImage.ImageF(bbox) for subfilter in range(self.config.dcrNumSubfilters)]
         for warpExpRef, altMaskSpans in zip(warpRefList, spanSetMaskList):
-            exposure = warpExpRef.get(parameters={'bbox': bbox})
+            exposure = warpExpRef.get(parameters={"bbox": bbox})
             visitInfo = exposure.getInfo().getVisitInfo()
             wcs = exposure.getInfo().getWcs()
             mask = exposure.mask
             if altMaskSpans is not None:
                 self.applyAltMaskPlanes(mask, altMaskSpans)
             weightImage = np.zeros_like(exposure.image.array)
-            weightImage[(mask.array & statsCtrl.getAndMask()) == 0] = 1.
+            weightImage[(mask.array & statsCtrl.getAndMask()) == 0] = 1.0
             # The weights must be shifted in exactly the same way as the
             # residuals, because they will be used as the denominator in the
             # weighted average of residuals.
-            weightsGenerator = self.dcrResiduals(weightImage, visitInfo, wcs,
-                                                 dcrModels.effectiveWavelength, dcrModels.bandwidth)
+            weightsGenerator = self.dcrResiduals(
+                weightImage, visitInfo, wcs, dcrModels.effectiveWavelength, dcrModels.bandwidth
+            )
             for shiftedWeights, dcrNImage, dcrWeight in zip(weightsGenerator, dcrNImages, dcrWeights):
                 dcrNImage.array += np.rint(shiftedWeights).astype(dcrNImage.array.dtype)
                 dcrWeight.array += shiftedWeights
         # Exclude any pixels that don't have at least one exposure contributing
         # in all subfilters
-        weightsThreshold = 1.
+        weightsThreshold = 1.0
         goodPix = dcrWeights[0].array > weightsThreshold
         for weights in dcrWeights[1:]:
             goodPix = (weights.array > weightsThreshold) & goodPix
         for subfilter in range(self.config.dcrNumSubfilters):
-            dcrWeights[subfilter].array[goodPix] = 1./dcrWeights[subfilter].array[goodPix]
-            dcrWeights[subfilter].array[~goodPix] = 0.
+            dcrWeights[subfilter].array[goodPix] = 1.0 / dcrWeights[subfilter].array[goodPix]
+            dcrWeights[subfilter].array[~goodPix] = 0.0
             dcrNImages[subfilter].array[~goodPix] = 0
         return (dcrNImages, dcrWeights)
 
-    def dcrAssembleSubregion(self, dcrModels, subExposures, bbox, dcrBBox, warpRefList,
-                             statsCtrl, convergenceMetric,
-                             gain, modelWeights, refImage, dcrWeights):
+    def dcrAssembleSubregion(
+        self,
+        dcrModels,
+        subExposures,
+        bbox,
+        dcrBBox,
+        warpRefList,
+        statsCtrl,
+        convergenceMetric,
+        gain,
+        modelWeights,
+        refImage,
+        dcrWeights,
+    ):
         """Assemble the DCR coadd for a sub-region.
 
         Build a DCR-matched template for each input exposure, then shift the
@@ -762,12 +839,14 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             exposure = subExposures[visit]
             visitInfo = exposure.getInfo().getVisitInfo()
             wcs = exposure.getInfo().getWcs()
-            templateImage = dcrModels.buildMatchedTemplate(exposure=exposure,
-                                                           bbox=exposure.getBBox(),
-                                                           order=self.config.imageInterpOrder,
-                                                           splitSubfilters=self.config.splitSubfilters,
-                                                           splitThreshold=self.config.splitThreshold,
-                                                           amplifyModel=self.config.accelerateModel)
+            templateImage = dcrModels.buildMatchedTemplate(
+                exposure=exposure,
+                bbox=exposure.getBBox(),
+                order=self.config.imageInterpOrder,
+                splitSubfilters=self.config.splitSubfilters,
+                splitThreshold=self.config.splitThreshold,
+                amplifyModel=self.config.accelerateModel,
+            )
             residual = exposure.image.array - templateImage.array
             # Note that the variance plane here is used to store weights, not
             # the actual variance
@@ -776,15 +855,22 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             # This allows the residual for a given subfilter and exposure to be
             # created on the fly, instead of needing to store them all in
             # memory.
-            residualGeneratorList.append(self.dcrResiduals(residual, visitInfo, wcs,
-                                                           dcrModels.effectiveWavelength,
-                                                           dcrModels.bandwidth))
+            residualGeneratorList.append(
+                self.dcrResiduals(
+                    residual, visitInfo, wcs, dcrModels.effectiveWavelength, dcrModels.bandwidth
+                )
+            )
 
-        dcrSubModelOut = self.newModelFromResidual(dcrModels, residualGeneratorList, dcrBBox, statsCtrl,
-                                                   gain=gain,
-                                                   modelWeights=modelWeights,
-                                                   refImage=refImage,
-                                                   dcrWeights=dcrWeights)
+        dcrSubModelOut = self.newModelFromResidual(
+            dcrModels,
+            residualGeneratorList,
+            dcrBBox,
+            statsCtrl,
+            gain=gain,
+            modelWeights=modelWeights,
+            refImage=refImage,
+            dcrWeights=dcrWeights,
+        )
         dcrModels.assign(dcrSubModelOut, bbox)
 
     def dcrResiduals(self, residual, visitInfo, wcs, effectiveWavelength, bandwidth):
@@ -816,14 +902,27 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         # Note that `splitSubfilters` is always turned off in the reverse
         # direction. This option introduces additional blurring if applied to
         # the residuals.
-        dcrShift = calculateDcr(visitInfo, wcs, effectiveWavelength, bandwidth, self.config.dcrNumSubfilters,
-                                splitSubfilters=False)
+        dcrShift = calculateDcr(
+            visitInfo,
+            wcs,
+            effectiveWavelength,
+            bandwidth,
+            self.config.dcrNumSubfilters,
+            splitSubfilters=False,
+        )
         for dcr in dcrShift:
-            yield applyDcr(filteredResidual, dcr, useInverse=True, splitSubfilters=False,
-                           doPrefilter=False, order=self.config.imageInterpOrder)
+            yield applyDcr(
+                filteredResidual,
+                dcr,
+                useInverse=True,
+                splitSubfilters=False,
+                doPrefilter=False,
+                order=self.config.imageInterpOrder,
+            )
 
-    def newModelFromResidual(self, dcrModels, residualGeneratorList, dcrBBox, statsCtrl,
-                             gain, modelWeights, refImage, dcrWeights):
+    def newModelFromResidual(
+        self, dcrModels, residualGeneratorList, dcrBBox, statsCtrl, gain, modelWeights, refImage, dcrWeights
+    ):
         """Calculate a new DcrModel from a set of image residuals.
 
         Parameters
@@ -866,19 +965,33 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             badPixels = ~np.isfinite(newModel.array)
             newModel.array[badPixels] = model[dcrBBox].array[badPixels]
             if self.config.regularizeModelIterations > 0:
-                dcrModels.regularizeModelIter(subfilter, newModel, dcrBBox,
-                                              self.config.regularizeModelIterations,
-                                              self.config.regularizationWidth)
+                dcrModels.regularizeModelIter(
+                    subfilter,
+                    newModel,
+                    dcrBBox,
+                    self.config.regularizeModelIterations,
+                    self.config.regularizationWidth,
+                )
             newModelImages.append(newModel)
         if self.config.regularizeModelFrequency > 0:
-            dcrModels.regularizeModelFreq(newModelImages, dcrBBox, statsCtrl,
-                                          self.config.regularizeModelFrequency,
-                                          self.config.regularizationWidth)
+            dcrModels.regularizeModelFreq(
+                newModelImages,
+                dcrBBox,
+                statsCtrl,
+                self.config.regularizeModelFrequency,
+                self.config.regularizationWidth,
+            )
         dcrModels.conditionDcrModel(newModelImages, dcrBBox, gain=gain)
         self.applyModelWeights(newModelImages, refImage[dcrBBox], modelWeights)
-        return DcrModel(newModelImages, dcrModels.filter, dcrModels.effectiveWavelength,
-                        dcrModels.bandwidth, dcrModels.psf,
-                        dcrModels.mask, dcrModels.variance)
+        return DcrModel(
+            newModelImages,
+            dcrModels.filter,
+            dcrModels.effectiveWavelength,
+            dcrModels.bandwidth,
+            dcrModels.psf,
+            dcrModels.mask,
+            dcrModels.variance,
+        )
 
     def calculateConvergence(self, dcrModels, subExposures, bbox, warpRefList, weightList, statsCtrl):
         """Calculate a quality of fit metric for the matched templates.
@@ -905,13 +1018,14 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             sub-region.
         """
         significanceImage = np.abs(dcrModels.getReferenceImage(bbox))
-        nSigma = 3.
-        significanceImage += nSigma*dcrModels.calculateNoiseCutoff(dcrModels[1], statsCtrl,
-                                                                   bufferSize=self.bufferSize)
+        nSigma = 3.0
+        significanceImage += nSigma * dcrModels.calculateNoiseCutoff(
+            dcrModels[1], statsCtrl, bufferSize=self.bufferSize
+        )
         if np.max(significanceImage) == 0:
-            significanceImage += 1.
+            significanceImage += 1.0
         weight = 0
-        metric = 0.
+        metric = 0.0
         metricList = {}
         for warpExpRef, expWeight in zip(warpRefList, weightList):
             visit = warpExpRef.dataId["visit"]
@@ -919,9 +1033,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             singleMetric = self.calculateSingleConvergence(dcrModels, exposure, significanceImage, statsCtrl)
             metric += singleMetric
             metricList[visit] = singleMetric
-            weight += 1.
+            weight += 1.0
         self.log.info("Individual metrics:\n%s", metricList)
-        return 1.0 if weight == 0.0 else metric/weight
+        return 1.0 if weight == 0.0 else metric / weight
 
     def calculateSingleConvergence(self, dcrModels, exposure, significanceImage, statsCtrl):
         """Calculate a quality of fit metric for a single matched template.
@@ -944,25 +1058,27 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             Quality of fit metric for one exposure, within the sub-region.
         """
         convergeMask = exposure.mask.getPlaneBitMask(self.config.convergenceMaskPlanes)
-        templateImage = dcrModels.buildMatchedTemplate(exposure=exposure,
-                                                       bbox=exposure.getBBox(),
-                                                       order=self.config.imageInterpOrder,
-                                                       splitSubfilters=self.config.splitSubfilters,
-                                                       splitThreshold=self.config.splitThreshold,
-                                                       amplifyModel=self.config.accelerateModel)
-        diffVals = np.abs(exposure.image.array - templateImage.array)*significanceImage
-        refVals = np.abs(exposure.image.array + templateImage.array)*significanceImage/2.
+        templateImage = dcrModels.buildMatchedTemplate(
+            exposure=exposure,
+            bbox=exposure.getBBox(),
+            order=self.config.imageInterpOrder,
+            splitSubfilters=self.config.splitSubfilters,
+            splitThreshold=self.config.splitThreshold,
+            amplifyModel=self.config.accelerateModel,
+        )
+        diffVals = np.abs(exposure.image.array - templateImage.array) * significanceImage
+        refVals = np.abs(exposure.image.array + templateImage.array) * significanceImage / 2.0
 
         finitePixels = np.isfinite(diffVals)
         goodMaskPixels = (exposure.mask.array & statsCtrl.getAndMask()) == 0
         convergeMaskPixels = exposure.mask.array & convergeMask > 0
         usePixels = finitePixels & goodMaskPixels & convergeMaskPixels
         if np.sum(usePixels) == 0:
-            metric = 0.
+            metric = 0.0
         else:
             diffUse = diffVals[usePixels]
             refUse = refVals[usePixels]
-            metric = np.sum(diffUse/np.median(diffUse))/np.sum(refUse/np.median(diffUse))
+            metric = np.sum(diffUse / np.median(diffUse)) / np.sum(refUse / np.median(diffUse))
         return metric
 
     def stackCoadd(self, dcrCoadds):
@@ -984,8 +1100,17 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             coaddExposure.maskedImage += coadd.maskedImage
         return coaddExposure
 
-    def fillCoadd(self, dcrModels, skyInfo, warpRefList, weightList, calibration=None, coaddInputs=None,
-                  mask=None, variance=None):
+    def fillCoadd(
+        self,
+        dcrModels,
+        skyInfo,
+        warpRefList,
+        weightList,
+        calibration=None,
+        coaddInputs=None,
+        mask=None,
+        variance=None,
+    ):
         """Create a list of coadd exposures from a list of masked images.
 
         Parameters
@@ -1017,7 +1142,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         refModel = dcrModels.getReferenceImage()
         for model in dcrModels:
             if self.config.accelerateModel > 1:
-                model.array = (model.array - refModel)*self.config.accelerateModel + refModel
+                model.array = (model.array - refModel) * self.config.accelerateModel + refModel
             coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
             if calibration is not None:
                 coaddExposure.setPhotoCalib(calibration)
@@ -1074,14 +1199,16 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         """
         nIter = len(convergenceList)
         if nIter != len(gainList) + 1:
-            raise ValueError("convergenceList (%d) must be one element longer than gainList (%d)."
-                             % (len(convergenceList), len(gainList)))
+            raise ValueError(
+                "convergenceList (%d) must be one element longer than gainList (%d)."
+                % (len(convergenceList), len(gainList))
+            )
 
         if self.config.baseGain is None:
             # If ``baseGain`` is not set, calculate it from the number of DCR
             # subfilters. The more subfilters being modeled, the lower the gain
             # should be.
-            baseGain = 1./(self.config.dcrNumSubfilters - 1)
+            baseGain = 1.0 / (self.config.dcrNumSubfilters - 1)
         else:
             baseGain = self.config.baseGain
 
@@ -1093,15 +1220,17 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             # should asymptotically approach a final value. We can estimate
             # that value from the measured changes in convergence weighted by
             # the gains used in each previous iteration.
-            estFinalConv = [((1 + gainList[i])*convergenceList[i + 1] - convergenceList[i])/gainList[i]
-                            for i in range(nIter - 1)]
+            estFinalConv = [
+                ((1 + gainList[i]) * convergenceList[i + 1] - convergenceList[i]) / gainList[i]
+                for i in range(nIter - 1)
+            ]
             # The convergence metric is strictly positive, so if the estimated
             # final convergence is less than zero, force it to zero.
             estFinalConv = np.array(estFinalConv)
             estFinalConv[estFinalConv < 0] = 0
             # Because the estimate may slowly change over time, only use the
             # most recent measurements.
-            estFinalConv = np.median(estFinalConv[max(nIter - 5, 0):])
+            estFinalConv = np.median(estFinalConv[max(nIter - 5, 0) :])
             lastGain = gainList[-1]
             lastConv = convergenceList[-2]
             newConv = convergenceList[-1]
@@ -1110,17 +1239,17 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             # that the updated model that is actually used is the gain-weighted
             # average of the new and old model, so the convergence would be
             # similarly weighted.
-            predictedConv = (estFinalConv*lastGain + lastConv)/(1. + lastGain)
+            predictedConv = (estFinalConv * lastGain + lastConv) / (1.0 + lastGain)
             # If the measured and predicted convergence are very close, that
             # indicates that our forward model is accurate and we can use a
             # more aggressive gain. If the measured convergence is
             # significantly worse (or better!) than predicted, that indicates
             # that the model is not converging as expected and we should use a
             # more conservative gain.
-            delta = (predictedConv - newConv)/((lastConv - estFinalConv)/(1 + lastGain))
+            delta = (predictedConv - newConv) / ((lastConv - estFinalConv) / (1 + lastGain))
             newGain = 1 - abs(delta)
             # Average the gains to prevent oscillating solutions.
-            newGain = (newGain + lastGain)/2.
+            newGain = (newGain + lastGain) / 2.0
             gain = max(baseGain, newGain)
         else:
             gain = baseGain
@@ -1157,7 +1286,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         convergeMask = dcrModels.mask.getPlaneBitMask(self.config.convergenceMaskPlanes)
         convergeMaskPixels = dcrModels.mask[dcrBBox].array & convergeMask > 0
         weights = np.zeros_like(dcrModels[0][dcrBBox].array)
-        weights[convergeMaskPixels] = 1.
+        weights[convergeMaskPixels] = 1.0
         weights = ndimage.gaussian_filter(weights, self.config.modelWeightsWidth)
         weights /= np.max(weights)
         return weights
@@ -1181,7 +1310,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         if self.config.useModelWeights:
             for model in modelImages:
                 model.array *= modelWeights
-                model.array += refImage.array*(1. - modelWeights)/self.config.dcrNumSubfilters
+                model.array += refImage.array * (1.0 - modelWeights) / self.config.dcrNumSubfilters
 
     def loadSubExposures(self, bbox, statsCtrl, warpRefList, imageScalerList, spanSetMaskList):
         """Pre-load sub-regions of a list of exposures.
@@ -1211,20 +1340,20 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         zipIterables = zip(warpRefList, imageScalerList, spanSetMaskList)
         subExposures = {}
         for warpExpRef, imageScaler, altMaskSpans in zipIterables:
-            exposure = warpExpRef.get(parameters={'bbox': bbox})
+            exposure = warpExpRef.get(parameters={"bbox": bbox})
             visit = warpExpRef.dataId["visit"]
             if altMaskSpans is not None:
                 self.applyAltMaskPlanes(exposure.mask, altMaskSpans)
             imageScaler.scaleMaskedImage(exposure.maskedImage)
             # Note that the variance plane here is used to store weights, not
             # the actual variance
-            exposure.variance.array[:, :] = 0.
+            exposure.variance.array[:, :] = 0.0
             # Set the weight of unmasked pixels to 1.
-            exposure.variance.array[(exposure.mask.array & statsCtrl.getAndMask()) == 0] = 1.
+            exposure.variance.array[(exposure.mask.array & statsCtrl.getAndMask()) == 0] = 1.0
             # Set the image value of masked pixels to zero.
             # This eliminates needing the mask plane when stacking images in
             # ``newModelFromResidual``
-            exposure.image.array[(exposure.mask.array & statsCtrl.getAndMask()) > 0] = 0.
+            exposure.image.array[(exposure.mask.array & statsCtrl.getAndMask()) > 0] = 0.0
             subExposures[visit] = exposure
         return subExposures
 
@@ -1244,7 +1373,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         psf : `lsst.meas.algorithms.CoaddPsf`
             The average PSF of the input exposures with the best seeing.
         """
-        sigma2fwhm = 2.*np.sqrt(2.*np.log(2.))
+        sigma2fwhm = 2.0 * np.sqrt(2.0 * np.log(2.0))
         # Note: ``ccds`` is a `lsst.afw.table.ExposureCatalog` with one entry
         # per ccd and per visit. If there are multiple ccds, it will have that
         # many times more elements than ``warpExpRef``.
@@ -1252,14 +1381,14 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         templatePsf = templateCoadd.getPsf()
         # Just need a rough estimate; average positions are fine
         templateAvgPos = templatePsf.getAveragePosition()
-        psfRefSize = templatePsf.computeShape(templateAvgPos).getDeterminantRadius()*sigma2fwhm
+        psfRefSize = templatePsf.computeShape(templateAvgPos).getDeterminantRadius() * sigma2fwhm
         psfSizes = np.zeros(len(ccds))
         ccdVisits = np.array(ccds["visit"])
         for warpExpRef in warpRefList:
             psf = warpExpRef.get(component="psf")
             visit = warpExpRef.dataId["visit"]
             psfAvgPos = psf.getAveragePosition()
-            psfSize = psf.computeShape(psfAvgPos).getDeterminantRadius()*sigma2fwhm
+            psfSize = psf.computeShape(psfAvgPos).getDeterminantRadius() * sigma2fwhm
             psfSizes[ccdVisits == visit] = psfSize
         # Note that the input PSFs include DCR, which should be absent from the
         # DcrCoadd. The selected PSFs are those that have a FWHM less than or
@@ -1267,6 +1396,5 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         # exposures.
         sizeThreshold = min(np.median(psfSizes), psfRefSize)
         goodPsfs = psfSizes <= sizeThreshold
-        psf = measAlg.CoaddPsf(ccds[goodPsfs], templateCoadd.getWcs(),
-                               self.config.coaddPsf.makeControl())
+        psf = measAlg.CoaddPsf(ccds[goodPsfs], templateCoadd.getWcs(), self.config.coaddPsf.makeControl())
         return psf
