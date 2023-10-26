@@ -28,30 +28,31 @@ __all__ = [
 ]
 
 import copy
-import numpy
-import warnings
 import logging
-import lsst.pex.config as pexConfig
-import lsst.pex.exceptions as pexExceptions
-import lsst.geom as geom
+import warnings
+
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 import lsst.coadd.utils as coaddUtils
-import lsst.pipe.base as pipeBase
+import lsst.geom as geom
 import lsst.meas.algorithms as measAlg
-import lsstDebug
+import lsst.pex.config as pexConfig
+import lsst.pex.exceptions as pexExceptions
+import lsst.pipe.base as pipeBase
 import lsst.utils as utils
-from lsst.skymap import BaseSkyMap
-from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
-from lsst.pipe.tasks.interpImage import InterpImageTask
-from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
-from lsst.pipe.tasks.maskStreaks import MaskStreaksTask
-from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
-from lsst.meas.algorithms import SourceDetectionTask, AccumulatorMeanStack, ScaleVarianceTask
-from lsst.utils.timer import timeMethod
+import lsstDebug
+import numpy
 from deprecated.sphinx import deprecated
+from lsst.meas.algorithms import AccumulatorMeanStack, ScaleVarianceTask, SourceDetectionTask
+from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
+from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
+from lsst.pipe.tasks.interpImage import InterpImageTask
+from lsst.pipe.tasks.maskStreaks import MaskStreaksTask
+from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
+from lsst.skymap import BaseSkyMap
+from lsst.utils.timer import timeMethod
 
 log = logging.getLogger(__name__)
 

@@ -21,8 +21,8 @@
 
 import unittest
 
-from lsst.afw.table import ExposureCatalog, ExposureTable
 from lsst.afw.image import ExposureSummaryStats
+from lsst.afw.table import ExposureCatalog, ExposureTable
 from lsst.drp.tasks.update_visit_summary import (
     UpdateVisitSummaryConfig,
     UpdateVisitSummaryConnections,

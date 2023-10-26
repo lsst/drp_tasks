@@ -19,24 +19,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import unittest
 import os.path
-import numpy as np
-import yaml
+import unittest
+
 import astropy.units as u
+import lsst.afw.geom as afwgeom
+import lsst.afw.table as afwTable
+import lsst.geom
+import lsst.utils
+import numpy as np
 import pandas as pd
 import wcsfit
-
-import lsst.utils
-import lsst.afw.table as afwTable
-import lsst.afw.geom as afwgeom
-from lsst.drp.tasks.gbdesAstrometricFit import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
+import yaml
+from lsst import sphgeom
 from lsst.daf.base import PropertyList
+from lsst.drp.tasks.gbdesAstrometricFit import GbdesAstrometricFitConfig, GbdesAstrometricFitTask
 from lsst.meas.algorithms import ReferenceObjectLoader
 from lsst.meas.algorithms.testUtils import MockRefcatDataId
 from lsst.pipe.base import InMemoryDatasetHandle
-from lsst import sphgeom
-import lsst.geom
 
 TESTDIR = os.path.abspath(os.path.dirname(__file__))
 

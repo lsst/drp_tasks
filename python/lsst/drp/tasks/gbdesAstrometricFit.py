@@ -19,22 +19,24 @@
 # the GNU General Public License along with this program.  If not,
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
-import numpy as np
+import astropy.coordinates
 import astropy.time
 import astropy.units as u
-import astropy.coordinates
-import yaml
-import wcsfit
 import astshim
-
+import lsst.afw.geom as afwgeom
+import lsst.afw.table
 import lsst.geom
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 import lsst.sphgeom
-import lsst.afw.table
-import lsst.afw.geom as afwgeom
-from lsst.meas.algorithms import (LoadReferenceObjectsConfig, ReferenceObjectLoader,
-                                  ReferenceSourceSelectorTask)
+import numpy as np
+import wcsfit
+import yaml
+from lsst.meas.algorithms import (
+    LoadReferenceObjectsConfig,
+    ReferenceObjectLoader,
+    ReferenceSourceSelectorTask,
+)
 from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
 
 __all__ = ["GbdesAstrometricFitConnections", "GbdesAstrometricFitConfig", "GbdesAstrometricFitTask"]

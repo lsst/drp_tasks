@@ -22,16 +22,18 @@
 """Test AssembleCoaddTask and its variants.
 """
 import unittest
-import numpy as np
-
-import lsst.utils.tests
 
 import lsst.pipe.base as pipeBase
-from lsst.drp.tasks.assemble_coadd import (AssembleCoaddTask, AssembleCoaddConfig,
-                                           CompareWarpAssembleCoaddTask, CompareWarpAssembleCoaddConfig,
-                                           )
-from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddTask, DcrAssembleCoaddConfig
-from assemble_coadd_test_utils import makeMockSkyInfo, MockCoaddTestData
+import lsst.utils.tests
+import numpy as np
+from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
+from lsst.drp.tasks.assemble_coadd import (
+    AssembleCoaddConfig,
+    AssembleCoaddTask,
+    CompareWarpAssembleCoaddConfig,
+    CompareWarpAssembleCoaddTask,
+)
+from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddConfig, DcrAssembleCoaddTask
 
 __all__ = [
     "MockAssembleCoaddConfig",

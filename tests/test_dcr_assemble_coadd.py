@@ -22,8 +22,7 @@
 import unittest
 
 import lsst.utils.tests
-
-from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddTask, DcrAssembleCoaddConfig
+from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddConfig, DcrAssembleCoaddTask
 
 
 class DcrAssembleCoaddCalculateGainTestCase(lsst.utils.tests.TestCase):

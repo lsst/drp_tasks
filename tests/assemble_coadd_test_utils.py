@@ -25,22 +25,20 @@ and its derived classes.
 This is not intended to test accessing data with the Butler and instead uses
 mock Butler data references to pass in the simulated data.
 """
-from astropy.time import Time
-from astropy import units as u
-from astropy.coordinates import SkyCoord, EarthLocation, Angle
-import numpy as np
-
-from lsst.afw.cameraGeom.testUtils import DetectorWrapper
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.geom as geom
+import lsst.pipe.base as pipeBase
+import numpy as np
+from astro_metadata_translator import makeObservationInfo
+from astropy import units as u
+from astropy.coordinates import Angle, EarthLocation, SkyCoord
+from astropy.time import Time
+from lsst.afw.cameraGeom.testUtils import DetectorWrapper
 from lsst.geom import arcseconds, degrees
 from lsst.meas.algorithms.testUtils import plantSources
 from lsst.obs.base import MakeRawVisitInfoViaObsInfo
-import lsst.pipe.base as pipeBase
-from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderTask, CoaddInputRecorderConfig
-
-from astro_metadata_translator import makeObservationInfo
+from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderConfig, CoaddInputRecorderTask
 
 __all__ = ["makeMockSkyInfo", "MockCoaddTestData"]
 

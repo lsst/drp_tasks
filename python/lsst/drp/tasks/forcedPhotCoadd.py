@@ -19,15 +19,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import lsst.pex.config
 import lsst.afw.table
-
+import lsst.pex.config
 import lsst.pipe.base as pipeBase
-
 from lsst.meas.base._id_generator import SkyMapIdGeneratorConfig
-from lsst.meas.base.forcedMeasurement import ForcedMeasurementTask
 from lsst.meas.base.applyApCorr import ApplyApCorrTask
 from lsst.meas.base.catalogCalculation import CatalogCalculationTask
+from lsst.meas.base.forcedMeasurement import ForcedMeasurementTask
 from lsst.meas.extensions.scarlet.io import updateCatalogFootprints
 
 __all__ = ("ForcedPhotCoaddConfig", "ForcedPhotCoaddTask")
