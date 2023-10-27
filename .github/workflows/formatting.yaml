@@ -1,0 +1,11 @@
+name: check Python formatting
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: null
+
+jobs:
+  call-workflow:
+    uses: lsst/rubin_workflows/.github/workflows/formatting.yaml@main
