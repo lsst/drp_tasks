@@ -22,23 +22,28 @@
 """Test AssembleCoaddTask and its variants.
 """
 import unittest
-import numpy as np
-
-import lsst.utils.tests
 
 import lsst.pipe.base as pipeBase
-from lsst.drp.tasks.assemble_coadd import (AssembleCoaddTask, AssembleCoaddConfig,
-                                           CompareWarpAssembleCoaddTask, CompareWarpAssembleCoaddConfig,
-                                           )
-from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddTask, DcrAssembleCoaddConfig
-from assemble_coadd_test_utils import makeMockSkyInfo, MockCoaddTestData
+import lsst.utils.tests
+import numpy as np
+from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
+from lsst.drp.tasks.assemble_coadd import (
+    AssembleCoaddConfig,
+    AssembleCoaddTask,
+    CompareWarpAssembleCoaddConfig,
+    CompareWarpAssembleCoaddTask,
+)
+from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddConfig, DcrAssembleCoaddTask
 
-__all__ = ["MockAssembleCoaddConfig", "MockAssembleCoaddTask",
-           "MockCompareWarpAssembleCoaddConfig", "MockCompareWarpAssembleCoaddTask"]
+__all__ = [
+    "MockAssembleCoaddConfig",
+    "MockAssembleCoaddTask",
+    "MockCompareWarpAssembleCoaddConfig",
+    "MockCompareWarpAssembleCoaddTask",
+]
 
 
 class MockAssembleCoaddConfig(AssembleCoaddConfig):
-
     def setDefaults(self):
         super().setDefaults()
         self.doWrite = False
@@ -51,6 +56,7 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
     up the Task, and instead supply in-memory mock data references to the `run`
     method so that the coaddition algorithms can be tested without a Butler.
     """
+
     ConfigClass = MockAssembleCoaddConfig
 
     def __init__(self, **kwargs):
@@ -84,13 +90,17 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
         """
         inputs = self.prepareInputs(warpRefList)
 
-        retStruct = self.run(mockSkyInfo, inputs.tempExpRefList, inputs.imageScalerList,
-                             inputs.weightList, supplementaryData=pipeBase.Struct())
+        retStruct = self.run(
+            mockSkyInfo,
+            inputs.tempExpRefList,
+            inputs.imageScalerList,
+            inputs.weightList,
+            supplementaryData=pipeBase.Struct(),
+        )
         return retStruct
 
 
 class MockCompareWarpAssembleCoaddConfig(CompareWarpAssembleCoaddConfig):
-
     def setDefaults(self):
         super().setDefaults()
         self.assembleStaticSkyModel.retarget(MockAssembleCoaddTask)
@@ -106,6 +116,7 @@ class MockCompareWarpAssembleCoaddTask(MockAssembleCoaddTask, CompareWarpAssembl
     up the Task, and instead supply in-memory mock data references to the `run`
     method so that the coaddition algorithms can be tested without a Butler.
     """
+
     ConfigClass = MockCompareWarpAssembleCoaddConfig
     _DefaultName = "compareWarpAssembleCoadd"
 
@@ -123,22 +134,27 @@ class MockCompareWarpAssembleCoaddTask(MockAssembleCoaddTask, CompareWarpAssembl
             nImage=templateCoadd.nImage,
             warpRefList=templateCoadd.warpRefList,
             imageScalerList=templateCoadd.imageScalerList,
-            weightList=templateCoadd.weightList)
+            weightList=templateCoadd.weightList,
+        )
 
-        retStruct = self.run(mockSkyInfo, inputs.tempExpRefList, inputs.imageScalerList,
-                             inputs.weightList, supplementaryData=supplementaryData)
+        retStruct = self.run(
+            mockSkyInfo,
+            inputs.tempExpRefList,
+            inputs.imageScalerList,
+            inputs.weightList,
+            supplementaryData=supplementaryData,
+        )
         return retStruct
 
 
 class MockDcrAssembleCoaddConfig(DcrAssembleCoaddConfig):
-
     def setDefaults(self):
         super().setDefaults()
         self.assembleStaticSkyModel.retarget(MockCompareWarpAssembleCoaddTask)
         self.assembleStaticSkyModel.doWrite = False
         self.doWrite = False
         self.effectiveWavelength = 476.31  # Use LSST g band values for the test.
-        self.bandwidth = 552. - 405.
+        self.bandwidth = 552.0 - 405.0
 
 
 class MockDcrAssembleCoaddTask(MockCompareWarpAssembleCoaddTask, DcrAssembleCoaddTask):
@@ -149,6 +165,7 @@ class MockDcrAssembleCoaddTask(MockCompareWarpAssembleCoaddTask, DcrAssembleCoad
     up the Task, and instead supply in-memory mock data references to the `run`
     method so that the coaddition algorithms can be tested without a Butler.
     """
+
     ConfigClass = MockDcrAssembleCoaddConfig
     _DefaultName = "dcrAssembleCoadd"
 
@@ -157,7 +174,6 @@ class MockDcrAssembleCoaddTask(MockCompareWarpAssembleCoaddTask, DcrAssembleCoad
 
 
 class MockInputMapAssembleCoaddConfig(MockCompareWarpAssembleCoaddConfig):
-
     def setDefaults(self):
         super().setDefaults()
         self.doInputMap = True
@@ -171,6 +187,7 @@ class MockInputMapAssembleCoaddTask(MockCompareWarpAssembleCoaddTask):
     up the Task, and instead supply in-memory mock data references to the `run`
     method so that the coaddition algorithms can be tested without a Butler.
     """
+
     ConfigClass = MockInputMapAssembleCoaddConfig
     _DefaultName = "inputMapAssembleCoadd"
 
@@ -193,10 +210,12 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         matchedExposures = {}
         for expId in range(100, 110):
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId)
-        self.dataRefList = testData.makeDataRefList(exposures, matchedExposures,
-                                                    'direct', patch=patch, tract=tract)
-        self.dataRefListPsfMatched = testData.makeDataRefList(exposures, matchedExposures,
-                                                              'psfMatched', patch=patch, tract=tract)
+        self.dataRefList = testData.makeDataRefList(
+            exposures, matchedExposures, "direct", patch=patch, tract=tract
+        )
+        self.dataRefListPsfMatched = testData.makeDataRefList(
+            exposures, matchedExposures, "psfMatched", patch=patch, tract=tract
+        )
         self.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
     def checkRun(self, assembleTask, warpType="direct"):
@@ -245,10 +264,8 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         resultsOnline = assembleTaskOnline.runQuantum(self.skyInfo, dataRefList)
         coaddOnline = resultsOnline.coaddExposure
 
-        self.assertFloatsAlmostEqual(coaddOnline.image.array,
-                                     coadd.image.array, rtol=1e-3)
-        self.assertFloatsAlmostEqual(coaddOnline.variance.array,
-                                     coadd.variance.array, rtol=1e-6)
+        self.assertFloatsAlmostEqual(coaddOnline.image.array, coadd.image.array, rtol=1e-3)
+        self.assertFloatsAlmostEqual(coaddOnline.variance.array, coadd.variance.array, rtol=1e-6)
         self.assertMasksEqual(coaddOnline.mask, coadd.mask)
 
     def testInputMap(self):
@@ -263,15 +280,16 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         matchedExposures = {}
         for expId in range(100, 110):
             if expId == 105:
-                badBox = lsst.geom.Box2I(lsst.geom.Point2I(testData.bbox.beginX + 10,
-                                                           testData.bbox.beginY + 10),
-                                         lsst.geom.Extent2I(100, 100))
+                badBox = lsst.geom.Box2I(
+                    lsst.geom.Point2I(testData.bbox.beginX + 10, testData.bbox.beginY + 10),
+                    lsst.geom.Extent2I(100, 100),
+                )
             else:
                 badBox = None
-            exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId,
-                                                                               badRegionBox=badBox)
-        dataRefList = testData.makeDataRefList(exposures, matchedExposures,
-                                               'direct', patch=patch, tract=tract)
+            exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId, badRegionBox=badBox)
+        dataRefList = testData.makeDataRefList(
+            exposures, matchedExposures, "direct", patch=patch, tract=tract
+        )
 
         results = assembleTask.runQuantum(self.skyInfo, dataRefList)
 
@@ -292,8 +310,8 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         metadata = inputMap.metadata
         visitBitDict = {}
         for bit in range(inputMap.wide_mask_maxbits):
-            if f'B{bit:04d}VIS' in metadata:
-                visitBitDict[metadata[f'B{bit:04d}VIS']] = bit
+            if f"B{bit:04d}VIS" in metadata:
+                visitBitDict[metadata[f"B{bit:04d}VIS"]] = bit
         for expId in range(100, 110):
             if expId == 105:
                 self.assertFalse(np.all(inputMap.check_bits_pix(validPix, [visitBitDict[expId]])))

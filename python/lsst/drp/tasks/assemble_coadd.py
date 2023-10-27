@@ -19,72 +19,83 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-__all__ = ["AssembleCoaddTask", "AssembleCoaddConnections", "AssembleCoaddConfig",
-           "CompareWarpAssembleCoaddTask", "CompareWarpAssembleCoaddConfig"]
+__all__ = [
+    "AssembleCoaddTask",
+    "AssembleCoaddConnections",
+    "AssembleCoaddConfig",
+    "CompareWarpAssembleCoaddTask",
+    "CompareWarpAssembleCoaddConfig",
+]
 
 import copy
-import numpy
-import warnings
 import logging
-import lsst.pex.config as pexConfig
-import lsst.pex.exceptions as pexExceptions
-import lsst.geom as geom
+import warnings
+
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 import lsst.coadd.utils as coaddUtils
-import lsst.pipe.base as pipeBase
+import lsst.geom as geom
 import lsst.meas.algorithms as measAlg
-import lsstDebug
+import lsst.pex.config as pexConfig
+import lsst.pex.exceptions as pexExceptions
+import lsst.pipe.base as pipeBase
 import lsst.utils as utils
-from lsst.skymap import BaseSkyMap
-from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
-from lsst.pipe.tasks.interpImage import InterpImageTask
-from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
-from lsst.pipe.tasks.maskStreaks import MaskStreaksTask
-from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
-from lsst.meas.algorithms import SourceDetectionTask, AccumulatorMeanStack, ScaleVarianceTask
-from lsst.utils.timer import timeMethod
+import lsstDebug
+import numpy
 from deprecated.sphinx import deprecated
+from lsst.meas.algorithms import AccumulatorMeanStack, ScaleVarianceTask, SourceDetectionTask
+from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
+from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
+from lsst.pipe.tasks.interpImage import InterpImageTask
+from lsst.pipe.tasks.maskStreaks import MaskStreaksTask
+from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
+from lsst.skymap import BaseSkyMap
+from lsst.utils.timer import timeMethod
 
 log = logging.getLogger(__name__)
 
 
-class AssembleCoaddConnections(pipeBase.PipelineTaskConnections,
-                               dimensions=("tract", "patch", "band", "skymap"),
-                               defaultTemplates={"inputCoaddName": "deep",
-                                                 "outputCoaddName": "deep",
-                                                 "warpType": "direct",
-                                                 "warpTypeSuffix": ""}):
-
+class AssembleCoaddConnections(
+    pipeBase.PipelineTaskConnections,
+    dimensions=("tract", "patch", "band", "skymap"),
+    defaultTemplates={
+        "inputCoaddName": "deep",
+        "outputCoaddName": "deep",
+        "warpType": "direct",
+        "warpTypeSuffix": "",
+    },
+):
     inputWarps = pipeBase.connectionTypes.Input(
-        doc=("Input list of warps to be assemebled i.e. stacked."
-             "WarpType (e.g. direct, psfMatched) is controlled by the "
-             "warpType config parameter"),
+        doc=(
+            "Input list of warps to be assemebled i.e. stacked."
+            "WarpType (e.g. direct, psfMatched) is controlled by the "
+            "warpType config parameter"
+        ),
         name="{inputCoaddName}Coadd_{warpType}Warp",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "visit", "instrument"),
         deferLoad=True,
-        multiple=True
+        multiple=True,
     )
     skyMap = pipeBase.connectionTypes.Input(
-        doc="Input definition of geometry/bbox and projection/wcs for coadded "
-            "exposures",
+        doc="Input definition of geometry/bbox and projection/wcs for coadded " "exposures",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
         storageClass="SkyMap",
-        dimensions=("skymap", ),
+        dimensions=("skymap",),
     )
     selectedVisits = pipeBase.connectionTypes.Input(
         doc="Selected visits to be coadded.",
         name="{outputCoaddName}Visits",
         storageClass="StructuredDataDict",
-        dimensions=("instrument", "tract", "patch", "skymap", "band")
+        dimensions=("instrument", "tract", "patch", "skymap", "band"),
     )
     brightObjectMask = pipeBase.connectionTypes.PrerequisiteInput(
-        doc=("Input Bright Object Mask mask produced with external catalogs "
-             "to be applied to the mask plane BRIGHT_OBJECT."
-             ),
+        doc=(
+            "Input Bright Object Mask mask produced with external catalogs "
+            "to be applied to the mask plane BRIGHT_OBJECT."
+        ),
         name="brightObjectMask",
         storageClass="ObjectMaskCatalog",
         dimensions=("tract", "patch", "skymap", "band"),
@@ -125,8 +136,9 @@ class AssembleCoaddConnections(pipeBase.PipelineTaskConnections,
             self.outputs.remove("inputMap")
 
 
-class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig,
-                          pipelineConnections=AssembleCoaddConnections):
+class AssembleCoaddConfig(
+    CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig, pipelineConnections=AssembleCoaddConnections
+):
     warpType = pexConfig.Field(
         doc="Warp name: one of 'direct' or 'psfMatched'",
         dtype=str,
@@ -147,7 +159,7 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
     )
     doOnlineForMean = pexConfig.Field(
         dtype=bool,
-        doc="Perform online coaddition when statistic=\"MEAN\" to save memory?",
+        doc='Perform online coaddition when statistic="MEAN" to save memory?',
         default=False,
     )
     doSigmaClip = pexConfig.Field(
@@ -158,31 +170,27 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
     )
     sigmaClip = pexConfig.Field(
         dtype=float,
-        doc="Sigma for outlier rejection; ignored if non-clipping statistic "
-            "selected.",
+        doc="Sigma for outlier rejection; ignored if non-clipping statistic " "selected.",
         default=3.0,
     )
     clipIter = pexConfig.Field(
         dtype=int,
-        doc="Number of iterations of outlier rejection; ignored if "
-            "non-clipping statistic selected.",
+        doc="Number of iterations of outlier rejection; ignored if " "non-clipping statistic selected.",
         default=2,
     )
     calcErrorFromInputVariance = pexConfig.Field(
         dtype=bool,
         doc="Calculate coadd variance from input variance by stacking "
-            "statistic. Passed to "
-            "StatisticsControl.setCalcErrorFromInputVariance()",
+        "statistic. Passed to "
+        "StatisticsControl.setCalcErrorFromInputVariance()",
         default=True,
     )
     scaleZeroPoint = pexConfig.ConfigurableField(
         target=ScaleZeroPointTask,
-        doc="Task to adjust the photometric zero point of the coadd temp "
-            "exposures",
+        doc="Task to adjust the photometric zero point of the coadd temp " "exposures",
     )
     doInterp = pexConfig.Field(
-        doc="Interpolate over NaN pixels? Also extrapolate, if necessary, but "
-            "the results are ugly.",
+        doc="Interpolate over NaN pixels? Also extrapolate, if necessary, but " "the results are ugly.",
         dtype=bool,
         default=True,
     )
@@ -202,17 +210,19 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
     )
     doUsePsfMatchedPolygons = pexConfig.Field(
         doc="Use ValidPolygons from shrunk Psf-Matched Calexps? Should be set "
-            "to True by CompareWarp only.",
+        "to True by CompareWarp only.",
         dtype=bool,
         default=False,
     )
     maskPropagationThresholds = pexConfig.DictField(
         keytype=str,
         itemtype=float,
-        doc=("Threshold (in fractional weight) of rejection at which we "
-             "propagate a mask plane to the coadd; that is, we set the mask "
-             "bit on the coadd if the fraction the rejected frames "
-             "would have contributed exceeds this value."),
+        doc=(
+            "Threshold (in fractional weight) of rejection at which we "
+            "propagate a mask plane to the coadd; that is, we set the mask "
+            "bit on the coadd if the fraction the rejected frames "
+            "would have contributed exceeds this value."
+        ),
         default={"SAT": 0.1},
     )
     removeMaskPlanes = pexConfig.ListField(
@@ -238,13 +248,15 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
         dtype=bool,
         default=False,
         optional=False,
-        doc=("Attach a piecewise TransmissionCurve for the coadd? "
-             "(requires all input Exposures to have TransmissionCurves).")
+        doc=(
+            "Attach a piecewise TransmissionCurve for the coadd? "
+            "(requires all input Exposures to have TransmissionCurves)."
+        ),
     )
     hasFakes = pexConfig.Field(
         dtype=bool,
         default=False,
-        doc="Should be set to True if fake sources have been inserted into the input data."
+        doc="Should be set to True if fake sources have been inserted into the input data.",
     )
     doSelectVisits = pexConfig.Field(
         doc="Coadd only visits selected by a SelectVisitsTask",
@@ -271,20 +283,24 @@ class AssembleCoaddConfig(CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig
             # Backwards compatibility.
             # Configs do not have loggers
             log.warning("Config doPsfMatch deprecated. Setting warpType='psfMatched'")
-            self.warpType = 'psfMatched'
+            self.warpType = "psfMatched"
         if self.doSigmaClip and self.statistic != "MEANCLIP":
             log.warning('doSigmaClip deprecated. To replicate behavior, setting statistic to "MEANCLIP"')
             self.statistic = "MEANCLIP"
-        if self.doInterp and self.statistic not in ['MEAN', 'MEDIAN', 'MEANCLIP', 'VARIANCE', 'VARIANCECLIP']:
-            raise ValueError("Must set doInterp=False for statistic=%s, which does not "
-                             "compute and set a non-zero coadd variance estimate." % (self.statistic))
+        if self.doInterp and self.statistic not in ["MEAN", "MEDIAN", "MEANCLIP", "VARIANCE", "VARIANCECLIP"]:
+            raise ValueError(
+                "Must set doInterp=False for statistic=%s, which does not "
+                "compute and set a non-zero coadd variance estimate." % (self.statistic)
+            )
 
-        unstackableStats = ['NOTHING', 'ERROR', 'ORMASK']
+        unstackableStats = ["NOTHING", "ERROR", "ORMASK"]
         if not hasattr(afwMath.Property, self.statistic) or self.statistic in unstackableStats:
-            stackableStats = [str(k) for k in afwMath.Property.__members__.keys()
-                              if str(k) not in unstackableStats]
-            raise ValueError("statistic %s is not allowed. Please choose one of %s."
-                             % (self.statistic, stackableStats))
+            stackableStats = [
+                str(k) for k in afwMath.Property.__members__.keys() if str(k) not in unstackableStats
+            ]
+            raise ValueError(
+                "statistic %s is not allowed. Please choose one of %s." % (self.statistic, stackableStats)
+            )
 
 
 class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
@@ -332,9 +348,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         if args:
             argNames = ["config", "name", "parentTask", "log"]
             kwargs.update({k: v for k, v in zip(argNames, args)})
-            warnings.warn("AssembleCoadd received positional args, and casting them as kwargs: %s. "
-                          "PipelineTask will not take positional args" % argNames, FutureWarning,
-                          stacklevel=2)
+            warnings.warn(
+                "AssembleCoadd received positional args, and casting them as kwargs: %s. "
+                "PipelineTask will not take positional args" % argNames,
+                FutureWarning,
+                stacklevel=2,
+            )
 
         super().__init__(**kwargs)
         self.makeSubtask("interpImage")
@@ -345,8 +364,10 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             try:
                 self.brightObjectBitmask = 1 << mask.addMaskPlane(self.config.brightObjectMaskName)
             except pexExceptions.LsstCppException:
-                raise RuntimeError("Unable to define mask plane for bright objects; planes used are %s" %
-                                   mask.getMaskPlaneDict().keys())
+                raise RuntimeError(
+                    "Unable to define mask plane for bright objects; planes used are %s"
+                    % mask.getMaskPlaneDict().keys()
+                )
             del mask
 
         if self.config.doInputMap:
@@ -363,29 +384,33 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         skyMap = inputData["skyMap"]
         outputDataId = butlerQC.quantum.dataId
 
-        inputData['skyInfo'] = makeSkyInfo(skyMap,
-                                           tractId=outputDataId['tract'],
-                                           patchId=outputDataId['patch'])
+        inputData["skyInfo"] = makeSkyInfo(
+            skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"]
+        )
 
         if self.config.doSelectVisits:
-            warpRefList = self.filterWarps(inputData['inputWarps'], inputData['selectedVisits'])
+            warpRefList = self.filterWarps(inputData["inputWarps"], inputData["selectedVisits"])
         else:
-            warpRefList = inputData['inputWarps']
+            warpRefList = inputData["inputWarps"]
 
         inputs = self.prepareInputs(warpRefList)
-        self.log.info("Found %d %s", len(inputs.tempExpRefList),
-                      self.getTempExpDatasetName(self.warpType))
+        self.log.info("Found %d %s", len(inputs.tempExpRefList), self.getTempExpDatasetName(self.warpType))
         if len(inputs.tempExpRefList) == 0:
             raise pipeBase.NoWorkFound("No coadd temporary exposures found")
 
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
-        retStruct = self.run(inputData['skyInfo'], inputs.tempExpRefList, inputs.imageScalerList,
-                             inputs.weightList, supplementaryData=supplementaryData)
+        retStruct = self.run(
+            inputData["skyInfo"],
+            inputs.tempExpRefList,
+            inputs.imageScalerList,
+            inputs.weightList,
+            supplementaryData=supplementaryData,
+        )
 
-        inputData.setdefault('brightObjectMask', None)
+        inputData.setdefault("brightObjectMask", None)
         if self.config.doMaskBrightObjects and inputData["brightObjectMask"] is None:
             log.warning("doMaskBrightObjects is set to True, but brightObjectMask not loaded")
-        self.processResults(retStruct.coaddExposure, inputData['brightObjectMask'], outputDataId)
+        self.processResults(retStruct.coaddExposure, inputData["brightObjectMask"], outputDataId)
 
         if self.config.doWrite:
             butlerQC.put(retStruct, outputRefs)
@@ -441,7 +466,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     @deprecated(
         reason="makeSupplementaryDataGen3 is deprecated in favor of _makeSupplementaryData",
         version="v25.0",
-        category=FutureWarning
+        category=FutureWarning,
     )
     def makeSupplementaryDataGen3(self, butlerQC, inputRefs, outputRefs):
         return self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
@@ -500,8 +525,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             except Exception as e:
                 self.log.warning("Scaling failed for %s (skipping it): %s", tempExpRef.dataId, e)
                 continue
-            statObj = afwMath.makeStatistics(maskedImage.getVariance(), maskedImage.getMask(),
-                                             afwMath.MEANCLIP, statsCtrl)
+            statObj = afwMath.makeStatistics(
+                maskedImage.getVariance(), maskedImage.getMask(), afwMath.MEANCLIP, statsCtrl
+            )
             meanVar, meanVarErr = statObj.getResult(afwMath.MEANCLIP)
             weight = 1.0 / float(meanVar)
             if not numpy.isfinite(weight):
@@ -516,8 +542,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             weightList.append(weight)
             imageScalerList.append(imageScaler)
 
-        return pipeBase.Struct(tempExpRefList=tempExpRefList, weightList=weightList,
-                               imageScalerList=imageScalerList)
+        return pipeBase.Struct(
+            tempExpRefList=tempExpRefList, weightList=weightList, imageScalerList=imageScalerList
+        )
 
     def prepareStats(self, mask=None):
         """Prepare the statistics for coadding images.
@@ -554,8 +581,16 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         return pipeBase.Struct(ctrl=statsCtrl, flags=statsFlags)
 
     @timeMethod
-    def run(self, skyInfo, tempExpRefList, imageScalerList, weightList,
-            altMaskList=None, mask=None, supplementaryData=None):
+    def run(
+        self,
+        skyInfo,
+        tempExpRefList,
+        imageScalerList,
+        weightList,
+        altMaskList=None,
+        mask=None,
+        supplementaryData=None,
+    ):
         """Assemble a coadd from input warps.
 
         Assemble the coadd using the provided list of coaddTempExps. Since
@@ -618,7 +653,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         stats = self.prepareStats(mask=mask)
 
         if altMaskList is None:
-            altMaskList = [None]*len(tempExpRefList)
+            altMaskList = [None] * len(tempExpRefList)
 
         coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
         coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
@@ -636,24 +671,38 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         # If inputMap is requested, create the initial version that can be
         # masked in assembleSubregion.
         if self.config.doInputMap:
-            self.inputMapper.build_ccd_input_map(skyInfo.bbox,
-                                                 skyInfo.wcs,
-                                                 coaddExposure.getInfo().getCoaddInputs().ccds)
+            self.inputMapper.build_ccd_input_map(
+                skyInfo.bbox, skyInfo.wcs, coaddExposure.getInfo().getCoaddInputs().ccds
+            )
 
         if self.config.doOnlineForMean and self.config.statistic == "MEAN":
             try:
-                self.assembleOnlineMeanCoadd(coaddExposure, tempExpRefList, imageScalerList,
-                                             weightList, altMaskList, stats.ctrl,
-                                             nImage=nImage)
+                self.assembleOnlineMeanCoadd(
+                    coaddExposure,
+                    tempExpRefList,
+                    imageScalerList,
+                    weightList,
+                    altMaskList,
+                    stats.ctrl,
+                    nImage=nImage,
+                )
             except Exception as e:
                 self.log.exception("Cannot compute online coadd %s", e)
                 raise
         else:
             for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
                 try:
-                    self.assembleSubregion(coaddExposure, subBBox, tempExpRefList, imageScalerList,
-                                           weightList, altMaskList, stats.flags, stats.ctrl,
-                                           nImage=nImage)
+                    self.assembleSubregion(
+                        coaddExposure,
+                        subBBox,
+                        tempExpRefList,
+                        imageScalerList,
+                        weightList,
+                        altMaskList,
+                        stats.flags,
+                        stats.ctrl,
+                        nImage=nImage,
+                    )
                 except Exception as e:
                     self.log.exception("Cannot compute coadd %s: %s", subBBox, e)
                     raise
@@ -671,9 +720,14 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         # pixels: it identifies pixels that didn't receive any unmasked inputs
         # (as occurs around the edge of the field).
         coaddUtils.setCoaddEdgeBits(coaddMaskedImage.getMask(), coaddMaskedImage.getVariance())
-        return pipeBase.Struct(coaddExposure=coaddExposure, nImage=nImage,
-                               warpRefList=tempExpRefList, imageScalerList=imageScalerList,
-                               weightList=weightList, inputMap=inputMap)
+        return pipeBase.Struct(
+            coaddExposure=coaddExposure,
+            nImage=nImage,
+            warpRefList=tempExpRefList,
+            imageScalerList=imageScalerList,
+            weightList=weightList,
+            inputMap=inputMap,
+        )
 
     def assembleMetadata(self, coaddExposure, tempExpRefList, weightList):
         """Set the metadata for the coadd.
@@ -702,7 +756,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         # (see #2777).
         bbox = geom.Box2I(coaddExposure.getBBox().getMin(), geom.Extent2I(1, 1))
 
-        tempExpList = [tempExpRef.get(parameters={'bbox': bbox}) for tempExpRef in tempExpRefList]
+        tempExpList = [tempExpRef.get(parameters={"bbox": bbox}) for tempExpRef in tempExpRefList]
 
         numCcds = sum(len(tempExp.getInfo().getCoaddInputs().ccds) for tempExp in tempExpList)
 
@@ -728,22 +782,35 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             # Likewise, set the PSF of a PSF-Matched Coadd to the modelPsf
             # having the maximum width (sufficient because square)
             modelPsfList = [tempExp.getPsf() for tempExp in tempExpList]
-            modelPsfWidthList = [modelPsf.computeBBox(modelPsf.getAveragePosition()).getWidth()
-                                 for modelPsf in modelPsfList]
+            modelPsfWidthList = [
+                modelPsf.computeBBox(modelPsf.getAveragePosition()).getWidth() for modelPsf in modelPsfList
+            ]
             psf = modelPsfList[modelPsfWidthList.index(max(modelPsfWidthList))]
         else:
-            psf = measAlg.CoaddPsf(coaddInputs.ccds, coaddExposure.getWcs(),
-                                   self.config.coaddPsf.makeControl())
+            psf = measAlg.CoaddPsf(
+                coaddInputs.ccds, coaddExposure.getWcs(), self.config.coaddPsf.makeControl()
+            )
         coaddExposure.setPsf(psf)
-        apCorrMap = measAlg.makeCoaddApCorrMap(coaddInputs.ccds, coaddExposure.getBBox(afwImage.PARENT),
-                                               coaddExposure.getWcs())
+        apCorrMap = measAlg.makeCoaddApCorrMap(
+            coaddInputs.ccds, coaddExposure.getBBox(afwImage.PARENT), coaddExposure.getWcs()
+        )
         coaddExposure.getInfo().setApCorrMap(apCorrMap)
         if self.config.doAttachTransmissionCurve:
             transmissionCurve = measAlg.makeCoaddTransmissionCurve(coaddExposure.getWcs(), coaddInputs.ccds)
             coaddExposure.getInfo().setTransmissionCurve(transmissionCurve)
 
-    def assembleSubregion(self, coaddExposure, bbox, tempExpRefList, imageScalerList, weightList,
-                          altMaskList, statsFlags, statsCtrl, nImage=None):
+    def assembleSubregion(
+        self,
+        coaddExposure,
+        bbox,
+        tempExpRefList,
+        imageScalerList,
+        weightList,
+        altMaskList,
+        statsFlags,
+        statsCtrl,
+        nImage=None,
+    ):
         """Assemble the coadd for a sub-region.
 
         For each coaddTempExp, check for (and swap in) an alternative mask
@@ -789,8 +856,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         if nImage is not None:
             subNImage = afwImage.ImageU(bbox.getWidth(), bbox.getHeight())
         for tempExpRef, imageScaler, altMask in zip(tempExpRefList, imageScalerList, altMaskList):
-
-            exposure = tempExpRef.get(parameters={'bbox': bbox})
+            exposure = tempExpRef.get(parameters={"bbox": bbox})
 
             maskedImage = exposure.getMaskedImage()
             mask = maskedImage.getMask()
@@ -812,15 +878,21 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 self.inputMapper.mask_warp_bbox(bbox, visit, mask, statsCtrl.getAndMask())
 
         with self.timer("stack"):
-            coaddSubregion = afwMath.statisticsStack(maskedImageList, statsFlags, statsCtrl, weightList,
-                                                     clipped,  # also set output to CLIPPED if sigma-clipped
-                                                     maskMap)
+            coaddSubregion = afwMath.statisticsStack(
+                maskedImageList,
+                statsFlags,
+                statsCtrl,
+                weightList,
+                clipped,  # also set output to CLIPPED if sigma-clipped
+                maskMap,
+            )
         coaddExposure.maskedImage.assign(coaddSubregion, bbox)
         if nImage is not None:
             nImage.assign(subNImage, bbox)
 
-    def assembleOnlineMeanCoadd(self, coaddExposure, tempExpRefList, imageScalerList, weightList,
-                                altMaskList, statsCtrl, nImage=None):
+    def assembleOnlineMeanCoadd(
+        self, coaddExposure, tempExpRefList, imageScalerList, weightList, altMaskList, statsCtrl, nImage=None
+    ):
         """Assemble the coadd using the "online" method.
 
         This method takes a running sum of images and weights to save memory.
@@ -862,13 +934,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             mask_map=maskMap,
             no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
             calc_error_from_input_variance=self.config.calcErrorFromInputVariance,
-            compute_n_image=(nImage is not None)
+            compute_n_image=(nImage is not None),
         )
 
-        for tempExpRef, imageScaler, altMask, weight in zip(tempExpRefList,
-                                                            imageScalerList,
-                                                            altMaskList,
-                                                            weightList):
+        for tempExpRef, imageScaler, altMask, weight in zip(
+            tempExpRefList, imageScalerList, altMaskList, weightList
+        ):
             exposure = tempExpRef.get()
             maskedImage = exposure.getMaskedImage()
             mask = maskedImage.getMask()
@@ -907,8 +978,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             try:
                 mask &= ~mask.getPlaneBitMask(maskPlane)
             except pexExceptions.InvalidParameterError:
-                self.log.debug("Unable to remove mask plane %s: no mask plane with that name was found.",
-                               maskPlane)
+                self.log.debug(
+                    "Unable to remove mask plane %s: no mask plane with that name was found.", maskPlane
+                )
 
     @staticmethod
     def setRejectedMaskMapping(statsCtrl):
@@ -934,9 +1006,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
         clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
         toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
-        maskMap = [(toReject, afwImage.Mask.getPlaneBitMask("REJECTED")),
-                   (edge, afwImage.Mask.getPlaneBitMask("SENSOR_EDGE")),
-                   (clipped, clipped)]
+        maskMap = [
+            (toReject, afwImage.Mask.getPlaneBitMask("REJECTED")),
+            (edge, afwImage.Mask.getPlaneBitMask("SENSOR_EDGE")),
+            (clipped, clipped),
+        ]
         return maskMap
 
     def applyAltMaskPlanes(self, mask, altMaskSpans):
@@ -964,7 +1038,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 # self.config.doUsePsfMatchedPolygons should be True only in
                 # CompareWarpAssemble. This mask-clearing step must only occur
                 # *before* applying the new masks below.
-                for spanSet in altMaskSpans['NO_DATA']:
+                for spanSet in altMaskSpans["NO_DATA"]:
                     spanSet.clippedTo(mask.getBBox()).clearMask(mask, self.getBadPixelMask())
 
         for plane, spanSetList in altMaskSpans.items():
@@ -987,7 +1061,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         for ccd in coaddInputs.ccds:
             polyOrig = ccd.getValidPolygon()
             validPolyBBox = polyOrig.getBBox() if polyOrig else ccd.getBBox()
-            validPolyBBox.grow(-self.config.matchingKernelSize//2)
+            validPolyBBox.grow(-self.config.matchingKernelSize // 2)
             if polyOrig:
                 validPolygon = polyOrig.intersectionSingle(validPolyBBox)
             else:
@@ -1017,18 +1091,20 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         for rec in brightObjectMasks:
             center = geom.PointI(wcs.skyToPixel(rec.getCoord()))
             if rec["type"] == "box":
-                assert rec["angle"] == 0.0, ("Angle != 0 for mask object %s" % rec["id"])
-                width = rec["width"].asArcseconds()/plateScale    # convert to pixels
-                height = rec["height"].asArcseconds()/plateScale  # convert to pixels
+                assert rec["angle"] == 0.0, "Angle != 0 for mask object %s" % rec["id"]
+                width = rec["width"].asArcseconds() / plateScale  # convert to pixels
+                height = rec["height"].asArcseconds() / plateScale  # convert to pixels
 
-                halfSize = geom.ExtentI(0.5*width, 0.5*height)
+                halfSize = geom.ExtentI(0.5 * width, 0.5 * height)
                 bbox = geom.Box2I(center - halfSize, center + halfSize)
 
-                bbox = geom.BoxI(geom.PointI(int(center[0] - 0.5*width), int(center[1] - 0.5*height)),
-                                 geom.PointI(int(center[0] + 0.5*width), int(center[1] + 0.5*height)))
+                bbox = geom.BoxI(
+                    geom.PointI(int(center[0] - 0.5 * width), int(center[1] - 0.5 * height)),
+                    geom.PointI(int(center[0] + 0.5 * width), int(center[1] + 0.5 * height)),
+                )
                 spans = afwGeom.SpanSet(bbox)
             elif rec["type"] == "circle":
-                radius = int(rec["radius"].asArcseconds()/plateScale)   # convert to pixels
+                radius = int(rec["radius"].asArcseconds() / plateScale)  # convert to pixels
                 spans = afwGeom.SpanSet.fromShape(radius, offset=center)
             else:
                 self.log.warning("Unexpected region type %s at %s", rec["type"], center)
@@ -1070,12 +1146,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         Returns
         -------
-        filteredInputs : `list` \
-            [`~lsst.pipe.base.connections.DeferredDatasetRef`]
+        filterInputs : `list` [`lsst.pipe.base.connections.DeferredDatasetRef`]
             Filtered and sorted list of inputRefs with visitId in goodVisits
             ordered by goodVisit.
         """
-        inputWarpDict = {inputRef.ref.dataId['visit']: inputRef for inputRef in inputs}
+        inputWarpDict = {inputRef.ref.dataId["visit"]: inputRef for inputRef in inputs}
         filteredInputs = []
         for visit in goodVisits.keys():
             if visit in inputWarpDict:
@@ -1112,24 +1187,29 @@ def countMaskFromFootprint(mask, footprint, bitmask, ignoreMask):
     fp = afwImage.Mask(bbox)
     subMask = mask.Factory(mask, bbox, afwImage.PARENT)
     footprint.spans.setMask(fp, bitmask)
-    return numpy.logical_and((subMask.getArray() & fp.getArray()) > 0,
-                             (subMask.getArray() & ignoreMask) == 0).sum()
+    return numpy.logical_and(
+        (subMask.getArray() & fp.getArray()) > 0, (subMask.getArray() & ignoreMask) == 0
+    ).sum()
 
 
 class CompareWarpAssembleCoaddConnections(AssembleCoaddConnections):
     psfMatchedWarps = pipeBase.connectionTypes.Input(
-        doc=("PSF-Matched Warps are required by CompareWarp regardless of the coadd type requested. "
-             "Only PSF-Matched Warps make sense for image subtraction. "
-             "Therefore, they must be an additional declared input."),
+        doc=(
+            "PSF-Matched Warps are required by CompareWarp regardless of the coadd type requested. "
+            "Only PSF-Matched Warps make sense for image subtraction. "
+            "Therefore, they must be an additional declared input."
+        ),
         name="{inputCoaddName}Coadd_psfMatchedWarp",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "visit"),
         deferLoad=True,
-        multiple=True
+        multiple=True,
     )
     templateCoadd = pipeBase.connectionTypes.Output(
-        doc=("Model of the static sky, used to find temporal artifacts. Typically a PSF-Matched, "
-             "sigma-clipped coadd. Written if and only if assembleStaticSkyModel.doWrite=True"),
+        doc=(
+            "Model of the static sky, used to find temporal artifacts. Typically a PSF-Matched, "
+            "sigma-clipped coadd. Written if and only if assembleStaticSkyModel.doWrite=True"
+        ),
         name="{outputCoaddName}CoaddPsfMatched",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "band"),
@@ -1142,66 +1222,67 @@ class CompareWarpAssembleCoaddConnections(AssembleCoaddConnections):
         config.validate()
 
 
-class CompareWarpAssembleCoaddConfig(AssembleCoaddConfig,
-                                     pipelineConnections=CompareWarpAssembleCoaddConnections):
+class CompareWarpAssembleCoaddConfig(
+    AssembleCoaddConfig, pipelineConnections=CompareWarpAssembleCoaddConnections
+):
     assembleStaticSkyModel = pexConfig.ConfigurableField(
         target=AssembleCoaddTask,
         doc="Task to assemble an artifact-free, PSF-matched Coadd to serve as "
-            "a naive/first-iteration model of the static sky.",
+        "a naive/first-iteration model of the static sky.",
     )
     detect = pexConfig.ConfigurableField(
         target=SourceDetectionTask,
-        doc="Detect outlier sources on difference between each psfMatched warp and static sky model"
+        doc="Detect outlier sources on difference between each psfMatched warp and static sky model",
     )
     detectTemplate = pexConfig.ConfigurableField(
         target=SourceDetectionTask,
-        doc="Detect sources on static sky model. Only used if doPreserveContainedBySource is True"
+        doc="Detect sources on static sky model. Only used if doPreserveContainedBySource is True",
     )
     maskStreaks = pexConfig.ConfigurableField(
         target=MaskStreaksTask,
         doc="Detect streaks on difference between each psfMatched warp and static sky model. Only used if "
-            "doFilterMorphological is True. Adds a mask plane to an exposure, with the mask plane name set by"
-            "streakMaskName"
+        "doFilterMorphological is True. Adds a mask plane to an exposure, with the mask plane name set by"
+        "streakMaskName",
     )
-    streakMaskName = pexConfig.Field(
-        dtype=str,
-        default="STREAK",
-        doc="Name of mask bit used for streaks"
-    )
+    streakMaskName = pexConfig.Field(dtype=str, default="STREAK", doc="Name of mask bit used for streaks")
     maxNumEpochs = pexConfig.Field(
         doc="Charactistic maximum local number of epochs/visits in which an artifact candidate can appear  "
-            "and still be masked.  The effective maxNumEpochs is a broken linear function of local "
-            "number of epochs (N): min(maxFractionEpochsLow*N, maxNumEpochs + maxFractionEpochsHigh*N). "
-            "For each footprint detected on the image difference between the psfMatched warp and static sky "
-            "model, if a significant fraction of pixels (defined by spatialThreshold) are residuals in more "
-            "than the computed effective maxNumEpochs, the artifact candidate is deemed persistant rather "
-            "than transient and not masked.",
+        "and still be masked.  The effective maxNumEpochs is a broken linear function of local "
+        "number of epochs (N): min(maxFractionEpochsLow*N, maxNumEpochs + maxFractionEpochsHigh*N). "
+        "For each footprint detected on the image difference between the psfMatched warp and static sky "
+        "model, if a significant fraction of pixels (defined by spatialThreshold) are residuals in more "
+        "than the computed effective maxNumEpochs, the artifact candidate is deemed persistant rather "
+        "than transient and not masked.",
         dtype=int,
-        default=2
+        default=2,
     )
     maxFractionEpochsLow = pexConfig.RangeField(
         doc="Fraction of local number of epochs (N) to use as effective maxNumEpochs for low N. "
-            "Effective maxNumEpochs = "
-            "min(maxFractionEpochsLow * N, maxNumEpochs + maxFractionEpochsHigh * N)",
+        "Effective maxNumEpochs = "
+        "min(maxFractionEpochsLow * N, maxNumEpochs + maxFractionEpochsHigh * N)",
         dtype=float,
         default=0.4,
-        min=0., max=1.,
+        min=0.0,
+        max=1.0,
     )
     maxFractionEpochsHigh = pexConfig.RangeField(
         doc="Fraction of local number of epochs (N) to use as effective maxNumEpochs for high N. "
-            "Effective maxNumEpochs = "
-            "min(maxFractionEpochsLow * N, maxNumEpochs + maxFractionEpochsHigh * N)",
+        "Effective maxNumEpochs = "
+        "min(maxFractionEpochsLow * N, maxNumEpochs + maxFractionEpochsHigh * N)",
         dtype=float,
         default=0.03,
-        min=0., max=1.,
+        min=0.0,
+        max=1.0,
     )
     spatialThreshold = pexConfig.RangeField(
         doc="Unitless fraction of pixels defining how much of the outlier region has to meet the "
-            "temporal criteria. If 0, clip all. If 1, clip none.",
+        "temporal criteria. If 0, clip all. If 1, clip none.",
         dtype=float,
         default=0.5,
-        min=0., max=1.,
-        inclusiveMin=True, inclusiveMax=True
+        min=0.0,
+        max=1.0,
+        inclusiveMin=True,
+        inclusiveMax=True,
     )
     doScaleWarpVariance = pexConfig.Field(
         doc="Rescale Warp variance plane using empirical noise?",
@@ -1214,55 +1295,55 @@ class CompareWarpAssembleCoaddConfig(AssembleCoaddConfig,
     )
     doPreserveContainedBySource = pexConfig.Field(
         doc="Rescue artifacts from clipping that completely lie within a footprint detected"
-            "on the PsfMatched Template Coadd. Replicates a behavior of SafeClip.",
+        "on the PsfMatched Template Coadd. Replicates a behavior of SafeClip.",
         dtype=bool,
         default=True,
     )
     doPrefilterArtifacts = pexConfig.Field(
         doc="Ignore artifact candidates that are mostly covered by the bad pixel mask, "
-            "because they will be excluded anyway. This prevents them from contributing "
-            "to the outlier epoch count image and potentially being labeled as persistant."
-            "'Mostly' is defined by the config 'prefilterArtifactsRatio'.",
+        "because they will be excluded anyway. This prevents them from contributing "
+        "to the outlier epoch count image and potentially being labeled as persistant."
+        "'Mostly' is defined by the config 'prefilterArtifactsRatio'.",
         dtype=bool,
-        default=True
+        default=True,
     )
     prefilterArtifactsMaskPlanes = pexConfig.ListField(
         doc="Prefilter artifact candidates that are mostly covered by these bad mask planes.",
         dtype=str,
-        default=('NO_DATA', 'BAD', 'SAT', 'SUSPECT'),
+        default=("NO_DATA", "BAD", "SAT", "SUSPECT"),
     )
     prefilterArtifactsRatio = pexConfig.Field(
         doc="Prefilter artifact candidates with less than this fraction overlapping good pixels",
         dtype=float,
-        default=0.05
+        default=0.05,
     )
     doFilterMorphological = pexConfig.Field(
         doc="Filter artifact candidates based on morphological criteria, i.g. those that appear to "
-            "be streaks.",
+        "be streaks.",
         dtype=bool,
-        default=False
+        default=False,
     )
     growStreakFp = pexConfig.Field(
-        doc="Grow streak footprints by this number multiplied by the PSF width",
-        dtype=float,
-        default=5
+        doc="Grow streak footprints by this number multiplied by the PSF width", dtype=float, default=5
     )
 
     def setDefaults(self):
         AssembleCoaddConfig.setDefaults(self)
-        self.statistic = 'MEAN'
+        self.statistic = "MEAN"
         self.doUsePsfMatchedPolygons = True
 
         # Real EDGE removed by psfMatched NO_DATA border half the width of the
         # matching kernel. CompareWarp applies psfMatched EDGE pixels to
         # directWarps before assembling.
         if "EDGE" in self.badMaskPlanes:
-            self.badMaskPlanes.remove('EDGE')
-        self.removeMaskPlanes.append('EDGE')
-        self.assembleStaticSkyModel.badMaskPlanes = ["NO_DATA", ]
-        self.assembleStaticSkyModel.warpType = 'psfMatched'
-        self.assembleStaticSkyModel.connections.warpType = 'psfMatched'
-        self.assembleStaticSkyModel.statistic = 'MEANCLIP'
+            self.badMaskPlanes.remove("EDGE")
+        self.removeMaskPlanes.append("EDGE")
+        self.assembleStaticSkyModel.badMaskPlanes = [
+            "NO_DATA",
+        ]
+        self.assembleStaticSkyModel.warpType = "psfMatched"
+        self.assembleStaticSkyModel.connections.warpType = "psfMatched"
+        self.assembleStaticSkyModel.statistic = "MEANCLIP"
         self.assembleStaticSkyModel.sigmaClip = 2.5
         self.assembleStaticSkyModel.clipIter = 3
         self.assembleStaticSkyModel.calcErrorFromInputVariance = False
@@ -1286,14 +1367,18 @@ class CompareWarpAssembleCoaddConfig(AssembleCoaddConfig,
     def validate(self):
         super().validate()
         if self.assembleStaticSkyModel.doNImage:
-            raise ValueError("No dataset type exists for a PSF-Matched Template N Image."
-                             "Please set assembleStaticSkyModel.doNImage=False")
+            raise ValueError(
+                "No dataset type exists for a PSF-Matched Template N Image."
+                "Please set assembleStaticSkyModel.doNImage=False"
+            )
 
         if self.assembleStaticSkyModel.doWrite and (self.warpType == self.assembleStaticSkyModel.warpType):
-            raise ValueError("warpType (%s) == assembleStaticSkyModel.warpType (%s) and will compete for "
-                             "the same dataset name. Please set assembleStaticSkyModel.doWrite to False "
-                             "or warpType to 'direct'. assembleStaticSkyModel.warpType should ways be "
-                             "'PsfMatched'" % (self.warpType, self.assembleStaticSkyModel.warpType))
+            raise ValueError(
+                "warpType (%s) == assembleStaticSkyModel.warpType (%s) and will compete for "
+                "the same dataset name. Please set assembleStaticSkyModel.doWrite to False "
+                "or warpType to 'direct'. assembleStaticSkyModel.warpType should ways be "
+                "'PsfMatched'" % (self.warpType, self.assembleStaticSkyModel.warpType)
+            )
 
 
 class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
@@ -1393,22 +1478,25 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             del staticSkyModelOutputRefs.templateCoadd
 
         # A PSF-Matched nImage does not exist as a dataset type
-        if 'nImage' in staticSkyModelOutputRefs.keys():
+        if "nImage" in staticSkyModelOutputRefs.keys():
             del staticSkyModelOutputRefs.nImage
 
-        templateCoadd = self.assembleStaticSkyModel.runQuantum(butlerQC, staticSkyModelInputRefs,
-                                                               staticSkyModelOutputRefs)
+        templateCoadd = self.assembleStaticSkyModel.runQuantum(
+            butlerQC, staticSkyModelInputRefs, staticSkyModelOutputRefs
+        )
         if templateCoadd is None:
             raise RuntimeError(self._noTemplateMessage(self.assembleStaticSkyModel.warpType))
 
-        return pipeBase.Struct(templateCoadd=templateCoadd.coaddExposure,
-                               nImage=templateCoadd.nImage,
-                               warpRefList=templateCoadd.warpRefList,
-                               imageScalerList=templateCoadd.imageScalerList,
-                               weightList=templateCoadd.weightList)
+        return pipeBase.Struct(
+            templateCoadd=templateCoadd.coaddExposure,
+            nImage=templateCoadd.nImage,
+            warpRefList=templateCoadd.warpRefList,
+            imageScalerList=templateCoadd.imageScalerList,
+            weightList=templateCoadd.weightList,
+        )
 
     def _noTemplateMessage(self, warpType):
-        warpName = (warpType[0].upper() + warpType[1:])
+        warpName = warpType[0].upper() + warpType[1:]
         message = """No %(warpName)s warps were found to build the template coadd which is
             required to run CompareWarpAssembleCoaddTask. To continue assembling this type of coadd,
             first either rerun makeCoaddTempExp with config.make%(warpName)s=True or
@@ -1419,13 +1507,14 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
                 from lsst.pipe.tasks.assembleCoadd import SafeClipAssembleCoaddTask
                 config.assemble.retarget(SafeClipAssembleCoaddTask)
-        """ % {"warpName": warpName}
+        """ % {
+            "warpName": warpName
+        }
         return message
 
     @utils.inheritDoc(AssembleCoaddTask)
     @timeMethod
-    def run(self, skyInfo, tempExpRefList, imageScalerList, weightList,
-            supplementaryData):
+    def run(self, skyInfo, tempExpRefList, imageScalerList, weightList, supplementaryData):
         """Notes
         -----
         Assemble the coadd.
@@ -1443,23 +1532,26 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
         if dataIds != psfMatchedDataIds:
             self.log.info("Reordering and or/padding PSF-matched visit input list")
-            supplementaryData.warpRefList = reorderAndPadList(supplementaryData.warpRefList,
-                                                              psfMatchedDataIds, dataIds)
-            supplementaryData.imageScalerList = reorderAndPadList(supplementaryData.imageScalerList,
-                                                                  psfMatchedDataIds, dataIds)
+            supplementaryData.warpRefList = reorderAndPadList(
+                supplementaryData.warpRefList, psfMatchedDataIds, dataIds
+            )
+            supplementaryData.imageScalerList = reorderAndPadList(
+                supplementaryData.imageScalerList, psfMatchedDataIds, dataIds
+            )
 
         # Use PSF-Matched Warps (and corresponding scalers) and coadd to find
         # artifacts.
-        spanSetMaskList = self.findArtifacts(supplementaryData.templateCoadd,
-                                             supplementaryData.warpRefList,
-                                             supplementaryData.imageScalerList)
+        spanSetMaskList = self.findArtifacts(
+            supplementaryData.templateCoadd, supplementaryData.warpRefList, supplementaryData.imageScalerList
+        )
 
         badMaskPlanes = self.config.badMaskPlanes[:]
         badMaskPlanes.append("CLIPPED")
         badPixelMask = afwImage.Mask.getPlaneBitMask(badMaskPlanes)
 
-        result = AssembleCoaddTask.run(self, skyInfo, tempExpRefList, imageScalerList, weightList,
-                                       spanSetMaskList, mask=badPixelMask)
+        result = AssembleCoaddTask.run(
+            self, skyInfo, tempExpRefList, imageScalerList, weightList, spanSetMaskList, mask=badPixelMask
+        )
 
         # Propagate PSF-matched EDGE pixels to coadd SENSOR_EDGE and
         # INEXACT_PSF. Psf-Matching moves the real edge inwards.
@@ -1482,7 +1574,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         maskValue = mask.getPlaneBitMask(["SENSOR_EDGE", "INEXACT_PSF"])
         for visitMask in altMaskList:
             if "EDGE" in visitMask:
-                for spanSet in visitMask['EDGE']:
+                for spanSet in visitMask["EDGE"]:
                     spanSet.clippedTo(mask.getBBox()).setMask(mask, maskValue)
 
     def findArtifacts(self, templateCoadd, tempExpRefList, imageScalerList):
@@ -1534,8 +1626,9 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             if warpDiffExp is not None:
                 # This nImage only approximates the final nImage because it
                 # uses the PSF-matched mask.
-                nImage.array += (numpy.isfinite(warpDiffExp.image.array)
-                                 * ((warpDiffExp.mask.array & badPixelMask) == 0)).astype(numpy.uint16)
+                nImage.array += (
+                    numpy.isfinite(warpDiffExp.image.array) * ((warpDiffExp.mask.array & badPixelMask) == 0)
+                ).astype(numpy.uint16)
                 fpSet = self.detect.detectFootprints(warpDiffExp, doSmooth=False, clearMask=True)
                 fpSet.positive.merge(fpSet.negative)
                 footprints = fpSet.positive
@@ -1558,8 +1651,9 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                     maskName = self.config.streakMaskName
                     _ = self.maskStreaks.run(warpDiffExp)
                     streakMask = warpDiffExp.mask
-                    spanSetStreak = afwGeom.SpanSet.fromMask(streakMask,
-                                                             streakMask.getPlaneBitMask(maskName)).split()
+                    spanSetStreak = afwGeom.SpanSet.fromMask(
+                        streakMask, streakMask.getPlaneBitMask(maskName)
+                    ).split()
                     # Pad the streaks to account for low-surface brightness
                     # wings.
                     psf = warpDiffExp.getPsf()
@@ -1579,8 +1673,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 nansMask = afwImage.makeMaskFromArray(nans.astype(afwImage.MaskPixel))
                 nansMask.setXY0(warpDiffExp.getXY0())
                 edgeMask = warpDiffExp.mask
-                spanSetEdgeMask = afwGeom.SpanSet.fromMask(edgeMask,
-                                                           edgeMask.getPlaneBitMask("EDGE")).split()
+                spanSetEdgeMask = afwGeom.SpanSet.fromMask(edgeMask, edgeMask.getPlaneBitMask("EDGE")).split()
             else:
                 # If the directWarp has <1% coverage, the psfMatchedWarp can
                 # have 0% and not exist. In this case, mask the whole epoch.
@@ -1603,17 +1696,16 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
         for i, spanSetList in enumerate(spanSetArtifactList):
             if spanSetList:
-                filteredSpanSetList = self.filterArtifacts(spanSetList, epochCountImage, nImage,
-                                                           templateFootprints)
+                filteredSpanSetList = self.filterArtifacts(
+                    spanSetList, epochCountImage, nImage, templateFootprints
+                )
                 spanSetArtifactList[i] = filteredSpanSetList
             if self.config.doFilterMorphological:
                 spanSetArtifactList[i] += spanSetBadMorphoList[i]
 
         altMasks = []
         for artifacts, noData, edge in zip(spanSetArtifactList, spanSetNoDataMaskList, spanSetEdgeList):
-            altMasks.append({'CLIPPED': artifacts,
-                             'NO_DATA': noData,
-                             'EDGE': edge})
+            altMasks.append({"CLIPPED": artifacts, "NO_DATA": noData, "EDGE": edge})
         return altMasks
 
     def prefilterArtifacts(self, spanSetList, exp):
@@ -1643,7 +1735,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             y, x = span.clippedTo(bbox).indices()
             yIndexLocal = numpy.array(y) - y0
             xIndexLocal = numpy.array(x) - x0
-            goodRatio = numpy.count_nonzero(goodArr[yIndexLocal, xIndexLocal])/span.getArea()
+            goodRatio = numpy.count_nonzero(goodArr[yIndexLocal, xIndexLocal]) / span.getArea()
             if goodRatio > self.config.prefilterArtifactsRatio:
                 returnSpanSetList.append(span)
         return returnSpanSetList
@@ -1676,12 +1768,12 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
             # effectiveMaxNumEpochs is broken line (fraction of N) with
             # characteristic config.maxNumEpochs.
-            effMaxNumEpochsHighN = (self.config.maxNumEpochs
-                                    + self.config.maxFractionEpochsHigh*numpy.mean(totalN))
+            effMaxNumEpochsHighN = self.config.maxNumEpochs + self.config.maxFractionEpochsHigh * numpy.mean(
+                totalN
+            )
             effMaxNumEpochsLowN = self.config.maxFractionEpochsLow * numpy.mean(totalN)
             effectiveMaxNumEpochs = int(min(effMaxNumEpochsLowN, effMaxNumEpochsHighN))
-            nPixelsBelowThreshold = numpy.count_nonzero((outlierN > 0)
-                                                        & (outlierN <= effectiveMaxNumEpochs))
+            nPixelsBelowThreshold = numpy.count_nonzero((outlierN > 0) & (outlierN <= effectiveMaxNumEpochs))
             percentBelowThreshold = nPixelsBelowThreshold / len(outlierN)
             if percentBelowThreshold > self.config.spatialThreshold:
                 maskSpanSetList.append(span)

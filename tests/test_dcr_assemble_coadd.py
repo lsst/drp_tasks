@@ -22,12 +22,12 @@
 import unittest
 
 import lsst.utils.tests
-
-from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddTask, DcrAssembleCoaddConfig
+from lsst.drp.tasks.dcr_assemble_coadd import DcrAssembleCoaddConfig, DcrAssembleCoaddTask
 
 
 class DcrAssembleCoaddCalculateGainTestCase(lsst.utils.tests.TestCase):
     """Tests of dcrAssembleCoaddTask.calculateGain()."""
+
     def setUp(self):
         self.baseGain = 0.5
         self.gainList = [self.baseGain, self.baseGain]
@@ -36,7 +36,7 @@ class DcrAssembleCoaddCalculateGainTestCase(lsst.utils.tests.TestCase):
         # perfectly, so that the improvement is limited only by our
         # conservative gain.
         for i in range(2):
-            self.convergenceList.append(self.convergenceList[i]/(self.baseGain + 1))
+            self.convergenceList.append(self.convergenceList[i] / (self.baseGain + 1))
         self.nextGain = (1 + self.baseGain) / 2
 
         self.config = DcrAssembleCoaddConfig()
@@ -107,7 +107,7 @@ class DcrAssembleCoaddCalculateGainTestCase(lsst.utils.tests.TestCase):
         gainList = [self.baseGain, self.baseGain]
         convergenceList = [0.2]
         for i in range(2):
-            convergenceList.append(convergenceList[i]/(wrongGain + 1))
+            convergenceList.append(convergenceList[i] / (wrongGain + 1))
         # The below math is a simplified version of the full algorithm,
         # assuming the predicted convergence is zero.
         # Note that in this case, nextGain is smaller than wrongGain.
