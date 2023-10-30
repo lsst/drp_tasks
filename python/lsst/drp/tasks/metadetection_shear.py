@@ -156,6 +156,11 @@ class MetadetectionShearConfig(
 
     # TODO: expose more configuration options here.
 
+    def setDefaults(self):
+        super().setDefaults()
+        # This is a DC2/cal_ref_cat_2_2 specific hack. This should be ideally specified in a config file
+        # To be removed in the cleanup before merging to main
+        self.ref_loader.filterMap = {band: f"lsst_{band}_smeared" for band in self.required_bands}
 
 class MetadetectionShearTask(PipelineTask):
     """A PipelineTask that measures shear using metadetection."""
