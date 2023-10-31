@@ -432,7 +432,7 @@ class BaseAssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def makeSupplementaryDataGen3(self, butlerQC, inputRefs, outputRefs):
         return self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
 
-    def prepareInputs(self, refList):
+    def prepareInputs(self, refList, bbox=None):
         """Prepare the input warps for coaddition by measuring the weight for
         each warp and the scaling for the photometric zero point.
 
@@ -443,8 +443,10 @@ class BaseAssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         Parameters
         ----------
-        refList : `list`
+        refList : `list` [`~lsst.daf.butler.DeferredDatasetHandle`]
             List of data references to tempExp.
+        bbox : `lsst.geom.Box2I`, optional
+            Bounding box to use for each warp.
 
         Returns
         -------
@@ -472,7 +474,10 @@ class BaseAssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         imageScalerList = []
         tempExpName = self.getTempExpDatasetName(self.warpType)
         for tempExpRef in refList:
-            tempExp = tempExpRef.get()
+            if bbox:
+                tempExp = tempExpRef.get(parameters={"bbox": bbox})
+            else:
+                tempExp = tempExpRef.get()
             # Ignore any input warp that is empty of data
             if numpy.isnan(tempExp.image.array).all():
                 continue
