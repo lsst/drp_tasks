@@ -65,9 +65,14 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
         dimensions={"patch", "band"},
     )
 
+    # TODO: make "name" configurable, as it will depend on
+    # the repo we are using
     ref_cat = cT.PrerequisiteInput(
         doc="Reference catalog used to mask bright objects.",
-        name="ref_cat",
+        # when using /repo/main
+        # name="gaia_dr3_20230707",
+        # when using /repo/dc2
+        name="cal_ref_cat_2_2",
         storageClass="SimpleCatalog",
         dimensions=("skypix",),
         deferLoad=True,
@@ -141,9 +146,7 @@ class MetadetectionShearConfig(
         "Bands expected to be present.  Cells with one or more of these bands "
         "missing will be skipped.  Bands other than those listed here will "
         "not be processed.",
-        # TODO learn how to set in a config file
         default=["g", "r", "i", "z"],
-        # default=["r"],
         optional=False,
     )
 
@@ -158,9 +161,11 @@ class MetadetectionShearConfig(
 
     def setDefaults(self):
         super().setDefaults()
-        # This is a DC2/cal_ref_cat_2_2 specific hack. This should be ideally specified in a config file
+        # This is a DC2/cal_ref_cat_2_2 specific hack. This should be ideally
+        # specified in a config file
         # To be removed in the cleanup before merging to main
         self.ref_loader.filterMap = {band: f"lsst_{band}_smeared" for band in self.required_bands}
+
 
 class MetadetectionShearTask(PipelineTask):
     """A PipelineTask that measures shear using metadetection."""
@@ -626,7 +631,6 @@ class MetadetectionShearTask(PipelineTask):
 
                 single_cell_tables.append(table)
                 idstart += len(res)
-            break
 
         # TODO: if we need to do any cell-overlap-region deduplication here
         # (instead of purely in science analysis code), this is where'd it'd
