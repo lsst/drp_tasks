@@ -65,8 +65,10 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
         dimensions={"patch", "band"},
     )
 
-    # TODO: make "name" configurable, as it will depend on
-    # the repo we are using
+    # from Arun K.:  The "name" field is configurable from the pipeline yaml
+    # file which are specific to what repo we are running this against.
+    # cal_ref_cat_2_2 is just the default value in the absence of a pipeline
+    # file
     ref_cat = cT.PrerequisiteInput(
         doc="Reference catalog used to mask bright objects.",
         # when using /repo/main
