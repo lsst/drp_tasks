@@ -706,6 +706,8 @@ class UpdateVisitSummaryTask(PipelineTask):
                     psf = None
                 output_record.setPsf(psf)
                 sources = psf_star_catalog[psf_star_catalog["detector"] == detector_id]
+                if len(sources) == 0:
+                    sources = None
                 self.compute_summary_stats.update_psf_stats(
                     summary_stats,
                     psf,
