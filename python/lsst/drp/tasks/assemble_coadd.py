@@ -906,17 +906,18 @@ class AssembleCoaddConnections(BaseAssembleCoaddConnections):
     def __init__(self, *, config=None):
         super().__init__(config=config)
 
-        if not config.doMaskBrightObjects:
-            self.prerequisiteInputs.remove("brightObjectMask")
+        if config:
+            if not config.doMaskBrightObjects:
+                self.prerequisiteInputs.remove("brightObjectMask")
 
-        if not config.doSelectVisits:
-            self.inputs.remove("selectedVisits")
+            if not config.doSelectVisits:
+                self.inputs.remove("selectedVisits")
 
-        if not config.doNImage:
-            self.outputs.remove("nImage")
+            if not config.doNImage:
+                self.outputs.remove("nImage")
 
-        if not self.config.doInputMap:
-            self.outputs.remove("inputMap")
+            if not self.config.doInputMap:
+                self.outputs.remove("inputMap")
 
 
 class AssembleCoaddConfig(BaseAssembleCoaddConfig):

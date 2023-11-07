@@ -70,7 +70,7 @@ class CompareWarpAssembleCoaddConnections(AssembleCoaddConnections):
 
     def __init__(self, *, config=None):
         super().__init__(config=config)
-        if not config.assembleStaticSkyModel.doWrite:
+        if config and not config.assembleStaticSkyModel.doWrite:
             self.outputs.remove("templateCoadd")
         config.validate()
 
