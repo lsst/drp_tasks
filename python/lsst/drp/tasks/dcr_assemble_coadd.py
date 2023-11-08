@@ -21,8 +21,6 @@
 
 __all__ = ["DcrAssembleCoaddConnections", "DcrAssembleCoaddTask", "DcrAssembleCoaddConfig"]
 
-from math import ceil
-
 import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
 import lsst.coadd.utils as coaddUtils
@@ -37,14 +35,11 @@ from lsst.meas.base import SingleFrameMeasurementTask
 from lsst.pipe.tasks.coaddBase import makeSkyInfo, subBBoxIter
 from lsst.pipe.tasks.measurePsf import MeasurePsfTask
 from lsst.utils.timer import timeMethod
+from math import ceil
 from scipy import ndimage
 
-from .assemble_coadd import (
-    AssembleCoaddConnections,
-    AssembleCoaddTask,
-    CompareWarpAssembleCoaddConfig,
-    CompareWarpAssembleCoaddTask,
-)
+from .assemble_coadd import AssembleCoaddConnections, AssembleCoaddTask
+from .compare_warp import CompareWarpAssembleCoaddConfig, CompareWarpAssembleCoaddTask
 
 
 class DcrAssembleCoaddConnections(
@@ -235,7 +230,7 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections
     )
 
     def setDefaults(self):
-        CompareWarpAssembleCoaddConfig.setDefaults(self)
+        super().setDefaults()
         self.assembleStaticSkyModel.retarget(CompareWarpAssembleCoaddTask)
         self.doNImage = True
         self.assembleStaticSkyModel.warpType = self.warpType
