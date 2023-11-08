@@ -19,7 +19,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-__all__ = ["AssembleCellCoaddTask", "AssembleCellCoaddConfig"]
+__all__ = (
+    "AssembleCellCoaddTask",
+    "AssembleCellCoaddConfig",
+    "ConvertMultipleCellCoaddToExposureTask",
+)
 
 
 import lsst.afw.image as afwImage
@@ -374,4 +378,62 @@ class AssembleCellCoaddTask(PipelineTask):
 
         return Struct(
             multipleCellCoadd=multipleCellCoadd,
+        )
+
+
+class ConvertMulipleCellCoaddToExposureConnections(
+    PipelineTaskConnections,
+    dimensions=("tract", "patch", "band", "skymap"),
+    defaultTemplates={"inputCoaddName": "deep", "inputCoaddSuffix": "Cell"},
+):
+    cellCoaddExposure = Input(
+        doc="Output coadded exposure, produced by stacking input warps",
+        name="{inputCoaddName}Coadd{inputCoaddSuffix}",
+        storageClass="MultipleCellCoadd",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
+
+    stitchedCoaddExposure = Output(
+        doc="Output stitched coadded exposure, produced by stacking input warps",
+        name="{inputCoaddName}Coadd{inputCoaddSuffix}_stitched",
+        storageClass="ExposureF",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
+
+
+class ConvertMultipleCellCoaddToExposureConfig(
+    PipelineTaskConfig, pipelineConnections=ConvertMulipleCellCoaddToExposureConnections
+):
+    """A trivial PipelineTaskConfig class for
+    ConvertMultipleCellCoaddToExposureTask.
+    """
+
+    pass
+
+
+class ConvertMultipleCellCoaddToExposureTask(PipelineTask):
+    """An after burner PipelineTask that converts a cell-based coadd from
+    `MultipleCellCoadd` format to `ExposureF` format.
+
+    The run method stitches the cell-based coadd into contiguous exposure and
+    returns it in as an `Exposure` object. This is lossy as it preserves only
+    the pixels in the inner bounding box of the cells and discards the values
+    in the buffer region.
+
+    Notes
+    -----
+    This task has no configurable parameters.
+    """
+
+    ConfigClass = ConvertMultipleCellCoaddToExposureConfig
+    _DefaultName = "convertMultipleCellCoaddToExposure"
+
+    def runQuantum(self, butlerQC, inputRefs, outputRefs):
+        inputData = butlerQC.get(inputRefs)
+        returnStruct = self.run(**inputData)
+        butlerQC.put(returnStruct, outputRefs)
+
+    def run(self, cellCoaddExposure):
+        return Struct(
+            stitchedCoaddExposure=cellCoaddExposure.stitch().asExposure(),
         )
