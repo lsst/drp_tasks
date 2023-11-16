@@ -39,6 +39,7 @@ from lsst.geom import arcseconds, degrees
 from lsst.meas.algorithms.testUtils import plantSources
 from lsst.obs.base import MakeRawVisitInfoViaObsInfo
 from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderConfig, CoaddInputRecorderTask
+from lsst.skymap import Index2D, PatchInfo
 
 __all__ = ["makeMockSkyInfo", "MockCoaddTestData"]
 
@@ -59,10 +60,15 @@ def makeMockSkyInfo(bbox, wcs, patch):
         Patch geometry information.
     """
 
-    def getIndex():
-        return patch
-
-    patchInfo = pipeBase.Struct(getIndex=getIndex)
+    patchInfo = PatchInfo(
+        index=Index2D(0, 0),
+        sequentialIndex=patch,
+        innerBBox=bbox,
+        outerBBox=bbox,
+        tractWcs=wcs,
+        numCellsPerPatchInner=1,
+        cellInnerDimensions=(bbox.width, bbox.height),
+    )
     skyInfo = pipeBase.Struct(bbox=bbox, wcs=wcs, patchInfo=patchInfo)
     return skyInfo
 
