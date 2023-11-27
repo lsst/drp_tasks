@@ -409,15 +409,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                     tanPlaneXY[:, 0], tanPlaneXY[:, 1], degrees=True
                 )
 
-                # One WCS is in SIP and the other is TPV. The pixel-to-sky
-                # conversion is not exactly the same but should be close.
-                # TODO: sip_tpv + astropy.wcs.WCS gets a better result here,
-                # particularly for detector # >= 100. See if we can improve/if
-                # improving is necessary. Check if matching in corner detectors
-                # is ok.
-                rtol = 1e-3 if (detector >= 100) else 1e-5
-                np.testing.assert_allclose(calexpra, newRAdeg, rtol=rtol)
-                np.testing.assert_allclose(calexpdec, newDecdeg, rtol=rtol)
+                np.testing.assert_allclose(calexpra, newRAdeg)
+                np.testing.assert_allclose(calexpdec, newDecdeg)
 
     def test_refCatLoader(self):
         """Test that we can load objects from refCat"""

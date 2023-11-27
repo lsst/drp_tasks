@@ -160,42 +160,6 @@ def _convert_to_ast_polymap_coefficients(coefficients):
     return astPoly
 
 
-def _get_wcs_from_sip(butlerWcs):
-    """Get wcsfit.Wcs in TPV format from the SIP-formatted input WCS.
-
-    Parameters
-    ----------
-    butlerWcs : `lsst.afw.geom.SkyWcs`
-        Input WCS from the calexp in SIP format.
-
-    Returns
-    -------
-    wcs : `wcsfit.Wcs`
-        WCS object in TPV format.
-    """
-    fits_metadata = butlerWcs.getFitsMetadata()
-    if not (
-        (fits_metadata.get("CTYPE1") == "RA---TAN-SIP") and (fits_metadata.get("CTYPE2") == "DEC--TAN-SIP")
-    ):
-        raise ValueError(
-            f"CTYPES {fits_metadata.get('CTYPE1')} and {fits_metadata.get('CTYPE2')}"
-            "do not match SIP convention"
-        )
-
-    # Correct CRPIX values to correspond to source table pixel indexing
-    # convention
-    crpix1 = fits_metadata.get("CRPIX1")
-    crpix2 = fits_metadata.get("CRPIX2")
-    fits_metadata.set("CRPIX1", crpix1 - 1)
-    fits_metadata.set("CRPIX2", crpix2 - 1)
-
-    floatDict = {k: fits_metadata[k] for k in fits_metadata if isinstance(fits_metadata[k], (int, float))}
-
-    wcs = wcsfit.readTPVFromSIP(floatDict, "SIP")
-
-    return wcs
-
-
 class GbdesAstrometricFitConnections(
     pipeBase.PipelineTaskConnections, dimensions=("skymap", "tract", "instrument", "physical_filter")
 ):
@@ -708,7 +672,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 extensionType.append("SCIENCE")
 
                 wcs = row.getWcs()
-                wcss.append(_get_wcs_from_sip(wcs))
+                wcsRA = wcs.getSkyOrigin().getRa().asRadians()
+                wcsDec = wcs.getSkyOrigin().getDec().asRadians()
+                tangentPoint = wcsfit.Gnomonic(wcsRA, wcsDec)
+                mapping = wcs.getFrameDict().getMapping("PIXELS", "IWC")
+                gbdes_wcs = wcsfit.Wcs(wcsfit.ASTMap(mapping), tangentPoint)
+                wcss.append(gbdes_wcs)
 
         fieldNumbers = list(np.ones(len(exposureNames), dtype=int) * fieldNumber)
         instrumentNumbers = list(np.ones(len(exposureNames), dtype=int) * instrumentNumber)
