@@ -259,9 +259,21 @@ class GbdesAstrometricFitConnections(
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
+    modelParams = pipeBase.connectionTypes.Output(
+        doc="WCS parameter covariance.",
+        name="gbdesAstrometricFit_modelParams",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "skymap", "tract", "physical_filter"),
+    )
 
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
+
+    def __init__(self, *, config=None):
+        super().__init__(config=config)
+
+        if not self.config.saveModelParams:
+            self.outputs.remove("modelParams")
 
 
 class GbdesAstrometricFitConfig(
@@ -342,6 +354,14 @@ class GbdesAstrometricFitConfig(
         dtype=int,
         doc="Set the random seed for selecting data points to reserve from the fit for validation.",
         default=1234,
+    )
+    saveModelParams = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Save the parameters and covariance of the WCS model. Default to "
+            "false because this can be very large."
+        ),
+        default=False,
     )
 
     def setDefaults(self):
@@ -445,6 +465,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             butlerQC.put(outputWcs, wcsOutputRefDict[visit])
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
+        if self.config.saveModelParams:
+            butlerQC.put(output.modelParams, outputRefs.modelParams)
 
     def run(
         self, inputCatalogRefs, inputVisitSummaries, instrumentName="", refEpoch=None, refObjectLoader=None
@@ -571,9 +593,14 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         outputWCSs = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo)
         outputCatalog = wcsf.getOutputCatalog()
         starCatalog = wcsf.getStarCatalog()
+        modelParams = self._compute_model_params(wcsf) if self.config.saveModelParams else None
 
         return pipeBase.Struct(
-            outputWCSs=outputWCSs, fitModel=wcsf, outputCatalog=outputCatalog, starCatalog=starCatalog
+            outputWCSs=outputWCSs,
+            fitModel=wcsf,
+            outputCatalog=outputCatalog,
+            starCatalog=starCatalog,
+            modelParams=modelParams,
         )
 
     def _prep_sky(self, inputVisitSummaries, epoch, fieldName="Field"):
@@ -1336,3 +1363,47 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             catalogs[visit] = catalog
 
         return catalogs
+
+    def _compute_model_params(self, wcsf):
+        """Get the WCS model parameters and covariance and convert to a
+        dictionary that will be readable as a pandas dataframe or other table.
+
+        Parameters
+        ----------
+        wcsf : `wcsfit.WCSFit`
+            WCSFit object, assumed to have fit model.
+
+        Returns
+        -------
+        modelParams : `dict`
+            Parameters and covariance of the best-fit WCS model.
+        """
+        modelParamDict = wcsf.mapCollection.getParamDict()
+        modelCovariance = wcsf.getModelCovariance()
+
+        modelParams = {k: [] for k in ["mapName", "coordinate", "parameter", "coefficientNumber"]}
+        i = 0
+        for mapName, params in modelParamDict.items():
+            nCoeffs = len(params)
+            # There are an equal number of x and y coordinate parameters
+            nCoordCoeffs = nCoeffs // 2
+            modelParams["mapName"].extend([mapName] * nCoeffs)
+            modelParams["coordinate"].extend(["x"] * nCoordCoeffs)
+            modelParams["coordinate"].extend(["y"] * nCoordCoeffs)
+            modelParams["parameter"].extend(params)
+            modelParams["coefficientNumber"].extend(np.arange(nCoordCoeffs))
+            modelParams["coefficientNumber"].extend(np.arange(nCoordCoeffs))
+
+            for p in range(nCoeffs):
+                if p < nCoordCoeffs:
+                    coord = "x"
+                else:
+                    coord = "y"
+                modelParams[f"{mapName}_{coord}_{p}_cov"] = modelCovariance[i]
+                i += 1
+
+        # Convert the dictionary values from lists to numpy arrays.
+        for key, value in modelParams.items():
+            modelParams[key] = np.array(value)
+
+        return modelParams
