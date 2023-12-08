@@ -1649,6 +1649,12 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
                 if self.config.doFilterMorphological:
                     maskName = self.config.streakMaskName
+                    # clear single frame streak mask if it exists already
+                    if maskName in warpDiffExp.mask.getMaskPlaneDict():
+                        warpDiffExp.mask.clearMaskPlane(warpDiffExp.mask.getMaskPlane(maskName))
+                    else:
+                        self.log.debug(f"Did not (need to) clear {maskName} mask because it didn't exist")
+
                     _ = self.maskStreaks.run(warpDiffExp)
                     streakMask = warpDiffExp.mask
                     spanSetStreak = afwGeom.SpanSet.fromMask(
