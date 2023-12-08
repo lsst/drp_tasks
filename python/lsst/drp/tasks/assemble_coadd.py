@@ -1322,11 +1322,19 @@ class CompareWarpAssembleCoaddConnections(AssembleCoaddConnections):
         dimensions=("tract", "patch", "skymap", "visit", "instrument"),
         multiple=True,
     )
+    epochCountImage = pipeBase.connectionTypes.Output(
+        doc="Accumulated image of number of times pixels is detected in a psf-matched warp diff",
+        name="{outputCoaddName}Coadd_artifactEpochCountImage",
+        storageClass="ImageU",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
 
     def __init__(self, *, config=None):
         super().__init__(config=config)
         if not config.assembleStaticSkyModel.doWrite:
             self.outputs.remove("templateCoadd")
+        if not config.doWriteEpochCountIm:
+            self.outputs.remove("epochCountImage")
         config.validate()
 
 
@@ -1434,7 +1442,11 @@ class CompareWarpAssembleCoaddConfig(
     growStreakFp = pexConfig.Field(
         doc="Grow streak footprints by this number multiplied by the PSF width", dtype=float, default=5
     )
-
+    doWriteEpochCountIm = pexConfig.Field(
+        doc="Do write the map of times a pixel appears in a psf-matched warp difference image for debugging",
+        dtype=bool,
+        default=True
+    )
     def setDefaults(self):
         AssembleCoaddConfig.setDefaults(self)
         self.statistic = "MEAN"
@@ -1454,7 +1466,7 @@ class CompareWarpAssembleCoaddConfig(
         self.assembleStaticSkyModel.sigmaClip = 2.5
         self.assembleStaticSkyModel.clipIter = 3
         self.assembleStaticSkyModel.calcErrorFromInputVariance = False
-        self.assembleStaticSkyModel.doWrite = False
+        self.assembleStaticSkyModel.doWrite = True
         self.detect.doTempLocalBackground = False
         self.detect.reEstimateBackground = False
         self.detect.returnOriginalFootprints = False
@@ -1702,6 +1714,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         # Propagate PSF-matched EDGE pixels to coadd SENSOR_EDGE and
         # INEXACT_PSF. Psf-Matching moves the real edge inwards.
         self.applyAltEdgeMask(result.coaddExposure.maskedImage.mask, spanSetMaskList)
+        result.epochCountImage = self.epochCountImage
         return result
 
     def applyAltEdgeMask(self, mask, altMaskList):
@@ -1770,7 +1783,10 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
         for warpRef, imageScaler in zip(warpRefList, imageScalerList):
             warpDiffExp = self._readAndComputeWarpDiff(warpRef, imageScaler, templateCoadd)
+
             if warpDiffExp is not None:
+                #if warpRef.dataId['visit'] == 2023082900477:
+
                 # This nImage only approximates the final nImage because it
                 # uses the PSF-matched mask.
                 nImage.array += (
@@ -1781,6 +1797,10 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 footprints = fpSet.positive
                 slateIm.set(0)
                 spanSetList = [footprint.spans for footprint in footprints.getFootprints()]
+
+                if warpRef.dataId['visit'] == 2024111700343:
+                    warpDiffExp.writeFits("warpRef_2024111700343.fits")
+                    templateCoadd.writeFits("templateCoadd_2024111700343.fits")
 
                 # Remove artifacts due to defects before they contribute to
                 # the epochCountImage.
@@ -1844,6 +1864,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 spanSetEdgeMask = []
                 spanSetStreak = []
 
+
             spanSetNoDataMask = afwGeom.SpanSet.fromMask(nansMask).split()
 
             spanSetNoDataMaskList.append(spanSetNoDataMask)
@@ -1851,10 +1872,6 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             spanSetEdgeList.append(spanSetEdgeMask)
             if self.config.doFilterMorphological:
                 spanSetBadMorphoList.append(spanSetStreak)
-
-        if lsstDebug.Info(__name__).saveCountIm:
-            path = self._dataRef2DebugPath("epochCountIm", warpRefList[0], coaddLevel=True)
-            epochCountImage.writeFits(path)
 
         for i, spanSetList in enumerate(spanSetArtifactList):
             if spanSetList:
@@ -1867,7 +1884,10 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
         altMasks = []
         for artifacts, noData, edge in zip(spanSetArtifactList, spanSetNoDataMaskList, spanSetEdgeList):
+
             altMasks.append({"CLIPPED": artifacts, "NO_DATA": noData, "EDGE": edge})
+        self.epochCountImage = epochCountImage
+
         return altMasks
 
     def prefilterArtifacts(self, spanSetList, exp):
