@@ -121,6 +121,49 @@ def _make_ref_covariance_matrix(
     return cov
 
 
+def _nCoeffsFromDegree(degree):
+    """Get the number of coefficients for a polynomial of a certain degree with
+    two variables.
+
+    This uses the general formula that the number of coefficients for a
+    polynomial of degree d with n variables is (n + d) choose d, where in this
+    case n is fixed to 2.
+
+    Parameters
+    ----------
+    degree : `int`
+        Degree of the polynomial in question.
+
+    Returns
+    -------
+    nCoeffs : `int`
+        Number of coefficients for the polynomial in question.
+    """
+    nCoeffs = int((degree + 2) * (degree + 1) / 2)
+    return nCoeffs
+
+
+def _degreeFromNCoeffs(nCoeffs):
+    """Get the degree for a polynomial with two variables and a certain number
+    of coefficients.
+
+    This is done by applying the quadratic formula to the
+    formula for calculating the number of coefficients of the polynomial.
+
+    Parameters
+    ----------
+    nCoeffs : `int`
+        Number of coefficients for the polynomial in question.
+
+    Returns
+    -------
+    degree : `int`
+        Degree of the polynomial in question.
+    """
+    degree = int(-1.5 + 0.5 * (1 + 8 * nCoeffs) ** 0.5)
+    return degree
+
+
 def _convert_to_ast_polymap_coefficients(coefficients):
     """Convert vector of polynomial coefficients from the format used in
     `gbdes` into AST format (see Poly2d::vectorIndex(i, j) in
@@ -141,9 +184,7 @@ def _convert_to_ast_polymap_coefficients(coefficients):
     """
     polyArray = np.zeros((len(coefficients), 4))
     N = len(coefficients) / 2
-    # Get the degree of the polynomial by applying the quadratic formula to the
-    # formula for calculating the number of coefficients of the polynomial.
-    degree = int(-1.5 + 0.5 * (1 + 8 * N) ** 0.5)
+    degree = _degreeFromNCoeffs(N)
 
     for outVar in [1, 2]:
         for i in range(degree + 1):
@@ -399,9 +440,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             **inputs, instrumentName=instrumentName, refEpoch=refEpoch, refObjectLoader=refObjectLoader
         )
 
-        for outputRef in outputRefs.outputWcs:
-            visit = outputRef.dataId["visit"]
-            butlerQC.put(output.outputWCSs[visit], outputRef)
+        wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
+        for visit, outputWcs in output.outputWCSs.items():
+            butlerQC.put(outputWcs, wcsOutputRefDict[visit])
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
 
@@ -436,6 +477,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             ``outputCatalog`` : `pyarrow.Table`
                 Catalog with fit residuals of all sources used.
         """
+        if (len(inputVisitSummaries) == 1) and self.config.deviceModel and self.config.exposureModel:
+            raise RuntimeError(
+                "More than one exposure is necessary to break the degeneracy between the "
+                "device model and the exposure model."
+            )
         self.log.info("Gathering instrument, exposure, and field info")
         # Set up an instrument object
         instrument = wcsfit.Instrument(instrumentName)
@@ -469,6 +515,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         sourceIndices, usedColumns = self._load_catalogs_and_associate(
             associations, inputCatalogRefs, extensionInfo
         )
+        self._check_degeneracies(associations, extensionInfo)
 
         self.log.info("Fit the WCSs")
         # Set up a YAML-type string using the config variables and a sample
@@ -508,9 +555,16 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self._add_objects(wcsf, inputCatalogRefs, sourceIndices, extensionInfo, usedColumns)
         self._add_ref_objects(wcsf, refObjects, refCovariance, extensionInfo)
 
+        # There must be at least as many sources per visit as the number of
+        # free parameters in the per-visit mapping. Set minFitExposures to be
+        # the number of free parameters, so that visits with fewer visits are
+        # dropped.
+        nCoeffVisitModel = _nCoeffsFromDegree(self.config.exposurePolyOrder)
         # Do the WCS fit
         wcsf.fit(
-            reserveFraction=self.config.fitReserveFraction, randomNumberSeed=self.config.fitReserveRandomSeed
+            reserveFraction=self.config.fitReserveFraction,
+            randomNumberSeed=self.config.fitReserveRandomSeed,
+            minFitExposures=nCoeffVisitModel,
         )
         self.log.info("WCS fitting done")
 
@@ -854,7 +908,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         Parameters
         ----------
         associations : `wcsfit.FoFClass`
-            Object to which to add the catalog of reference objects.
+            Object to which to add the catalog of source and which performs
+            the source association.
         inputCatalogRefs : `list`
             List of DeferredDatasetHandles pointing to visit-level source
             tables.
@@ -947,6 +1002,48 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         )
 
         return sourceIndices, columns
+
+    def _check_degeneracies(self, associations, extensionInfo):
+        """Check that the minimum number of visits and sources needed to
+        constrain the model are present.
+
+        This does not guarantee that the Hessian matrix of the chi-square,
+        which is used to fit the model, will be positive-definite, but if the
+        checks here do not pass, the matrix is certain to not be
+        positive-definite and the model cannot be fit.
+
+        Parameters
+        ----------
+        associations : `wcsfit.FoFClass`
+            Object holding the source association information.
+        extensionInfo : `lsst.pipe.base.Struct`
+            Struct containing properties for each extension.
+        """
+        # As a baseline, need to have more stars per detector than per-detector
+        # parameters, and more stars per visit than per-visit parameters.
+        whichExtension = np.array(associations.extn)
+        whichDetector = np.zeros(len(whichExtension))
+        whichVisit = np.zeros(len(whichExtension))
+
+        for extension, (detector, visit) in enumerate(zip(extensionInfo.detector, extensionInfo.visit)):
+            ex_ind = whichExtension == extension
+            whichDetector[ex_ind] = detector
+            whichVisit[ex_ind] = visit
+
+        if "BAND/DEVICE/poly" in self.config.deviceModel:
+            nCoeffDetectorModel = _nCoeffsFromDegree(self.config.devicePolyOrder)
+            unconstrainedDetectors = []
+            for detector in np.unique(extensionInfo.detector):
+                numSources = (whichDetector == detector).sum()
+                if numSources < nCoeffDetectorModel:
+                    unconstrainedDetectors.append(str(detector))
+
+            if unconstrainedDetectors:
+                raise RuntimeError(
+                    "The model is not constrained. The following detectors do not have enough "
+                    f"sources ({nCoeffDetectorModel} required): ",
+                    ", ".join(unconstrainedDetectors),
+                )
 
     def make_yaml(self, inputVisitSummary, inputFile=None):
         """Make a YAML-type object that describes the parameters of the fit
@@ -1198,6 +1295,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         catalogs = {}
         for v, visitSummary in enumerate(visitSummaryTables):
             visit = visitSummary[0]["visit"]
+
+            visitMap = wcsf.mapCollection.orderAtoms(f"{visit}")[0]
+            visitMapType = wcsf.mapCollection.getMapType(visitMap)
+            if (visitMap not in mapParams) and (visitMapType != "Identity"):
+                self.log.warning("Visit %d was dropped because of an insufficient number of sources.", visit)
+                continue
 
             catalog = lsst.afw.table.ExposureCatalog(schema)
             catalog.resize(len(exposureInfo.detectors))
