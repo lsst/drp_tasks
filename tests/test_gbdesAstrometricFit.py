@@ -76,6 +76,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.config.exposurePolyOrder = 6
         cls.config.fitReserveFraction = 0
         cls.config.fitReserveRandomSeed = 1234
+        cls.config.saveModelParams = True
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
         cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
@@ -490,6 +491,16 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                 self.assertAlmostEqual(np.std(dRA), 0)
                 self.assertAlmostEqual(np.mean(dDec), 0)
                 self.assertAlmostEqual(np.std(dDec), 0)
+
+    def test_compute_model_params(self):
+        """Test the optional model parameters and covariance output."""
+        modelParams = pd.DataFrame(self.outputs.modelParams)
+        # Check that DataFrame is the expected size.
+        shape = modelParams.shape
+        self.assertEqual(shape[0] + 4, shape[1])
+        # Check that covariance matrix is symmetric.
+        covariance = (modelParams.iloc[:, 4:]).to_numpy()
+        np.testing.assert_allclose(covariance, covariance.T, atol=1e-18)
 
     def test_run(self):
         """Test that run method recovers the input model parameters"""
