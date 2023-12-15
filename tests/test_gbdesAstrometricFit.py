@@ -539,6 +539,31 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                     np.testing.assert_array_less(absDiffX, 1e-7)
                     np.testing.assert_array_less(absDiffY, 1e-7)
 
+    def test_missingWcs(self):
+        """Test that task does not fail when the input WCS is None for one
+        extension and that the fit WCS for that extension returns a finite
+        result.
+        """
+        inputVisitSummary = self.inputVisitSummary.copy()
+        # Set one WCS to be None
+        testVisit = 0
+        testDetector = 20
+        inputVisitSummary[testVisit][testDetector].setWcs(None)
+
+        outputs = self.task.run(
+            self.inputCatalogRefs,
+            inputVisitSummary,
+            instrumentName=self.instrumentName,
+            refEpoch=self.refEpoch,
+            refObjectLoader=self.refObjectLoader,
+        )
+
+        # Check that the fit WCS for the extension with input WCS=None returns
+        # finite sky values.
+        testWcs = outputs.outputWCSs[self.testVisits[testVisit]][testDetector].getWcs()
+        testSky = testWcs.pixelToSky(0, 0)
+        self.assertTrue(testSky.isFinite())
+
 
 def setup_module(module):
     lsst.utils.tests.init()
