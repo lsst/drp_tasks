@@ -448,7 +448,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         Parameters
         ----------
-        butlerQC : `~lsst.pipe.base.ButlerQuantumContext`
+        butlerQC : `~lsst.pipe.base.QuantumContext`
             Gen3 Butler object for fetching additional data products before
             running the Task specialized for quantum being processed.
         inputRefs : `~lsst.pipe.base.InputQuantizedConnection`
