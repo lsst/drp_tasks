@@ -46,13 +46,13 @@ from lsst.daf.butler.formatters.parquet import pandas_to_astropy
 from lsst.geom import Angle, Box2I, SpherePoint, degrees
 from lsst.pex.config import ChoiceField, ConfigurableField
 from lsst.pipe.base import (
-    ButlerQuantumContext,
     InputQuantizedConnection,
     InvalidQuantumError,
     OutputQuantizedConnection,
     PipelineTask,
     PipelineTaskConfig,
     PipelineTaskConnections,
+    QuantumContext,
     Struct,
 )
 from lsst.pipe.tasks.computeExposureSummaryStats import ComputeExposureSummaryStatsTask
@@ -148,7 +148,7 @@ class PerTractInput(PossiblyMultipleInput):
     @classmethod
     def load(
         cls,
-        butler: ButlerQuantumContext | Butler,
+        butler: QuantumContext | Butler,
         sky_map: BaseSkyMap,
         refs: Iterable[DatasetRef],
     ) -> PerTractInput:
@@ -156,7 +156,7 @@ class PerTractInput(PossiblyMultipleInput):
 
         Parameters
         ----------
-        butler : `lsst.pipe.base.ButlerQuantumContext`
+        butler : `lsst.pipe.base.QuantumContext`
             Butler proxy used in `~lsst.pipe.base.PipelineTask.runQuantum`.
         sky_map : `lsst.skymap.BaseSkyMap`
             Definition of tracts and patches.
@@ -521,7 +521,7 @@ class UpdateVisitSummaryTask(PipelineTask):
 
     def runQuantum(
         self,
-        butlerQC: ButlerQuantumContext,
+        butlerQC: QuantumContext,
         inputRefs: InputQuantizedConnection,
         outputRefs: OutputQuantizedConnection,
     ) -> None:
