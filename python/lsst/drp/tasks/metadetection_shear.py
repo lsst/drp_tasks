@@ -65,9 +65,16 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
         dimensions={"patch", "band"},
     )
 
+    # from Arun K.:  The "name" field is configurable from the pipeline yaml
+    # file which are specific to what repo we are running this against.
+    # cal_ref_cat_2_2 is just the default value in the absence of a pipeline
+    # file
     ref_cat = cT.PrerequisiteInput(
         doc="Reference catalog used to mask bright objects.",
-        name="ref_cat",
+        # when using /repo/main
+        # name="gaia_dr3_20230707",
+        # when using /repo/dc2
+        name="cal_ref_cat_2_2",
         storageClass="SimpleCatalog",
         dimensions=("skypix",),
         deferLoad=True,
@@ -141,9 +148,7 @@ class MetadetectionShearConfig(
         "Bands expected to be present.  Cells with one or more of these bands "
         "missing will be skipped.  Bands other than those listed here will "
         "not be processed.",
-        # TODO learn how to set in a config file
         default=["g", "r", "i", "z"],
-        # default=["r"],
         optional=False,
     )
 
@@ -155,6 +160,13 @@ class MetadetectionShearConfig(
     idGenerator = SkyMapIdGeneratorConfig.make_field()
 
     # TODO: expose more configuration options here.
+
+    def setDefaults(self):
+        super().setDefaults()
+        # This is a DC2/cal_ref_cat_2_2 specific hack. This should be ideally
+        # specified in a config file
+        # To be removed in the cleanup before merging to main
+        self.ref_loader.filterMap = {band: f"lsst_{band}_smeared" for band in self.required_bands}
 
 
 class MetadetectionShearTask(PipelineTask):
@@ -559,7 +571,8 @@ class MetadetectionShearTask(PipelineTask):
             config=self.config.ref_loader,
             log=self.log,
         )
-        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region)
+        # What should decide the filterName?
+        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region, filterName="r")  # THIS IS A HACK.
 
         coadds_by_band = {
             ref.dataId["band"]: qc.get(ref) for ref in inputRefs.input_coadds
@@ -620,7 +633,6 @@ class MetadetectionShearTask(PipelineTask):
 
                 single_cell_tables.append(table)
                 idstart += len(res)
-            break
 
         # TODO: if we need to do any cell-overlap-region deduplication here
         # (instead of purely in science analysis code), this is where'd it'd
@@ -942,7 +954,6 @@ def _simulate_coadd(rng):
     )
     from descwl_shear_sims.galaxies import make_galaxy_catalog
     from descwl_shear_sims.psfs import make_fixed_psf, make_ps_psf, make_rand_psf
-
     # from descwl_shear_sims.stars import make_star_catalog
     from descwl_coadd.coadd_nowarp import make_coadd_nowarp
     from metadetect.masking import get_ap_range
