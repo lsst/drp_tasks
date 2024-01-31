@@ -756,6 +756,9 @@ class UpdateVisitSummaryTask(PipelineTask):
                         summary_stats, exposure.getMaskedImage()
                     )
 
+            # Update the effective exposure time calculation
+            self.compute_summary_stats.update_effective_time_stats(summary_stats, exposure)
+
             summary_stats.update_record(output_record)
             del exposure
 

@@ -897,9 +897,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refCatMetadata = refObjectLoader.refCats[0].get().getMetadata()
         refCatVersion = refCatMetadata["REFCAT_FORMAT_VERSION"]
         if refCatVersion == 2:
-            raDecCov = (
-                (refCat["coord_ra_coord_dec_Cov"] * u.radian**2).to(u.degree**2).to_value().tolist()
-            )
+            raDecCov = (refCat["coord_ra_coord_dec_Cov"] * u.radian**2).to(u.degree**2).to_value().tolist()
         else:
             raDecCov = np.zeros(len(ra))
 
