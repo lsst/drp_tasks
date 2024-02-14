@@ -38,8 +38,17 @@ from lsst.meas.algorithms import (
     ReferenceSourceSelectorTask,
 )
 from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
+from sklearn.cluster import AgglomerativeClustering
+from smatch.matcher import Matcher
 
-__all__ = ["GbdesAstrometricFitConnections", "GbdesAstrometricFitConfig", "GbdesAstrometricFitTask"]
+__all__ = [
+    "GbdesAstrometricFitConnections",
+    "GbdesAstrometricFitConfig",
+    "GbdesAstrometricFitTask",
+    "GbdesGlobalAstrometricFitConnections",
+    "GbdesGlobalAstrometricFitConfig",
+    "GbdesGlobalAstrometricFitTask",
+]
 
 
 def _make_ref_covariance_matrix(
@@ -68,7 +77,7 @@ def _make_ref_covariance_matrix(
         measurements.
     Returns
     -------
-    cov : `list` of `float`
+    cov : `list` [`float`]
         Flattened output covariance matrix.
     """
     cov = np.zeros((len(refCat), 25))
@@ -79,11 +88,11 @@ def _make_ref_covariance_matrix(
         #                   the string in Gaia column names for this
         #                   the ordering in the Gaia catalog
         # and the ordering of the tuples is the order we want in our cov matrix
-        raErr = (refCat["coord_raErr"] * inputUnit).to(outputCoordUnit).to_value()
-        decErr = (refCat["coord_decErr"] * inputUnit).to(outputCoordUnit).to_value()
-        raPMErr = (refCat["pm_raErr"] * inputUnit).to(outputPMUnit).to_value()
-        decPMErr = (refCat["pm_decErr"] * inputUnit).to(outputPMUnit).to_value()
-        parallaxErr = (refCat["parallaxErr"] * inputUnit).to(outputPMUnit).to_value()
+        raErr = (refCat["coord_raErr"]).to(outputCoordUnit).to_value()
+        decErr = (refCat["coord_decErr"]).to(outputCoordUnit).to_value()
+        raPMErr = (refCat["pm_raErr"]).to(outputPMUnit).to_value()
+        decPMErr = (refCat["pm_decErr"]).to(outputPMUnit).to_value()
+        parallaxErr = (refCat["parallaxErr"]).to(outputPMUnit).to_value()
         stdOrder = (
             (raErr, "ra", 0),
             (decErr, "dec", 1),
@@ -111,12 +120,11 @@ def _make_ref_covariance_matrix(
         for i, pi in enumerate(positionParameters):
             for j, pj in enumerate(positionParameters):
                 if i == j:
-                    cov[:, k] = (refCat[f"{pi}Err"] ** 2 * inputUnit**2).to_value(units[j] * units[j])
+                    cov[:, k] = ((refCat[f"{pi}Err"].value) ** 2 * inputUnit**2).to(units[j] * units[j]).value
                 elif i > j:
-                    cov[:, k] = (refCat[f"{pj}_{pi}_Cov"] * inputUnit**2).to_value(units[i] * units[j])
+                    cov[:, k] = (refCat[f"{pj}_{pi}_Cov"].value * inputUnit**2).to_value(units[i] * units[j])
                 else:
-                    cov[:, k] = (refCat[f"{pi}_{pj}_Cov"] * inputUnit**2).to_value(units[i] * units[j])
-
+                    cov[:, k] = (refCat[f"{pi}_{pj}_Cov"].value * inputUnit**2).to_value(units[i] * units[j])
                 k += 1
     return cov
 
@@ -246,7 +254,7 @@ class GbdesAstrometricFitConnections(
     )
     outputCatalog = pipeBase.connectionTypes.Output(
         doc=(
-            "Source table with stars used in fit, along with residuals in pixel coordinates and tangent "
+            "Catalog of sources used in fit, along with residuals in pixel coordinates and tangent "
             "plane coordinates and chisq values."
         ),
         name="gbdesAstrometricFit_fitStars",
@@ -254,13 +262,16 @@ class GbdesAstrometricFitConnections(
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     starCatalog = pipeBase.connectionTypes.Output(
-        doc="Star catalog.",
+        doc=(
+            "Catalog of best-fit object positions. Also includes the fit proper motion and parallax if "
+            "fitProperMotion is True."
+        ),
         name="gbdesAstrometricFit_starCatalog",
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     modelParams = pipeBase.connectionTypes.Output(
-        doc="WCS parameter covariance.",
+        doc="WCS parameters and covariance.",
         name="gbdesAstrometricFit_modelParams",
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
@@ -287,6 +298,17 @@ class GbdesAstrometricFitConfig(
     referenceSelector = pexConfig.ConfigurableField(
         target=ReferenceSourceSelectorTask,
         doc="How to down-select the loaded astrometry reference catalog.",
+    )
+    referenceFilter = pexConfig.Field(
+        dtype=str,
+        doc="Name of filter to load from reference catalog. This is a required argument, although the values"
+        "returned are not used.",
+        default="phot_g_mean",
+    )
+    applyRefCatProperMotion = pexConfig.Field(
+        dtype=bool,
+        doc="Apply proper motion to shift reference catalog to epoch of observations.",
+        default=True,
     )
     matchRadius = pexConfig.Field(
         doc="Matching tolerance between associated objects (arcseconds).", dtype=float, default=1.0
@@ -433,7 +455,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         instrumentName = butlerQC.quantum.dataId["instrument"]
 
-        # Ensure the inputs are in a consistent order
+        # Ensure the inputs are in a consistent and deterministic order
         inputCatVisits = np.array([inputCat.dataId["visit"] for inputCat in inputs["inputCatalogRefs"]])
         inputs["inputCatalogRefs"] = [inputs["inputCatalogRefs"][v] for v in inputCatVisits.argsort()]
         inputSumVisits = np.array([inputSum[0]["visit"] for inputSum in inputs["inputVisitSummaries"]])
@@ -443,12 +465,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         inputRefCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputs["referenceCatalog"]])
         inputs["referenceCatalog"] = [inputs["referenceCatalog"][v] for v in inputRefCats.argsort()]
 
-        sampleRefCat = inputs["referenceCatalog"][0].get()
-        refEpoch = sampleRefCat[0]["epoch"]
-
         refConfig = LoadReferenceObjectsConfig()
-        refConfig.anyFilterMapsToThis = "phot_g_mean"
-        refConfig.requireProperMotion = True
+        if self.config.applyRefCatProperMotion:
+            refConfig.requireProperMotion = True
         refObjectLoader = ReferenceObjectLoader(
             dataIds=[ref.datasetRef.dataId for ref in inputRefCatRefs],
             refCats=inputs.pop("referenceCatalog"),
@@ -456,12 +475,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             log=self.log,
         )
 
-        output = self.run(
-            **inputs, instrumentName=instrumentName, refEpoch=refEpoch, refObjectLoader=refObjectLoader
-        )
+        output = self.run(**inputs, instrumentName=instrumentName, refObjectLoader=refObjectLoader)
 
         wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
-        for visit, outputWcs in output.outputWCSs.items():
+        for visit, outputWcs in output.outputWcss.items():
             butlerQC.put(outputWcs, wcsOutputRefDict[visit])
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
@@ -475,10 +492,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         Parameters
         ----------
-        inputCatalogRefs : `list`
-            List of `DeferredDatasetHandle`s pointing to visit-level source
+        inputCatalogRefs : `list` [`DeferredDatasetHandle`]
+            List of handles pointing to visit-level source
             tables.
-        inputVisitSummaries : `list` of `lsst.afw.table.ExposureCatalog`
+        inputVisitSummaries : `list` [`lsst.afw.table.ExposureCatalog`]
             List of catalogs with per-detector summary information.
         instrumentName : `str`, optional
             Name of the instrument used. This is only used for labelling.
@@ -491,20 +508,19 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         Returns
         -------
         result : `lsst.pipe.base.Struct`
-            ``outputWCSs`` : `list` of `lsst.afw.table.ExposureCatalog`
+            ``outputWcss`` : `list` [`lsst.afw.table.ExposureCatalog`]
                 List of exposure catalogs (one per visit) with the WCS for each
                 detector set by the new fitted WCS.
             ``fitModel`` : `wcsfit.WCSFit`
                 Model-fitting object with final model parameters.
             ``outputCatalog`` : `pyarrow.Table`
                 Catalog with fit residuals of all sources used.
+            ``starCatalog`` : `pyarrow.Table`
+                Catalog with best-fit positions of the objects fit.
+            ``modelParams`` : `dict`
+                Parameters and covariance of the best-fit WCS model.
         """
-        if (len(inputVisitSummaries) == 1) and self.config.deviceModel and self.config.exposureModel:
-            raise RuntimeError(
-                "More than one exposure is necessary to break the degeneracy between the "
-                "device model and the exposure model."
-            )
-        self.log.info("Gathering instrument, exposure, and field info")
+        self.log.info("Gather instrument, exposure, and field info")
         # Set up an instrument object
         instrument = wcsfit.Instrument(instrumentName)
 
@@ -530,7 +546,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         # Add the reference catalog to the associator
         medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="decimalyear").mjd
         refObjects, refCovariance = self._load_refcat(
-            associations, refObjectLoader, fieldCenter, fieldRadius, extensionInfo, epoch=medianEpoch
+            refObjectLoader,
+            extensionInfo,
+            epoch=medianEpoch,
+            center=fieldCenter,
+            radius=fieldRadius,
+            associations=associations,
         )
 
         # Add the science catalogs and associate new sources as they are added
@@ -542,7 +563,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self.log.info("Fit the WCSs")
         # Set up a YAML-type string using the config variables and a sample
         # visit
-        inputYAML, mapTemplate = self.make_yaml(inputVisitSummaries[0])
+        inputYaml, mapTemplate = self.make_yaml(inputVisitSummaries[0])
 
         # Set the verbosity level for WCSFit from the task log level.
         # TODO: DM-36850, Add lsst.log to gbdes so that log messages are
@@ -562,7 +583,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             exposuresHelper,
             extensionInfo.visitIndex,
             extensionInfo.detectorIndex,
-            inputYAML,
+            inputYaml,
             extensionInfo.wcs,
             associations.sequence,
             associations.extn,
@@ -590,13 +611,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWCSs = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo, mapTemplate=mapTemplate)
+        outputWcss = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo, mapTemplate=mapTemplate)
         outputCatalog = wcsf.getOutputCatalog()
         starCatalog = wcsf.getStarCatalog()
         modelParams = self._compute_model_params(wcsf) if self.config.saveModelParams else None
 
         return pipeBase.Struct(
-            outputWCSs=outputWCSs,
+            outputWcss=outputWcss,
             fitModel=wcsf,
             outputCatalog=outputCatalog,
             starCatalog=starCatalog,
@@ -609,7 +630,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         Paramaters
         ----------
-        inputVisitSummaries : `list` of `lsst.afw.table.ExposureCatalog`
+        inputVisitSummaries : `list` [`lsst.afw.table.ExposureCatalog`]
             List of catalogs with per-detector summary information.
         epoch : float
             Reference epoch.
@@ -646,25 +667,34 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         return fields, center, radius
 
     def _get_exposure_info(
-        self, inputVisitSummaries, instrument, fieldNumber=0, instrumentNumber=0, refEpoch=None
+        self,
+        inputVisitSummaries,
+        instrument,
+        fieldNumber=0,
+        instrumentNumber=0,
+        refEpoch=None,
+        fieldRegions=None,
     ):
         """Get various information about the input visits to feed to the
         fitting routines.
 
         Parameters
         ----------
-        inputVisitSummaries : `list` of `lsst.afw.table.ExposureCatalog`
+        inputVisitSummaries : `list [`lsst.afw.table.ExposureCatalog`]
             Tables for each visit with information for detectors.
         instrument : `wcsfit.Instrument`
             Instrument object to which detector information is added.
-        fieldNumber : `int`
+        fieldNumber : `int`, optional
             Index of the field for these visits. Should be zero if all data is
-            being fit together.
-        instrumentNumber : `int`
+            being fit together. This is ignored if `fieldRegions` is not None.
+        instrumentNumber : `int`, optional
             Index of the instrument for these visits. Should be zero if all
             data comes from the same instrument.
-        refEpoch : `float`
+        refEpoch : `float`, optional
             Epoch of the reference objects in MJD.
+        fieldRegions : `dict` [`int`, `lsst.sphgeom.ConvexPolygon`], optional
+            Dictionary of regions encompassing each group of input visits
+            keyed by an arbitrary index.
 
         Returns
         -------
@@ -674,27 +704,27 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 List of visit names.
             ``detectors`` : `list`
                 List of all detectors in any visit.
-            ``ras`` : `list` of float
+            ``ras`` : `list` [`float`]
                 List of boresight RAs for each visit.
-            ``decs`` : `list` of float
+            ``decs`` : `list` [`float`]
                 List of borseight Decs for each visit.
             ``medianEpoch`` : float
                 Median epoch of all visits in decimal-year format.
         exposuresHelper : `wcsfit.ExposuresHelper`
             Object containing information about the input visits.
         extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension:
+            Struct containing properties for each extension (visit/detector):
             ``visit`` : `np.ndarray`
                 Name of the visit for this extension.
             ``detector`` : `np.ndarray`
                 Name of the detector for this extension.
-            ``visitIndex` : `np.ndarray` of `int`
+            ``visitIndex` : `np.ndarray` [`int`]
                 Index of visit for this extension.
-            ``detectorIndex`` : `np.ndarray` of `int`
+            ``detectorIndex`` : `np.ndarray` [`int`]
                 Index of the detector for this extension.
-            ``wcss`` : `np.ndarray` of `lsst.afw.geom.SkyWcs`
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
                 Initial WCS for this extension.
-            ``extensionType`` : `np.ndarray` of `str`
+            ``extensionType`` : `np.ndarray` [`str`]
                 "SCIENCE" or "REFERENCE".
         """
         exposureNames = []
@@ -707,6 +737,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         mjds = []
         observatories = []
         wcss = []
+        fieldNumbers = []
 
         extensionType = []
         extensionVisitIndices = []
@@ -722,6 +753,16 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             raDec = visitInfo.getBoresightRaDec()
             ras.append(raDec.getRa().asRadians())
             decs.append(raDec.getDec().asRadians())
+            if fieldRegions is not None:
+                inField = [r for r, region in fieldRegions.items() if region.contains(raDec.getVector())]
+                if len(inField) != 1:
+                    raise RuntimeError(
+                        f"Visit should be in one and only one field, but {visit} is contained "
+                        f"in {len(inField)} fields."
+                    )
+                fieldNumbers.append(inField[0])
+            else:
+                fieldNumbers.append(fieldNumber)
             airmasses.append(visitInfo.getBoresightAirmass())
             exposureTimes.append(visitInfo.getExposureTime())
             obsDate = visitInfo.getDate()
@@ -771,7 +812,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 extensionDetectors.append(detector)
                 extensionType.append("SCIENCE")
 
-        fieldNumbers = list(np.ones(len(exposureNames), dtype=int) * fieldNumber)
         instrumentNumbers = list(np.ones(len(exposureNames), dtype=int) * instrumentNumber)
 
         # Set the reference epoch to be the median of the science visits.
@@ -780,30 +820,35 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         medianEpoch = astropy.time.Time(medianMJD, format="mjd").decimalyear
 
         # Add information for the reference catalog. Most of the values are
-        # not used.
-        exposureNames.append("REFERENCE")
-        visits.append(-1)
-        fieldNumbers.append(0)
-        if self.config.fitProperMotion:
-            instrumentNumbers.append(-2)
-        else:
-            instrumentNumbers.append(-1)
-        ras.append(0.0)
-        decs.append(0.0)
-        airmasses.append(0.0)
-        exposureTimes.append(0)
-        mjds.append((refEpoch if (refEpoch is not None) else medianMJD))
-        observatories.append(np.array([0, 0, 0]))
-        identity = wcsfit.IdentityMap()
-        icrs = wcsfit.SphericalICRS()
-        refWcs = wcsfit.Wcs(identity, icrs, "Identity", np.pi / 180.0)
-        wcss.append(refWcs)
+        # not used. There needs to be a separate catalog for each field.
+        if fieldRegions is None:
+            fieldRegions = {0: None}
+        for f in fieldRegions:
+            exposureNames.append("REFERENCE")
+            # Make the "visit" number the field * -1 to disambiguate it from
+            # any potential visit number:
+            visits.append(-1 * f)
+            fieldNumbers.append(f)
+            if self.config.fitProperMotion:
+                instrumentNumbers.append(-2)
+            else:
+                instrumentNumbers.append(-1)
+            ras.append(0.0)
+            decs.append(0.0)
+            airmasses.append(0.0)
+            exposureTimes.append(0)
+            mjds.append((refEpoch if (refEpoch is not None) else medianMJD))
+            observatories.append(np.array([0, 0, 0]))
+            identity = wcsfit.IdentityMap()
+            icrs = wcsfit.SphericalICRS()
+            refWcs = wcsfit.Wcs(identity, icrs, "Identity", np.pi / 180.0)
+            wcss.append(refWcs)
 
-        extensionVisitIndices.append(len(exposureNames) - 1)
-        extensionDetectorIndices.append(-1)  # REFERENCE device must be -1
-        extensionVisits.append(-1)
-        extensionDetectors.append(-1)
-        extensionType.append("REFERENCE")
+            extensionVisitIndices.append(len(exposureNames) - 1)
+            extensionDetectorIndices.append(-1)  # REFERENCE device must be -1
+            extensionVisits.append(-1 * f)
+            extensionDetectors.append(-1)
+            extensionType.append("REFERENCE")
 
         # Make a table of information to use elsewhere in the class
         extensionInfo = pipeBase.Struct(
@@ -835,69 +880,103 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         return exposureInfo, exposuresHelper, extensionInfo
 
     def _load_refcat(
-        self, associations, refObjectLoader, center, radius, extensionInfo, epoch=None, fieldIndex=0
+        self,
+        refObjectLoader,
+        extensionInfo,
+        epoch=None,
+        fieldIndex=0,
+        associations=None,
+        center=None,
+        radius=None,
+        region=None,
     ):
         """Load the reference catalog and add reference objects to the
         `wcsfit.FoFClass` object.
 
         Parameters
         ----------
-        associations : `wcsfit.FoFClass`
-            Object to which to add the catalog of reference objects.
         refObjectLoader :
             `lsst.meas.algorithms.loadReferenceObjects.ReferenceObjectLoader`
             Object set up to load reference catalog objects.
-        center : `lsst.geom.SpherePoint`
-            Center of the circle in which to load reference objects.
-        radius : `lsst.sphgeom._sphgeom.Angle`
-            Radius of the circle in which to load reference objects.
         extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension.
-        epoch : `float`
+            Struct containing properties for each extension (visit/detector).
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
+        epoch : `float`, optional
             MJD to which to correct the object positions.
-        fieldIndex : `int`
+        fieldIndex : `int`, optional
             Index of the field. Should be zero if all the data is fit together.
+        associations : `wcsfit.FoFClass`, optional
+            Object to which to add the catalog of reference objects.
+        center : `lsst.geom.SpherePoint`, optional
+            Center of the circle in which to load reference objects. Ignored if
+            `region` is set. If used, `radius` must also be set.
+        radius : `lsst.sphgeom._sphgeom.Angle`, optional
+            Radius of the circle in which to load reference objects. Ignored if
+            `region` is set. If used, `center` must also be set.
+        region : `lsst.sphgeom.ConvexPolygon`, optional
+            Region in which to load reference objects.
 
         Returns
         -------
         refObjects : `dict`
             Position and error information of reference objects.
-        refCovariance : `list` of `float`
+        refCovariance : `list` [`float`]
             Flattened output covariance matrix.
         """
-        formattedEpoch = astropy.time.Time(epoch, format="mjd")
+        if self.config.applyRefCatProperMotion:
+            formattedEpoch = astropy.time.Time(epoch, format="mjd")
+        else:
+            formattedEpoch = None
 
-        refFilter = refObjectLoader.config.anyFilterMapsToThis
-        skyCircle = refObjectLoader.loadSkyCircle(center, radius, refFilter, epoch=formattedEpoch)
+        if region is not None:
+            skyRegion = refObjectLoader.loadRegion(region, self.config.referenceFilter, epoch=formattedEpoch)
+        elif (center is not None) and (radius is not None):
+            skyRegion = refObjectLoader.loadSkyCircle(
+                center, radius, self.config.referenceFilter, epoch=formattedEpoch
+            )
+        else:
+            raise RuntimeError("Either `region` or `center` and `radius` must be set.")
 
-        selected = self.referenceSelector.run(skyCircle.refCat)
+        selected = self.referenceSelector.run(skyRegion.refCat)
         # Need memory contiguity to get reference filters as a vector.
         if not selected.sourceCat.isContiguous():
             refCat = selected.sourceCat.copy(deep=True)
         else:
             refCat = selected.sourceCat
+        refCat = refCat.asAstropy()
 
         # In Gaia DR3, missing values are denoted by NaNs.
         finiteInd = np.isfinite(refCat["coord_ra"]) & np.isfinite(refCat["coord_dec"])
         refCat = refCat[finiteInd]
 
-        if self.config.excludeNonPMObjects:
+        if self.config.excludeNonPMObjects and self.config.applyRefCatProperMotion:
             # Gaia DR2 has zeros for missing data, while Gaia DR3 has NaNs:
             hasPM = (
                 (refCat["pm_raErr"] != 0) & np.isfinite(refCat["pm_raErr"]) & np.isfinite(refCat["pm_decErr"])
             )
             refCat = refCat[hasPM]
 
-        ra = (refCat["coord_ra"] * u.radian).to(u.degree).to_value().tolist()
-        dec = (refCat["coord_dec"] * u.radian).to(u.degree).to_value().tolist()
-        raCov = ((refCat["coord_raErr"] * u.radian).to(u.degree).to_value() ** 2).tolist()
-        decCov = ((refCat["coord_decErr"] * u.radian).to(u.degree).to_value() ** 2).tolist()
+        ra = (refCat["coord_ra"]).to(u.degree).to_value().tolist()
+        dec = (refCat["coord_dec"]).to(u.degree).to_value().tolist()
+        raCov = ((refCat["coord_raErr"]).to(u.degree).to_value() ** 2).tolist()
+        decCov = ((refCat["coord_decErr"]).to(u.degree).to_value() ** 2).tolist()
 
         # Get refcat version from refcat metadata
         refCatMetadata = refObjectLoader.refCats[0].get().getMetadata()
         refCatVersion = refCatMetadata["REFCAT_FORMAT_VERSION"]
         if refCatVersion == 2:
-            raDecCov = (refCat["coord_ra_coord_dec_Cov"] * u.radian**2).to(u.degree**2).to_value().tolist()
+            raDecCov = (refCat["coord_ra_coord_dec_Cov"]).to(u.degree**2).to_value().tolist()
         else:
             raDecCov = np.zeros(len(ra))
 
@@ -905,33 +984,34 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refCovariance = []
 
         if self.config.fitProperMotion:
-            raPM = (refCat["pm_ra"] * u.radian).to(u.marcsec).to_value().tolist()
-            decPM = (refCat["pm_dec"] * u.radian).to(u.marcsec).to_value().tolist()
-            parallax = (refCat["parallax"] * u.radian).to(u.marcsec).to_value().tolist()
+            raPM = (refCat["pm_ra"]).to(u.marcsec).to_value().tolist()
+            decPM = (refCat["pm_dec"]).to(u.marcsec).to_value().tolist()
+            parallax = (refCat["parallax"]).to(u.marcsec).to_value().tolist()
             cov = _make_ref_covariance_matrix(refCat, version=refCatVersion)
             pmDict = {"raPM": raPM, "decPM": decPM, "parallax": parallax}
             refObjects.update(pmDict)
             refCovariance = cov
 
-        extensionIndex = np.flatnonzero(extensionInfo.extensionType == "REFERENCE")[0]
-        visitIndex = extensionInfo.visitIndex[extensionIndex]
-        detectorIndex = extensionInfo.detectorIndex[extensionIndex]
-        instrumentIndex = -1  # -1 indicates the reference catalog
-        refWcs = extensionInfo.wcs[extensionIndex]
+        if associations is not None:
+            extensionIndex = np.flatnonzero(extensionInfo.extensionType == "REFERENCE")[0]
+            visitIndex = extensionInfo.visitIndex[extensionIndex]
+            detectorIndex = extensionInfo.detectorIndex[extensionIndex]
+            instrumentIndex = -1  # -1 indicates the reference catalog
+            refWcs = extensionInfo.wcs[extensionIndex]
 
-        associations.addCatalog(
-            refWcs,
-            "STELLAR",
-            visitIndex,
-            fieldIndex,
-            instrumentIndex,
-            detectorIndex,
-            extensionIndex,
-            np.ones(len(refCat), dtype=bool),
-            ra,
-            dec,
-            np.arange(len(ra)),
-        )
+            associations.addCatalog(
+                refWcs,
+                "STELLAR",
+                visitIndex,
+                fieldIndex,
+                instrumentIndex,
+                detectorIndex,
+                extensionIndex,
+                np.ones(len(refCat), dtype=bool),
+                ra,
+                dec,
+                np.arange(len(ra)),
+            )
 
         return refObjects, refCovariance
 
@@ -978,7 +1058,19 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             List of DeferredDatasetHandles pointing to visit-level source
             tables.
         extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension.
+            Struct containing properties for each extension (visit/detector).
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
         fieldIndex : `int`
             Index of the field for these catalogs. Should be zero assuming all
             data is being fit together.
@@ -990,7 +1082,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         -------
         sourceIndices : `list`
             List of boolean arrays used to select sources.
-        columns : `list` of `str`
+        columns : `list` [`str`]
             List of columns needed from source tables.
         """
         columns = [
@@ -1084,7 +1176,19 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         associations : `wcsfit.FoFClass`
             Object holding the source association information.
         extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension.
+            Struct containing properties for each extension (visit/detector):
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
         """
         # As a baseline, need to have more stars per detector than per-detector
         # parameters, and more stars per visit than per-visit parameters.
@@ -1125,15 +1229,15 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         Returns
         -------
-        inputYAML : `wcsfit.YAMLCollector`
+        inputYaml : `wcsfit.YAMLCollector`
             YAML object containing the model description.
         inputDict : `dict` [`str`, `str`]
             Dictionary containing the model description.
         """
         if inputFile is not None:
-            inputYAML = wcsfit.YAMLCollector(inputFile, "PixelMapCollection")
+            inputYaml = wcsfit.YAMLCollector(inputFile, "PixelMapCollection")
         else:
-            inputYAML = wcsfit.YAMLCollector("", "PixelMapCollection")
+            inputYaml = wcsfit.YAMLCollector("", "PixelMapCollection")
         inputDict = {}
         modelComponents = ["INSTRUMENT/DEVICE", "EXPOSURE"]
         baseMap = {"Type": "Composite", "Elements": modelComponents}
@@ -1176,10 +1280,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
             inputDict[component] = componentDict
 
-        inputYAML.addInput(yaml.dump(inputDict))
-        inputYAML.addInput("Identity:\n  Type:  Identity\n")
+        inputYaml.addInput(yaml.dump(inputDict))
+        inputYaml.addInput("Identity:\n  Type:  Identity\n")
 
-        return inputYAML, inputDict
+        return inputYaml, inputDict
 
     def _add_objects(self, wcsf, inputCatalogRefs, sourceIndices, extensionInfo, columns):
         """Add science sources to the wcsfit.WCSFit object.
@@ -1194,8 +1298,20 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         sourceIndices : `list`
             List of boolean arrays used to select sources.
         extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension.
-        columns : `list` of `str`
+            Struct containing properties for each extension (visit/detector):
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
+        columns : `list` [`str`]
             List of columns needed from source tables.
         """
         for inputCatalogRef in inputCatalogRefs:
@@ -1230,7 +1346,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
                 wcsf.setObjects(extensionIndex, d, "x", "y", ["xCov", "yCov", "xyCov"])
 
-    def _add_ref_objects(self, wcsf, refObjects, refCovariance, extensionInfo):
+    def _add_ref_objects(self, wcsf, refObjects, refCovariance, extensionInfo, fieldIndex=0):
         """Add reference sources to the wcsfit.WCSFit object.
 
         Parameters
@@ -1239,13 +1355,28 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             WCS-fitting object.
         refObjects : `dict`
             Position and error information of reference objects.
-        refCovariance : `list` of `float`
+        refCovariance : `list` [`float`]
             Flattened output covariance matrix.
         extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension.
+            Struct containing properties for each extension (visit/detector):
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
+        fieldIndex : `int`, optional
+            Index of the field to which these sources correspond.
         """
-        extensionIndex = np.flatnonzero(extensionInfo.extensionType == "REFERENCE")[0]
-
+        extensionIndex = np.flatnonzero(
+            (extensionInfo.extensionType == "REFERENCE") & (extensionInfo.visit == fieldIndex)
+        )[0]
         if self.config.fitProperMotion:
             wcsf.setObjects(
                 extensionIndex,
@@ -1341,15 +1472,26 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         ----------
         wcsf : `wcsfit.WCSFit`
             WCSFit object, assumed to have fit model.
-        visitSummaryTables : `list` of `lsst.afw.table.ExposureCatalog`
+        visitSummaryTables : `list` [`lsst.afw.table.ExposureCatalog`]
             Catalogs with per-detector summary information from which to grab
             detector information.
         extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension.
-
+            Struct containing properties for each extension (visit/detector):
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
         Returns
         -------
-        catalogs : `dict` of [`str`, `lsst.afw.table.ExposureCatalog`]
+        catalogs : `dict` [`str`, `lsst.afw.table.ExposureCatalog`]
             Dictionary of `lsst.afw.table.ExposureCatalog` objects with the WCS
             set to the WCS fit in wcsf, keyed by the visit name.
         """
@@ -1359,6 +1501,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         # Set up the schema for the output catalogs
         schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
         schema.addField("visit", type="L", doc="Visit number")
+        schema.addField(
+            "recoveredWcs",
+            type="Flag",
+            doc="Input WCS missing, output recovered from other input visit/detectors.",
+        )
 
         # Pixels will need to be rescaled before going into the mappings
         sampleDetector = visitSummaryTables[0][0]
@@ -1379,10 +1526,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             catalog.resize(len(exposureInfo.detectors))
             catalog["visit"] = visit
 
-            for d, detector in enumerate(visitSummary["id"]):
+            for d, detector in enumerate(exposureInfo.detectors):
                 mapName = f"{visit}/{detector}"
                 if mapName in wcsf.mapCollection.allMapNames():
                     mapElements = wcsf.mapCollection.orderAtoms(f"{mapName}/base")
+                    catalog[d]["recoveredWcs"] = False
                 else:
                     # This extension was not fit, but the WCS can be recovered
                     # using the maps fit from sources on other visits but the
@@ -1404,6 +1552,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                             element = element.replace("EXPOSURE", str(visit))
                             element = element.replace("DEVICE", str(detector))
                             mapElements.append(element)
+                    catalog[d]["recoveredWcs"] = True
                 mapDict = {}
                 for m, mapElement in enumerate(mapElements):
                     mapType = wcsf.mapCollection.getMapType(mapElement)
@@ -1474,3 +1623,571 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             modelParams[key] = np.array(value)
 
         return modelParams
+
+
+class GbdesGlobalAstrometricFitConnections(
+    pipeBase.PipelineTaskConnections, dimensions=("instrument", "physical_filter")
+):
+    inputVisitSummaries = pipeBase.connectionTypes.Input(
+        doc=(
+            "Per-visit consolidated exposure metadata built from calexps. "
+            "These catalogs use detector id for the id and must be sorted for "
+            "fast lookups of a detector."
+        ),
+        name="visitSummary",
+        storageClass="ExposureCatalog",
+        dimensions=("instrument", "visit"),
+        multiple=True,
+    )
+    referenceCatalog = pipeBase.connectionTypes.PrerequisiteInput(
+        doc="The astrometry reference catalog to match to loaded input catalog sources.",
+        name="gaia_dr3_20230707",
+        storageClass="SimpleCatalog",
+        dimensions=("skypix",),
+        deferLoad=True,
+        multiple=True,
+    )
+    isolatedStarSources = pipeBase.connectionTypes.Input(
+        doc="Catalog of matched sources.",
+        name="isolated_star_sources",
+        storageClass="DataFrame",
+        dimensions=(
+            "instrument",
+            "skymap",
+            "tract",
+        ),
+        multiple=True,
+        deferLoad=True,
+    )
+    isolatedStarCatalogs = pipeBase.connectionTypes.Input(
+        doc="Catalog of objects corresponding to the isolatedStarSources.",
+        name="isolated_star_cat",
+        storageClass="DataFrame",
+        dimensions=(
+            "instrument",
+            "skymap",
+            "tract",
+        ),
+        multiple=True,
+        deferLoad=True,
+    )
+    outputWcs = pipeBase.connectionTypes.Output(
+        doc=(
+            "Per-visit world coordinate systems derived from the fitted model. These catalogs only contain "
+            "entries for detectors with an output, and use the detector id for the catalog id, sorted on id "
+            "for fast lookups of a detector."
+        ),
+        name="gbdesGlobalAstrometricFitSkyWcsCatalog",
+        storageClass="ExposureCatalog",
+        dimensions=("instrument", "visit"),
+        multiple=True,
+    )
+    outputCatalog = pipeBase.connectionTypes.Output(
+        doc=(
+            "Catalog of sources used in fit, along with residuals in pixel coordinates and tangent "
+            "plane coordinates and chisq values."
+        ),
+        name="gbdesGlobalAstrometricFit_fitStars",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
+    starCatalog = pipeBase.connectionTypes.Output(
+        doc=(
+            "Catalog of best-fit object positions. Also includes the fit proper motion and parallax if "
+            "fitProperMotion is True."
+        ),
+        name="gbdesGlobalAstrometricFit_starCatalog",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
+    modelParams = pipeBase.connectionTypes.Output(
+        doc="WCS parameters and covariance.",
+        name="gbdesGlobalAstrometricFit_modelParams",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
+
+    def getSpatialBoundsConnections(self):
+        return ("inputVisitSummaries",)
+
+    def __init__(self, *, config=None):
+        super().__init__(config=config)
+
+        if not self.config.saveModelParams:
+            self.outputs.remove("modelParams")
+
+
+class GbdesGlobalAstrometricFitConfig(
+    GbdesAstrometricFitConfig, pipelineConnections=GbdesGlobalAstrometricFitConnections
+):
+    visitOverlap = pexConfig.Field(
+        dtype=float,
+        default=1.0,
+        doc=(
+            "The linkage distance threshold above which clustered groups of visits will not be merged "
+            "together in an agglomerative clustering algorithm. The linkage distance is calculated using the "
+            "minimum distance between the field-of-view centers of a given visit and all other visits in a "
+            "group, and is in units of the field-of-view radius. The resulting groups of visits define the "
+            "fields for the astrometric fit."
+        ),
+    )
+
+
+class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
+    """Calibrate the WCS across multiple visits and multiple fields using the
+    GBDES package.
+
+    This class assumes that the input visits can be separated into contiguous
+    groups, for which an individual group covers an area of less than a
+    hemisphere.
+    """
+
+    ConfigClass = GbdesGlobalAstrometricFitConfig
+    _DefaultName = "gbdesAstrometricFit"
+
+    def runQuantum(self, butlerQC, inputRefs, outputRefs):
+        # We override runQuantum to set up the refObjLoaders
+        inputs = butlerQC.get(inputRefs)
+
+        instrumentName = butlerQC.quantum.dataId["instrument"]
+
+        # Ensure the inputs are in a consistent and deterministic order
+        inputSumVisits = np.array([inputSum[0]["visit"] for inputSum in inputs["inputVisitSummaries"]])
+        inputs["inputVisitSummaries"] = [inputs["inputVisitSummaries"][v] for v in inputSumVisits.argsort()]
+        inputRefHtm7s = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputRefs.referenceCatalog])
+        inputRefCatRefs = [inputRefs.referenceCatalog[htm7] for htm7 in inputRefHtm7s.argsort()]
+        inputRefCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputs["referenceCatalog"]])
+        inputs["referenceCatalog"] = [inputs["referenceCatalog"][v] for v in inputRefCats.argsort()]
+        inputIsolatedStarSourceTracts = np.array(
+            [isolatedStarSource.dataId["tract"] for isolatedStarSource in inputs["isolatedStarSources"]]
+        )
+        inputIsolatedStarCatalogTracts = np.array(
+            [isolatedStarCatalog.dataId["tract"] for isolatedStarCatalog in inputs["isolatedStarCatalogs"]]
+        )
+        for tract in inputIsolatedStarCatalogTracts:
+            if tract not in inputIsolatedStarSourceTracts:
+                raise RuntimeError(f"tract {tract} in isolated_star_cats but not isolated_star_sources")
+        inputs["isolatedStarSources"] = np.array(
+            [inputs["isolatedStarSources"][t] for t in inputIsolatedStarSourceTracts.argsort()]
+        )
+        inputs["isolatedStarCatalogs"] = np.array(
+            [inputs["isolatedStarCatalogs"][t] for t in inputIsolatedStarSourceTracts.argsort()]
+        )
+
+        refConfig = LoadReferenceObjectsConfig()
+        if self.config.applyRefCatProperMotion:
+            refConfig.requireProperMotion = True
+        refObjectLoader = ReferenceObjectLoader(
+            dataIds=[ref.datasetRef.dataId for ref in inputRefCatRefs],
+            refCats=inputs.pop("referenceCatalog"),
+            config=refConfig,
+            log=self.log,
+        )
+
+        output = self.run(**inputs, instrumentName=instrumentName, refObjectLoader=refObjectLoader)
+
+        for outputRef in outputRefs.outputWcs:
+            visit = outputRef.dataId["visit"]
+            butlerQC.put(output.outputWcss[visit], outputRef)
+        butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
+        butlerQC.put(output.starCatalog, outputRefs.starCatalog)
+        if self.config.saveModelParams:
+            butlerQC.put(output.modelParams, outputRefs.modelParams)
+
+    def run(
+        self,
+        inputVisitSummaries,
+        isolatedStarSources,
+        isolatedStarCatalogs,
+        instrumentName="",
+        refEpoch=None,
+        refObjectLoader=None,
+    ):
+        """Run the WCS fit for a given set of visits
+
+        Parameters
+        ----------
+        inputVisitSummaries : `list` [`lsst.afw.table.ExposureCatalog`]
+            List of catalogs with per-detector summary information.
+        isolatedStarSources : `list` [`DeferredDatasetHandle`]
+            List of handles pointing to isolated star sources.
+        isolatedStarCatalog: `list` [`DeferredDatasetHandle`]
+            List of handles pointing to isolated star catalogs.
+        instrumentName : `str`, optional
+            Name of the instrument used. This is only used for labelling.
+        refEpoch : `float`, optional
+            Epoch of the reference objects in MJD.
+        refObjectLoader : instance of
+            `lsst.meas.algorithms.loadReferenceObjects.ReferenceObjectLoader`,
+            optional
+            Reference object loader instance.
+
+        Returns
+        -------
+        result : `lsst.pipe.base.Struct`
+            ``outputWcss`` : `list` [`lsst.afw.table.ExposureCatalog`]
+                List of exposure catalogs (one per visit) with the WCS for each
+                detector set by the new fitted WCS.
+            ``fitModel`` : `wcsfit.WCSFit`
+                Model-fitting object with final model parameters.
+            ``outputCatalog`` : `pyarrow.Table`
+                Catalog with fit residuals of all sources used.
+            ``starCatalog`` : `pyarrow.Table`
+                Catalog with best-fit positions of the objects fit.
+            ``modelParams`` : `dict`
+                Parameters and covariance of the best-fit WCS model.
+        """
+        self.log.info("Gather instrument, exposure, and field info")
+        # Set up an instrument object
+        instrument = wcsfit.Instrument(instrumentName)
+
+        # Get information about the extent of the input visits
+        fields, fieldRegions = self._prep_sky(inputVisitSummaries)
+
+        # Get RA, Dec, MJD, etc., for the input visits
+        exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(
+            inputVisitSummaries, instrument, fieldRegions=fieldRegions
+        )
+
+        self.log.info("Load associated sources")
+        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="decimalyear").mjd
+        allRefObjects, allRefCovariances = {}, {}
+        for f, fieldRegion in fieldRegions.items():
+            refObjects, refCovariance = self._load_refcat(
+                refObjectLoader, extensionInfo, epoch=medianEpoch, region=fieldRegion
+            )
+            allRefObjects[f] = refObjects
+            allRefCovariances[f] = refCovariance
+
+        associations, sourceDict = self._associate_from_isolated_sources(
+            isolatedStarSources, isolatedStarCatalogs, extensionInfo, allRefObjects
+        )
+
+        self.log.info("Fit the WCSs")
+        # Set up a YAML-type string using the config variables and a sample
+        # visit
+        inputYaml, mapTemplate = self.make_yaml(inputVisitSummaries[0])
+
+        # Set the verbosity level for WCSFit from the task log level.
+        # TODO: DM-36850, Add lsst.log to gbdes so that log messages are
+        # properly propagated.
+        loglevel = self.log.getEffectiveLevel()
+        if loglevel >= self.log.WARNING:
+            verbose = 0
+        elif loglevel == self.log.INFO:
+            verbose = 1
+        else:
+            verbose = 2
+
+        # Set up the WCS-fitting class using the source matches from the
+        # isolated star sources plus the reference catalog.
+        wcsf = wcsfit.WCSFit(
+            fields,
+            [instrument],
+            exposuresHelper,
+            extensionInfo.visitIndex,
+            extensionInfo.detectorIndex,
+            inputYaml,
+            extensionInfo.wcs,
+            associations.sequence,
+            associations.extn,
+            associations.obj,
+            sysErr=self.config.systematicError,
+            refSysErr=self.config.referenceSystematicError,
+            usePM=self.config.fitProperMotion,
+            verbose=verbose,
+        )
+
+        # Add the science and reference sources
+        self._add_objects(wcsf, sourceDict, extensionInfo)
+        for f in fieldRegions.keys():
+            self._add_ref_objects(
+                wcsf, allRefObjects[f], allRefCovariances[f], extensionInfo, fieldIndex=-1 * f
+            )
+
+        # Do the WCS fit
+        wcsf.fit(
+            reserveFraction=self.config.fitReserveFraction, randomNumberSeed=self.config.fitReserveRandomSeed
+        )
+        self.log.info("WCS fitting done")
+
+        outputWcss = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo, mapTemplate=mapTemplate)
+        outputCatalog = wcsf.getOutputCatalog()
+        starCatalog = wcsf.getStarCatalog()
+        modelParams = self._compute_model_params(wcsf) if self.config.saveModelParams else None
+
+        return pipeBase.Struct(
+            outputWcss=outputWcss,
+            fitModel=wcsf,
+            outputCatalog=outputCatalog,
+            starCatalog=starCatalog,
+            modelParams=modelParams,
+        )
+
+    def _prep_sky(self, inputVisitSummaries):
+        """Cluster the input visits into disjoint groups that will define
+        separate fields in the astrometric fit, and, for each group, get the
+        convex hull around all of its component visits.
+
+        The groups are created such that each visit overlaps with at least one
+        other visit in the same group by the `visitOverlap` amount, which is
+        calculated as a fraction of the field-of-view radius, and no visits
+        from separate groups overlap by more than this amount.
+
+        Paramaters
+        ----------
+        inputVisitSummaries : `list` [`lsst.afw.table.ExposureCatalog`]
+            List of catalogs with per-detector summary information.
+
+        Returns
+        -------
+        fields : `wcsfit.Fields`
+            Object with field information.
+        fieldRegions : `dict` [`int`, `lsst.sphgeom.ConvexPolygon`]
+            Dictionary of regions encompassing each group of input visits,
+            keyed by an arbitrary index.
+        """
+        allDetectorCorners = []
+        mjds = []
+        radecs = []
+        radii = []
+        for visSum in inputVisitSummaries:
+            detectorCorners = [
+                lsst.geom.SpherePoint(ra, dec, lsst.geom.degrees).getVector()
+                for (ra, dec) in zip(visSum["raCorners"].ravel(), visSum["decCorners"].ravel())
+                if (np.isfinite(ra) and (np.isfinite(dec)))
+            ]
+            allDetectorCorners.append(detectorCorners)
+
+            # Get center and approximate radius of field of view
+            boundingCircle = lsst.sphgeom.ConvexPolygon.convexHull(detectorCorners).getBoundingCircle()
+            center = lsst.geom.SpherePoint(boundingCircle.getCenter())
+            ra = center.getRa().asDegrees()
+            dec = center.getDec().asDegrees()
+            radecs.append([ra, dec])
+            radius = boundingCircle.getOpeningAngle()
+            radii.append(radius)
+
+            obsDate = visSum[0].getVisitInfo().getDate()
+            obsMJD = obsDate.get(obsDate.MJD)
+            mjds.append(obsMJD)
+
+        # Find groups of visits where any one of the visits overlaps another by
+        # a given fraction of the field-of-view radius.
+        distance = self.config.visitOverlap * np.median(radii)
+        clustering = AgglomerativeClustering(
+            distance_threshold=distance.asDegrees(), n_clusters=None, linkage="single"
+        )
+        clusters = clustering.fit(np.array(radecs))
+
+        medianMJD = np.median(mjds)
+        medianEpoch = astropy.time.Time(medianMJD, format="mjd").decimalyear
+
+        fieldNames = []
+        fieldRAs = []
+        fieldDecs = []
+        epochs = []
+        fieldRegions = {}
+
+        for i in range(clusters.n_clusters_):
+            fieldInd = clusters.labels_ == i
+            # Concatenate the lists of all detector corners that are in this
+            # field
+            fieldDetectors = sum([allDetectorCorners[f] for f, fInd in enumerate(fieldInd) if fInd], [])
+            hull = lsst.sphgeom.ConvexPolygon.convexHull(fieldDetectors)
+            center = lsst.geom.SpherePoint(hull.getCentroid())
+            ra = center.getRa().asDegrees()
+            dec = center.getDec().asDegrees()
+
+            fieldRegions[i] = hull
+            fieldNames.append(str(i))
+            fieldRAs.append(ra)
+            fieldDecs.append(dec)
+            # Use the same median epoch for all fields so that the final object
+            # positions are calculated for the same epoch.
+            epochs.append(medianEpoch)
+
+        fields = wcsfit.Fields(fieldNames, fieldRAs, fieldDecs, epochs)
+
+        return fields, fieldRegions
+
+    def _associate_from_isolated_sources(
+        self, isolatedStarSourceRefs, isolatedStarCatalogRefs, extensionInfo, refObjects
+    ):
+        """Match the input catalog of isolated stars with the reference catalog
+        and transform the combined isolated star sources and reference source
+        into the format needed for gbdes.
+
+        Parameters
+        ----------
+        isolatedStarSourceRefs : `list` [`DeferredDatasetHandle`]
+            List of handles pointing to isolated star sources.
+        isolatedStarCatalogRefs: `list` [`DeferredDatasetHandle`]
+            List of handles pointing to isolated star catalogs.
+        extensionInfo : `lsst.pipe.base.Struct`
+            Struct containing properties for each extension (visit/detector).
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
+        refObjects : `dict`
+            Dictionary of dictionaries containing the position and error
+            information of reference objects.
+
+        Returns
+        -------
+        associations : `lsst.pipe.base.Struct`
+            Struct containing the associations of sources with objects.
+        sourceDict : `dict` [`int`, [`int`, [`str`, `list` [`float`]]]]
+            Dictionary containing the source centroids for each visit.
+        """
+        sequences = []
+        extensions = []
+        object_indices = []
+
+        sourceColumns = ["x", "y", "xErr", "yErr", "ixx", "ixy", "iyy", "obj_index", "visit", "detector"]
+        catalogColumns = ["ra", "dec"]
+
+        sourceDict = dict([(visit, {}) for visit in np.unique(extensionInfo.visit)])
+        for visit, detector in zip(extensionInfo.visit, extensionInfo.detector):
+            sourceDict[visit][detector] = {"x": [], "y": [], "xCov": [], "yCov": [], "xyCov": []}
+
+        for isolatedStarCatalogRef, isolatedStarSourceRef in zip(
+            isolatedStarCatalogRefs, isolatedStarSourceRefs
+        ):
+            isolatedStarCatalog = isolatedStarCatalogRef.get(parameters={"columns": catalogColumns})
+            isolatedStarSources = isolatedStarSourceRef.get(parameters={"columns": sourceColumns})
+            if len(isolatedStarCatalog) == 0:
+                # This is expected when only one visit overlaps with a given
+                # tract, meaning that no sources can be associated.
+                self.log.debug(
+                    "Skipping tract %d, which has no associated isolated stars",
+                    isolatedStarCatalogRef.dataId["tract"],
+                )
+                continue
+
+            # Match the reference stars to the existing isolated stars, then
+            # insert the reference stars into the isolated star sources.
+            allVisits = np.copy(isolatedStarSources["visit"])
+            allDetectors = np.copy(isolatedStarSources["detector"])
+            allObjectIndices = np.copy(isolatedStarSources["obj_index"])
+            issIndices = np.copy(isolatedStarSources.index)
+            for f, regionRefObjects in refObjects.items():
+                # Use the same matching technique that is done in
+                # isolatedStarAssociation and fgcmBuildFromIsolatedStars.
+                with Matcher(
+                    isolatedStarCatalog["ra"].to_numpy(), isolatedStarCatalog["dec"].to_numpy()
+                ) as matcher:
+                    idx, i1, i2, d = matcher.query_radius(
+                        np.array(regionRefObjects["ra"]),
+                        np.array(regionRefObjects["dec"]),
+                        self.config.matchRadius / 3600.0,
+                        return_indices=True,
+                    )
+
+                refSort = np.searchsorted(isolatedStarSources["obj_index"], i1)
+                refDetector = np.ones(len(i1)) * -1
+                # The "visit" for the reference catalogs is the field times -1.
+                refVisit = np.ones(len(i1)) * f * -1
+
+                allVisits = np.insert(allVisits, refSort, refVisit)
+                allDetectors = np.insert(allDetectors, refSort, refDetector)
+                allObjectIndices = np.insert(allObjectIndices, refSort, i1)
+                issIndices = np.insert(issIndices, refSort, i2)
+
+            # Loop through the associated sources to convert them to the gbdes
+            # format, which requires the extension index, the source's index in
+            # the input table, and a sequence number corresponding to the
+            # object with which it is associated.
+            sequence = 0
+            obj_index = allObjectIndices[0]
+            for visit, detector, row, obj_ind in zip(allVisits, allDetectors, issIndices, allObjectIndices):
+                extensionIndex = np.flatnonzero(
+                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                )
+                if len(extensionIndex) == 0:
+                    # This happens for runs where you are not using all the
+                    # visits overlapping a given tract that were included in
+                    # the isolated star association task."
+                    continue
+                else:
+                    extensionIndex = extensionIndex[0]
+
+                extensions.append(extensionIndex)
+                if visit <= 0:
+                    object_indices.append(row)
+                else:
+                    object_indices.append(len(sourceDict[visit][detector]["x"]))
+                    source = isolatedStarSources.loc[row]
+                    sourceDict[visit][detector]["x"].append(source["x"])
+                    sourceDict[visit][detector]["y"].append(source["y"])
+                    xCov = source["xErr"] ** 2
+                    yCov = source["yErr"] ** 2
+                    xyCov = source["ixy"] * (xCov + yCov) / (source["ixx"] + source["iyy"])
+                    # TODO: add correct xyErr if DM-7101 is ever done.
+                    sourceDict[visit][detector]["xCov"].append(xCov)
+                    sourceDict[visit][detector]["yCov"].append(yCov)
+                    sourceDict[visit][detector]["xyCov"].append(xyCov)
+                if obj_ind != obj_index:
+                    sequence = 0
+                    sequences.append(sequence)
+                    obj_index = obj_ind
+                    sequence += 1
+                else:
+                    sequences.append(sequence)
+                    sequence += 1
+
+        associations = pipeBase.Struct(extn=extensions, obj=object_indices, sequence=sequences)
+        return associations, sourceDict
+
+    def _add_objects(self, wcsf, sourceDict, extensionInfo):
+        """Add science sources to the wcsfit.WCSFit object.
+
+        Parameters
+        ----------
+        wcsf : `wcsfit.WCSFit`
+            WCS-fitting object.
+        sourceDict : `dict`
+            Dictionary containing the source centroids for each visit.
+        extensionInfo : `lsst.pipe.base.Struct`
+            Struct containing properties for each extension (visit/detector).
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
+        """
+        for visit, visitSources in sourceDict.items():
+            # Visit numbers equal or below zero connote the reference catalog.
+            if visit <= 0:
+                # This "visit" number corresponds to a reference catalog.
+                continue
+
+            for detector, sourceCat in visitSources.items():
+                extensionIndex = np.flatnonzero(
+                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                )[0]
+
+                d = {
+                    "x": np.array(sourceCat["x"]),
+                    "y": np.array(sourceCat["y"]),
+                    "xCov": np.array(sourceCat["xCov"]),
+                    "yCov": np.array(sourceCat["yCov"]),
+                    "xyCov": np.array(sourceCat["xyCov"]),
+                }
+                wcsf.setObjects(extensionIndex, d, "x", "y", ["xCov", "yCov", "xyCov"])
