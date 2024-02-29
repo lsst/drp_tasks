@@ -390,7 +390,7 @@ class GbdesAstrometricFitConfig(
         # Use only stars because aperture fluxes of galaxies are biased and
         # depend on seeing.
         self.sourceSelector["science"].doUnresolved = True
-        self.sourceSelector["science"].unresolved.name = "extendedness"
+        self.sourceSelector["science"].unresolved.name = "sizeExtendedness"
 
         # Use only isolated sources.
         self.sourceSelector["science"].doIsolated = True
