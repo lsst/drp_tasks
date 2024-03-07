@@ -87,8 +87,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Task to interpolate (and extrapolate) over pixels with NO_DATA mask on cell coadds",
     )
     do_scale_zero_point = Field[bool](
-        doc="Scale warps to a common zero point? "
-            "This is not needed they have absolute flux calibration.",
+        doc="Scale warps to a common zero point? This is not needed they have absolute flux calibration.",
         default=False,
     )
     scale_zero_point = ConfigurableField(
