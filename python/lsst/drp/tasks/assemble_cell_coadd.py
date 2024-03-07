@@ -86,6 +86,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         target=InterpImageTask,
         doc="Task to interpolate (and extrapolate) over pixels with NO_DATA mask on cell coadds",
     )
+    do_scale_zero_point = Field[bool](
+        doc="Scale warps to a common zero point? This is not needed if they have absolute flux calibration.",
+        default=False,
+    )
     scale_zero_point = ConfigurableField(
         target=ScaleZeroPointTask,
         doc="Task to scale warps to a common zero point",
@@ -296,7 +300,8 @@ class AssembleCellCoaddTask(PipelineTask):
             # Each Warp that goes into a coadd will typically have an
             # independent photometric zero-point. Therefore, we must scale each
             # Warp to set it to a common photometric zeropoint.
-            self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
+            if self.config.do_scale_zero_point:
+                self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
 
             # Coadd the warp onto the cells it completely overlaps.
             edge = afwImage.Mask.getPlaneBitMask("EDGE")
