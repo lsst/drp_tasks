@@ -335,6 +335,17 @@ class AssembleCellCoaddTask(PipelineTask):
 
         cells: list[SingleCellCoadd] = []
         for cellInfo in skyInfo.patchInfo:
+            coadd_inputs = coadd_inputs_gc[cellInfo.index]
+
+            if len(coadd_inputs.ccds) == 0:
+                self.log.info("Skipping cell %s because it has no input warps", cellInfo.index)
+                continue
+
+            # Finalize the PSF on the cell coadds.
+            coadd_inputs.ccds.sort()
+            coadd_inputs.visits.sort()
+            cell_coadd_psf = CoaddPsf(coadd_inputs.ccds, skyInfo.wcs, self.config.coadd_psf.makeControl())
+
             stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
             stacker.fill_stacked_masked_image(cell_masked_image)
@@ -346,12 +357,6 @@ class AssembleCellCoaddTask(PipelineTask):
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
                     varArray[:] = np.where(varArray > 0, varArray, np.inf)
-
-            # Finalize the PSF on the cell coadds.
-            coadd_inputs = coadd_inputs_gc[cellInfo.index]
-            coadd_inputs.ccds.sort()
-            coadd_inputs.visits.sort()
-            cell_coadd_psf = CoaddPsf(coadd_inputs.ccds, skyInfo.wcs, self.config.coadd_psf.makeControl())
 
             image_planes = OwnedImagePlanes.from_masked_image(cell_masked_image)
             identifiers = CellIdentifiers(
