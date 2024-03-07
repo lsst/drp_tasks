@@ -162,8 +162,10 @@ class AssembleCellCoaddTask(PipelineTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.makeSubtask("input_recorder")
-        self.makeSubtask("interpolate_coadd")
-        self.makeSubtask("scale_zero_point")
+        if self.config.do_interpolate_coadd:
+            self.makeSubtask("interpolate_coadd")
+        if self.config.do_scale_zero_point:
+            self.makeSubtask("scale_zero_point")
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # Docstring inherited.
