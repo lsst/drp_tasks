@@ -35,6 +35,7 @@ from lsst.cell_coadds import (
     CommonComponents,
     GridContainer,
     MultipleCellCoadd,
+    ObservationIdentifiers,
     OwnedImagePlanes,
     PatchIdentifiers,
     SingleCellCoadd,
@@ -285,6 +286,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         gc = self._construct_grid_container(skyInfo, statsCtrl)
         coadd_inputs_gc = GridContainer(gc.shape)
+        observation_identifiers_gc = GridContainer(gc.shape)
         for cellInfo in skyInfo.patchInfo:
             coadd_inputs = self.input_recorder.makeCoaddInputs()
             # Reserve the absolute maximum of how many ccds, visits
@@ -292,6 +294,8 @@ class AssembleCellCoaddTask(PipelineTask):
             coadd_inputs.ccds.reserve(len(inputWarps))
             coadd_inputs.visits.reserve(len(inputWarps))
             coadd_inputs_gc[cellInfo.index] = coadd_inputs
+            # Make a list to hold the observation identifiers for each cell.
+            observation_identifiers_gc[cellInfo.index] = []
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
 
@@ -330,6 +334,12 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 coadd_inputs = coadd_inputs_gc[cellInfo.index]
                 self.input_recorder.addVisitToCoadd(coadd_inputs, warp[bbox], weight)
+                assert len(coadd_inputs.ccds) == 1, "More than one CCD from a warp found within a cell."
+                observation_identifier = ObservationIdentifiers.from_data_id(
+                    warpRef.dataId,
+                    detector=coadd_inputs.ccds[0]["ccd"],
+                )
+                observation_identifiers_gc[cellInfo.index].append(observation_identifier)
 
             del warp
 
@@ -371,7 +381,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 outer=image_planes,
                 psf=cell_coadd_psf.computeKernelImage(cell_coadd_psf.getAveragePosition()),
                 inner_bbox=cellInfo.inner_bbox,
-                inputs=None,  # TODO
+                inputs=frozenset(observation_identifiers_gc[cellInfo.index]),
                 common=self.common,
                 identifiers=identifiers,
             )
