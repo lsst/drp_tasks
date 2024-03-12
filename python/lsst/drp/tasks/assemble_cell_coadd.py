@@ -35,6 +35,7 @@ from lsst.cell_coadds import (
     CommonComponents,
     GridContainer,
     MultipleCellCoadd,
+    ObservationIdentifiers,
     OwnedImagePlanes,
     PatchIdentifiers,
     SingleCellCoadd,
@@ -285,6 +286,16 @@ class AssembleCellCoaddTask(PipelineTask):
 
         gc = self._construct_grid_container(skyInfo, statsCtrl)
         coadd_inputs_gc = GridContainer(gc.shape)
+
+        # Make a container to hold the cell centers in sky coordinates now,
+        # so we don't have to recompute them for each warp
+        # (they share a common WCS). These are needed to find the various
+        # warp + detector combinations that contributed to each cell, and later
+        # get the corresponding PSFs as well.
+        cell_centers_sky = GridContainer(gc.shape)
+        # Make a container to hold the observation identifiers for each cell.
+        observation_identifiers_gc = GridContainer(gc.shape)
+        # Populate them.
         for cellInfo in skyInfo.patchInfo:
             coadd_inputs = self.input_recorder.makeCoaddInputs()
             # Reserve the absolute maximum of how many ccds, visits
@@ -292,9 +303,12 @@ class AssembleCellCoaddTask(PipelineTask):
             coadd_inputs.ccds.reserve(len(inputWarps))
             coadd_inputs.visits.reserve(len(inputWarps))
             coadd_inputs_gc[cellInfo.index] = coadd_inputs
+            # Make a list to hold the observation identifiers for each cell.
+            observation_identifiers_gc[cellInfo.index] = []
+            cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
+
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-
         for warpRef in inputWarps:
             warp = warpRef.get()
 
@@ -330,6 +344,25 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 coadd_inputs = coadd_inputs_gc[cellInfo.index]
                 self.input_recorder.addVisitToCoadd(coadd_inputs, warp[bbox], weight)
+                if True:
+                    ccd_table = (
+                        warp.getInfo()
+                        .getCoaddInputs()
+                        .ccds.subsetContaining(cell_centers_sky[cellInfo.index])
+                    )
+                    assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
+                    assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
+                    ccd_row = ccd_table[0]
+                else:
+                    for ccd_row in warp.getInfo().getCoaddInputs().ccds:
+                        if ccd_row.contains(cell_centers_sky[cellInfo.index]):
+                            break
+
+                observation_identifier = ObservationIdentifiers.from_data_id(
+                    warpRef.dataId,
+                    backup_detector=ccd_row["ccd"],
+                )
+                observation_identifiers_gc[cellInfo.index].append(observation_identifier)
 
             del warp
 
@@ -366,7 +399,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 outer=image_planes,
                 psf=cell_coadd_psf.computeKernelImage(cell_coadd_psf.getAveragePosition()),
                 inner_bbox=cellInfo.inner_bbox,
-                inputs=None,  # TODO
+                inputs=frozenset(observation_identifiers_gc[cellInfo.index]),
                 common=self.common,
                 identifiers=identifiers,
             )
