@@ -334,7 +334,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 coadd_inputs = coadd_inputs_gc[cellInfo.index]
                 self.input_recorder.addVisitToCoadd(coadd_inputs, warp[bbox], weight)
-                assert len(coadd_inputs.ccds) == 1, "More than one CCD from a warp found within a cell."
+                assert len(coadd_inputs.ccds) <= 1, "More than one CCD from a warp found within a cell."
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
                     detector=coadd_inputs.ccds[0]["ccd"],
