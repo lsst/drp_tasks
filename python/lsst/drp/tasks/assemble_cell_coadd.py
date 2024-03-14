@@ -285,20 +285,21 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl = self._construct_stats_control()
 
         gc = self._construct_grid_container(skyInfo, statsCtrl)
-        coadd_inputs_gc = GridContainer(gc.shape)
+        # An ExposureCatalog to hold the records for CoaddPsf
+        coadd_inputs = self.input_recorder.makeCoaddInputs()
+
+        # Make a container to hold the observation identifiers for each cell.
         observation_identifiers_gc = GridContainer(gc.shape)
+        # Make a container to hold the cell centers in sky coordinates now,
+        # so we don't have to recompute them for each warp (they share a common WCS).
+        cell_centers_sky = GridContainer(gc.shape)
+        # Populate them.
         for cellInfo in skyInfo.patchInfo:
-            coadd_inputs = self.input_recorder.makeCoaddInputs()
-            # Reserve the absolute maximum of how many ccds, visits
-            # we could potentially have.
-            coadd_inputs.ccds.reserve(len(inputWarps))
-            coadd_inputs.visits.reserve(len(inputWarps))
-            coadd_inputs_gc[cellInfo.index] = coadd_inputs
-            # Make a list to hold the observation identifiers for each cell.
             observation_identifiers_gc[cellInfo.index] = []
+            cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
+
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-
         for warpRef in inputWarps:
             warp = warpRef.get()
 
@@ -332,12 +333,21 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 stacker.add_masked_image(mi, weight=weight)
 
-                coadd_inputs = coadd_inputs_gc[cellInfo.index]
-                self.input_recorder.addVisitToCoadd(coadd_inputs, warp[bbox], weight)
-                assert len(coadd_inputs.ccds) <= 1, "More than one CCD from a warp found within a cell."
+                # coadd_inputs will have the record of all ccds, even outside
+                # of the current cell's bounding box.
+                self.input_recorder.addVisitToCoadd(coadd_inputs, warp, weight)
+                if False:
+                    #ccd_table = warp.getInfo().getCoaddInputs().ccds.subsetContaining(warp.wcs.pixelToSky(bbox.getCenter()))
+                    ccd_table = warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
+                    assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
+                    assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
+                for ccd_row in warp.getInfo().getCoaddInputs().ccds:
+                    if ccd_row.contains(cell_centers_sky[cellInfo.index]):
+                        break
+
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
-                    detector=coadd_inputs.ccds[0]["ccd"],
+                    detector=ccd_row["ccd"],
                 )
                 observation_identifiers_gc[cellInfo.index].append(observation_identifier)
 
@@ -345,16 +355,19 @@ class AssembleCellCoaddTask(PipelineTask):
 
         cells: list[SingleCellCoadd] = []
         for cellInfo in skyInfo.patchInfo:
-            coadd_inputs = coadd_inputs_gc[cellInfo.index]
-
-            if len(coadd_inputs.ccds) == 0:
-                self.log.info("Skipping cell %s because it has no input warps", cellInfo.index)
+            ccd_table = coadd_inputs.ccds.subsetContaining(cell_centers_sky[cellInfo.index])
+            if len(ccd_table) == 0:
+                self.log.debug("Skipping cell %s because it has no input warps", cellInfo.index)
                 continue
 
             # Finalize the PSF on the cell coadds.
-            coadd_inputs.ccds.sort()
+            ccd_table.sort()
             coadd_inputs.visits.sort()
-            cell_coadd_psf = CoaddPsf(coadd_inputs.ccds, skyInfo.wcs, self.config.coadd_psf.makeControl())
+            cell_coadd_psf = CoaddPsf(
+                ccd_table,
+                skyInfo.wcs,
+                self.config.coadd_psf.makeControl(),
+            )
 
             stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
