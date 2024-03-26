@@ -336,14 +336,15 @@ class AssembleCellCoaddTask(PipelineTask):
                 # coadd_inputs will have the record of all ccds, even outside
                 # of the current cell's bounding box.
                 self.input_recorder.addVisitToCoadd(coadd_inputs, warp, weight)
-                if False:
-                    #ccd_table = warp.getInfo().getCoaddInputs().ccds.subsetContaining(warp.wcs.pixelToSky(bbox.getCenter()))
+                if True:
                     ccd_table = warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
                     assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
                     assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
-                for ccd_row in warp.getInfo().getCoaddInputs().ccds:
-                    if ccd_row.contains(cell_centers_sky[cellInfo.index]):
-                        break
+                    ccd_row = ccd_table[0]
+                else:
+                    for ccd_row in warp.getInfo().getCoaddInputs().ccds:
+                        if ccd_row.contains(cell_centers_sky[cellInfo.index]):
+                            break
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
