@@ -381,7 +381,7 @@ class AssembleCellCoaddTask(PipelineTask):
         )
 
 
-class ConvertMulipleCellCoaddToExposureConnections(
+class ConvertMultipleCellCoaddToExposureConnections(
     PipelineTaskConnections,
     dimensions=("tract", "patch", "band", "skymap"),
     defaultTemplates={"inputCoaddName": "deep", "inputCoaddSuffix": "Cell"},
@@ -402,13 +402,11 @@ class ConvertMulipleCellCoaddToExposureConnections(
 
 
 class ConvertMultipleCellCoaddToExposureConfig(
-    PipelineTaskConfig, pipelineConnections=ConvertMulipleCellCoaddToExposureConnections
+    PipelineTaskConfig, pipelineConnections=ConvertMultipleCellCoaddToExposureConnections
 ):
     """A trivial PipelineTaskConfig class for
     ConvertMultipleCellCoaddToExposureTask.
     """
-
-    pass
 
 
 class ConvertMultipleCellCoaddToExposureTask(PipelineTask):
