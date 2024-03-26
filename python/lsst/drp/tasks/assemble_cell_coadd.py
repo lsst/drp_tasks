@@ -287,11 +287,12 @@ class AssembleCellCoaddTask(PipelineTask):
         # An ExposureCatalog to hold the records for CoaddPsf
         coadd_inputs = self.input_recorder.makeCoaddInputs()
 
-        # Make a container to hold the cell centers in sky coordinates now,
-        # so we don't have to recompute them for each warp
+        # Make a container to hold the cell centers in sky coordinates.
+        # We need them to query the ExposureCatalog to find out the overlapping
+        # warp + detector combination.
+        # Precompute them now so we don't have to recompute them for each warp
         # (they share a common WCS).
         cell_centers_sky = GridContainer(gc.shape)
-        # Populate them.
         for cellInfo in skyInfo.patchInfo:
             cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
 
