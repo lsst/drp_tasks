@@ -369,7 +369,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
             singleCellCoadd = SingleCellCoadd(
                 outer=image_planes,
-                psf=cell_coadd_psf.computeKernelImage(cell_coadd_psf.getAveragePosition()),
+                psf=cell_coadd_psf.computeKernelImage(cellInfo.inner_bbox.getCenter()),
                 inner_bbox=cellInfo.inner_bbox,
                 inputs=None,  # TODO
                 common=self.common,
