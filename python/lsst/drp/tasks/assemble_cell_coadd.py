@@ -461,11 +461,6 @@ class ConvertMultipleCellCoaddToExposureTask(PipelineTask):
     ConfigClass = ConvertMultipleCellCoaddToExposureConfig
     _DefaultName = "convertMultipleCellCoaddToExposure"
 
-    def runQuantum(self, butlerQC, inputRefs, outputRefs):
-        inputData = butlerQC.get(inputRefs)
-        returnStruct = self.run(**inputData)
-        butlerQC.put(returnStruct, outputRefs)
-
     def run(self, cellCoaddExposure):
         return Struct(
             stitchedCoaddExposure=cellCoaddExposure.stitch().asExposure(),
