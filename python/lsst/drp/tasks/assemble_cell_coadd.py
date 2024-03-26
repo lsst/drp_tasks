@@ -402,13 +402,11 @@ class ConvertMulipleCellCoaddToExposureConnections(
 
 
 class ConvertMultipleCellCoaddToExposureConfig(
-    PipelineTaskConfig, pipelineConnections=ConvertMulipleCellCoaddToExposureConnections
+    PipelineTaskConfig, pipelineConnections=ConvertMultipleCellCoaddToExposureConnections
 ):
     """A trivial PipelineTaskConfig class for
     ConvertMultipleCellCoaddToExposureTask.
     """
-
-    pass
 
 
 class ConvertMultipleCellCoaddToExposureTask(PipelineTask):
