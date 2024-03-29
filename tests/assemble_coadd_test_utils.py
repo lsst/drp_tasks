@@ -35,6 +35,7 @@ from astropy import units as u
 from astropy.coordinates import Angle, EarthLocation, SkyCoord
 from astropy.time import Time
 from lsst.afw.cameraGeom.testUtils import DetectorWrapper
+from lsst.cell_coadds.test_utils import generate_data_id
 from lsst.geom import arcseconds, degrees
 from lsst.meas.algorithms.testUtils import plantSources
 from lsst.obs.base import MakeRawVisitInfoViaObsInfo
@@ -454,9 +455,11 @@ class MockCoaddTestData:
                 exposure,
                 storageClass="ExposureF",
                 copy=True,
-                tract=tract,
-                patch=patch,
-                visit=expId,
+                dataId=generate_data_id(
+                    tract=tract,
+                    patch=patch,
+                    visit_id=expId,
+                ),
             )
             dataRefList.append(dataRef)
         return dataRefList
