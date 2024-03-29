@@ -413,7 +413,7 @@ class MockCoaddTestData:
         return exposure, matchedExposure
 
     @staticmethod
-    def makeDataRefList(exposures, matchedExposures, warpType, tract=0, patch=42, coaddName="deep"):
+    def makeDataRefList(exposures, matchedExposures, warpType, tract=0, patch=42):
         """Make data references from the simulated exposures that can be
         retrieved using the Gen 3 Butler API.
 
@@ -425,8 +425,6 @@ class MockCoaddTestData:
             Unique identifier for a tract of a skyMap.
         patch : `int`, optional
             Unique identifier for a subdivision of a tract.
-        coaddName : `str`, optional
-            The type of coadd being produced. Typically 'deep'.
 
         Returns
         -------
@@ -453,7 +451,6 @@ class MockCoaddTestData:
                 tract=tract,
                 patch=patch,
                 visit=expId,
-                coaddName=coaddName,
             )
             dataRefList.append(dataRef)
         return dataRefList
