@@ -419,6 +419,12 @@ class MockCoaddTestData:
 
         Parameters
         ----------
+        exposures : `Mapping` [`Any`, `~lsst.afw.image.ExposureF`]
+            A mapping of exposure IDs to ExposureF objects that correspond to
+            directWarp datasets.
+        matchedExposures : `Mapping` [`Any`, `~lsst.afw.image.ExposureF`]
+            A mapping of exposure IDs to ExposureF objects that correspond to
+            psfMatchedWarp datasets.
         warpType : `str`
             Either 'direct' or 'psfMatched'.
         tract : `int`, optional
@@ -428,7 +434,7 @@ class MockCoaddTestData:
 
         Returns
         -------
-        dataRefList : `list` of `~lsst.pipe.base.InMemoryDatasetHandle`
+        dataRefList : `list` [`~lsst.pipe.base.InMemoryDatasetHandle`]
             The data references.
 
         Raises
