@@ -368,6 +368,10 @@ class AssembleCellCoaddTask(PipelineTask):
 
         cells: list[SingleCellCoadd] = []
         for cellInfo in skyInfo.patchInfo:
+            if len(observation_identifiers_gc[cellInfo.index]) == 0:
+                self.log.debug("Skipping cell %s because it has no input warps", cellInfo.index)
+                continue
+
             stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
             stacker.fill_stacked_masked_image(cell_masked_image)
