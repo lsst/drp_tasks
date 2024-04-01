@@ -244,15 +244,13 @@ class AssembleCellCoaddTask(PipelineTask):
         grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
         return grid
 
-    def _construct_grid_container(self, skyInfo, statsCtrl):
+    def _construct_grid_container(self, skyInfo):
         """Construct a grid of AccumulatorMeanStack instances.
 
         Parameters
         ----------
         skyInfo : `~lsst.pipe.base.Struct`
             A Struct object
-        statsCtrl : `~lsst.afw.math.StatisticsControl`
-            A control (config-like) object for StatisticsStack.
 
         Returns
         -------
@@ -284,7 +282,7 @@ class AssembleCellCoaddTask(PipelineTask):
     def run(self, inputWarps, skyInfo, **kwargs):
         statsCtrl = self._construct_stats_control()
 
-        gc = self._construct_grid_container(skyInfo, statsCtrl)
+        gc = self._construct_grid_container(skyInfo)
         coadd_inputs_gc = GridContainer(gc.shape)
 
         # Make a container to hold the cell centers in sky coordinates now,
