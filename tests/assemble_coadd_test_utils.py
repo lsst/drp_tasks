@@ -35,6 +35,7 @@ from astropy import units as u
 from astropy.coordinates import Angle, EarthLocation, SkyCoord
 from astropy.time import Time
 from lsst.afw.cameraGeom.testUtils import DetectorWrapper
+from lsst.cell_coadds.test_utils import generate_data_id
 from lsst.geom import arcseconds, degrees
 from lsst.meas.algorithms.testUtils import plantSources
 from lsst.obs.base import MakeRawVisitInfoViaObsInfo
@@ -413,24 +414,28 @@ class MockCoaddTestData:
         return exposure, matchedExposure
 
     @staticmethod
-    def makeDataRefList(exposures, matchedExposures, warpType, tract=0, patch=42, coaddName="deep"):
+    def makeDataRefList(exposures, matchedExposures, warpType, tract=0, patch=42):
         """Make data references from the simulated exposures that can be
         retrieved using the Gen 3 Butler API.
 
         Parameters
         ----------
+        exposures : `Mapping` [`Any`, `~lsst.afw.image.ExposureF`]
+            A mapping of exposure IDs to ExposureF objects that correspond to
+            directWarp datasets.
+        matchedExposures : `Mapping` [`Any`, `~lsst.afw.image.ExposureF`]
+            A mapping of exposure IDs to ExposureF objects that correspond to
+            psfMatchedWarp datasets.
         warpType : `str`
             Either 'direct' or 'psfMatched'.
         tract : `int`, optional
             Unique identifier for a tract of a skyMap.
         patch : `int`, optional
             Unique identifier for a subdivision of a tract.
-        coaddName : `str`, optional
-            The type of coadd being produced. Typically 'deep'.
 
         Returns
         -------
-        dataRefList : `list` of `~lsst.pipe.base.InMemoryDatasetHandle`
+        dataRefList : `list` [`~lsst.pipe.base.InMemoryDatasetHandle`]
             The data references.
 
         Raises
@@ -450,10 +455,11 @@ class MockCoaddTestData:
                 exposure,
                 storageClass="ExposureF",
                 copy=True,
-                tract=tract,
-                patch=patch,
-                visit=expId,
-                coaddName=coaddName,
+                dataId=generate_data_id(
+                    tract=tract,
+                    patch=patch,
+                    visit_id=expId,
+                ),
             )
             dataRefList.append(dataRef)
         return dataRefList

@@ -35,6 +35,7 @@ from lsst.cell_coadds import (
     CommonComponents,
     GridContainer,
     MultipleCellCoadd,
+    ObservationIdentifiers,
     OwnedImagePlanes,
     PatchIdentifiers,
     SingleCellCoadd,
@@ -85,6 +86,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     interpolate_coadd = ConfigurableField(
         target=InterpImageTask,
         doc="Task to interpolate (and extrapolate) over pixels with NO_DATA mask on cell coadds",
+    )
+    do_scale_zero_point = Field[bool](
+        doc="Scale warps to a common zero point? This is not needed if they have absolute flux calibration.",
+        default=False,
     )
     scale_zero_point = ConfigurableField(
         target=ScaleZeroPointTask,
@@ -158,8 +163,10 @@ class AssembleCellCoaddTask(PipelineTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.makeSubtask("input_recorder")
-        self.makeSubtask("interpolate_coadd")
-        self.makeSubtask("scale_zero_point")
+        if self.config.do_interpolate_coadd:
+            self.makeSubtask("interpolate_coadd")
+        if self.config.do_scale_zero_point:
+            self.makeSubtask("scale_zero_point")
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # Docstring inherited.
@@ -279,6 +286,16 @@ class AssembleCellCoaddTask(PipelineTask):
 
         gc = self._construct_grid_container(skyInfo, statsCtrl)
         coadd_inputs_gc = GridContainer(gc.shape)
+
+        # Make a container to hold the cell centers in sky coordinates now,
+        # so we don't have to recompute them for each warp
+        # (they share a common WCS). These are needed to find the various
+        # warp + detector combinations that contributed to each cell, and later
+        # get the corresponding PSFs as well.
+        cell_centers_sky = GridContainer(gc.shape)
+        # Make a container to hold the observation identifiers for each cell.
+        observation_identifiers_gc = GridContainer(gc.shape)
+        # Populate them.
         for cellInfo in skyInfo.patchInfo:
             coadd_inputs = self.input_recorder.makeCoaddInputs()
             # Reserve the absolute maximum of how many ccds, visits
@@ -286,9 +303,12 @@ class AssembleCellCoaddTask(PipelineTask):
             coadd_inputs.ccds.reserve(len(inputWarps))
             coadd_inputs.visits.reserve(len(inputWarps))
             coadd_inputs_gc[cellInfo.index] = coadd_inputs
+            # Make a list to hold the observation identifiers for each cell.
+            observation_identifiers_gc[cellInfo.index] = []
+            cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
+
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-
         for warpRef in inputWarps:
             warp = warpRef.get()
 
@@ -296,7 +316,8 @@ class AssembleCellCoaddTask(PipelineTask):
             # Each Warp that goes into a coadd will typically have an
             # independent photometric zero-point. Therefore, we must scale each
             # Warp to set it to a common photometric zeropoint.
-            self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
+            if self.config.do_scale_zero_point:
+                self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
 
             # Coadd the warp onto the cells it completely overlaps.
             edge = afwImage.Mask.getPlaneBitMask("EDGE")
@@ -323,11 +344,34 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 coadd_inputs = coadd_inputs_gc[cellInfo.index]
                 self.input_recorder.addVisitToCoadd(coadd_inputs, warp[bbox], weight)
+                if True:
+                    ccd_table = (
+                        warp.getInfo()
+                        .getCoaddInputs()
+                        .ccds.subsetContaining(cell_centers_sky[cellInfo.index])
+                    )
+                    assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
+                    assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
+                    ccd_row = ccd_table[0]
+                else:
+                    for ccd_row in warp.getInfo().getCoaddInputs().ccds:
+                        if ccd_row.contains(cell_centers_sky[cellInfo.index]):
+                            break
+
+                observation_identifier = ObservationIdentifiers.from_data_id(
+                    warpRef.dataId,
+                    backup_detector=ccd_row["ccd"],
+                )
+                observation_identifiers_gc[cellInfo.index].append(observation_identifier)
 
             del warp
 
         cells: list[SingleCellCoadd] = []
         for cellInfo in skyInfo.patchInfo:
+            if len(observation_identifiers_gc[cellInfo.index]) == 0:
+                self.log.debug("Skipping cell %s because it has no input warps", cellInfo.index)
+                continue
+
             stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
             stacker.fill_stacked_masked_image(cell_masked_image)
@@ -359,7 +403,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 outer=image_planes,
                 psf=cell_coadd_psf.computeKernelImage(cell_coadd_psf.getAveragePosition()),
                 inner_bbox=cellInfo.inner_bbox,
-                inputs=None,  # TODO
+                inputs=frozenset(observation_identifiers_gc[cellInfo.index]),
                 common=self.common,
                 identifiers=identifiers,
             )
@@ -381,7 +425,7 @@ class AssembleCellCoaddTask(PipelineTask):
         )
 
 
-class ConvertMulipleCellCoaddToExposureConnections(
+class ConvertMultipleCellCoaddToExposureConnections(
     PipelineTaskConnections,
     dimensions=("tract", "patch", "band", "skymap"),
     defaultTemplates={"inputCoaddName": "deep", "inputCoaddSuffix": "Cell"},
@@ -402,13 +446,11 @@ class ConvertMulipleCellCoaddToExposureConnections(
 
 
 class ConvertMultipleCellCoaddToExposureConfig(
-    PipelineTaskConfig, pipelineConnections=ConvertMulipleCellCoaddToExposureConnections
+    PipelineTaskConfig, pipelineConnections=ConvertMultipleCellCoaddToExposureConnections
 ):
     """A trivial PipelineTaskConfig class for
     ConvertMultipleCellCoaddToExposureTask.
     """
-
-    pass
 
 
 class ConvertMultipleCellCoaddToExposureTask(PipelineTask):
@@ -427,11 +469,6 @@ class ConvertMultipleCellCoaddToExposureTask(PipelineTask):
 
     ConfigClass = ConvertMultipleCellCoaddToExposureConfig
     _DefaultName = "convertMultipleCellCoaddToExposure"
-
-    def runQuantum(self, butlerQC, inputRefs, outputRefs):
-        inputData = butlerQC.get(inputRefs)
-        returnStruct = self.run(**inputData)
-        butlerQC.put(returnStruct, outputRefs)
 
     def run(self, cellCoaddExposure):
         return Struct(

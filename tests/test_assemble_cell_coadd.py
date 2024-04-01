@@ -24,6 +24,7 @@ import unittest
 
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
+import numpy as np
 from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 from lsst.drp.tasks.assemble_cell_coadd import AssembleCellCoaddConfig, AssembleCellCoaddTask
 
@@ -108,6 +109,18 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
 
         # Check that we produced an exposure.
         self.assertTrue(result.multipleCellCoadd is not None)
+        # Check that the visit_count method returns a number less than or equal
+        # to the total number of input exposures available.
+        max_visit_count = len(self.dataRefList)
+        for cellId, singleCellCoadd in result.multipleCellCoadd.cells.items():
+            with self.subTest(x=cellId.x, y=cellId.y):
+                self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
+            # Check that the inputs are sorted.
+            packed = -np.inf
+            for idx, obsId in enumerate(singleCellCoadd.inputs):
+                with self.subTest(input_number=obsId):
+                    self.assertGreaterEqual(obsId.packed, packed)
+                    packed = obsId.packed
 
     def testAssembleBasic(self):
         """Test that AssembleCellCoaddTask runs successfully without errors.
