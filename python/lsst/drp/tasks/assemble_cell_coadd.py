@@ -398,7 +398,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 outer=image_planes,
                 psf=cell_coadd_psf.computeKernelImage(cell_coadd_psf.getAveragePosition()),
                 inner_bbox=cellInfo.inner_bbox,
-                inputs=frozenset(observation_identifiers_gc[cellInfo.index]),
+                inputs=observation_identifiers_gc[cellInfo.index],
                 common=self.common,
                 identifiers=identifiers,
             )
