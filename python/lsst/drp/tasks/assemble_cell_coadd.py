@@ -42,12 +42,11 @@ from lsst.cell_coadds import (
     SingleCellCoadd,
     UniformGrid,
 )
-from lsst.meas.algorithms import AccumulatorMeanStack, CoaddPsf, CoaddPsfConfig
+from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, Field, ListField, RangeField
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
-from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderTask
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
@@ -114,19 +113,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         inclusiveMin=True,
         inclusiveMax=False,
     )
-    # The following config options are specific to the CoaddPsf.
-    coadd_psf = ConfigField(
-        doc="Configuration for CoaddPsf",
-        dtype=CoaddPsfConfig,
-    )
     psf_warper = ConfigField(
         doc="Configuration for the warper that warps the PSFs. It must have the same configuration used to "
         "warp the images.",
         dtype=afwMath.Warper.ConfigClass,
-    )
-    input_recorder = ConfigurableField(
-        doc="Subtask that helps fill CoaddInputs catalogs added to the final Exposure",
-        target=CoaddInputRecorderTask,
     )
     psf_dimensions = Field[int](
         default=21,
@@ -173,7 +163,6 @@ class AssembleCellCoaddTask(PipelineTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.makeSubtask("input_recorder")
         if self.config.do_interpolate_coadd:
             self.makeSubtask("interpolate_coadd")
         if self.config.do_scale_zero_point:
@@ -296,7 +285,6 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl = self._construct_stats_control()
 
         gc = self._construct_grid_container(skyInfo)
-        coadd_inputs_gc = GridContainer(gc.shape)
         psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
         psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
 
@@ -310,12 +298,6 @@ class AssembleCellCoaddTask(PipelineTask):
         observation_identifiers_gc = GridContainer[list](gc.shape)
         # Populate them.
         for cellInfo in skyInfo.patchInfo:
-            coadd_inputs = self.input_recorder.makeCoaddInputs()
-            # Reserve the absolute maximum of how many ccds, visits
-            # we could potentially have.
-            coadd_inputs.ccds.reserve(len(inputWarps))
-            coadd_inputs.visits.reserve(len(inputWarps))
-            coadd_inputs_gc[cellInfo.index] = coadd_inputs
             # Make a list to hold the observation identifiers for each cell.
             observation_identifiers_gc[cellInfo.index] = []
             cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
@@ -363,8 +345,6 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                coadd_inputs = coadd_inputs_gc[cellInfo.index]
-                self.input_recorder.addVisitToCoadd(coadd_inputs, warp[bbox], weight)
                 ccd_table = (
                     warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
                 )
@@ -429,12 +409,6 @@ class AssembleCellCoaddTask(PipelineTask):
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
                     varArray[:] = np.where(varArray > 0, varArray, np.inf)
-
-            # Finalize the PSF on the cell coadds.
-            coadd_inputs = coadd_inputs_gc[cellInfo.index]
-            coadd_inputs.ccds.sort()
-            coadd_inputs.visits.sort()
-            cell_coadd_psf = CoaddPsf(coadd_inputs.ccds, skyInfo.wcs, self.config.coadd_psf.makeControl())
 
             image_planes = OwnedImagePlanes.from_masked_image(cell_masked_image)
             identifiers = CellIdentifiers(
