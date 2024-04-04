@@ -90,7 +90,8 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
     execution.
     """
 
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls) -> None:
         patch = 42
         tract = 0
         testData = MockCoaddTestData(fluxRange=1e4)
@@ -98,10 +99,14 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         matchedExposures = {}
         for expId in range(100, 110):
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId)
-        self.dataRefList = testData.makeDataRefList(
+        cls.dataRefList = testData.makeDataRefList(
             exposures, matchedExposures, "direct", patch=patch, tract=tract
         )
-        self.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
+        cls.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
+
+        config = MockAssembleCellCoaddConfig()
+        assembleTask = MockAssembleCellCoaddTask(config=config)
+        cls.result = assembleTask.runQuantum(cls.skyInfo, cls.dataRefList)
 
     def checkRun(self, assembleTask):
         """Check that the task runs successfully."""
@@ -122,15 +127,32 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
                     self.assertGreaterEqual(obsId.packed, packed)
                     packed = obsId.packed
 
-    def testAssembleBasic(self):
+    def test_assemble_basic(self):
         """Test that AssembleCellCoaddTask runs successfully without errors.
 
         This test does not check the correctness of the coaddition algorithms.
         This is intended to prevent the code from bit rotting.
         """
-        config = MockAssembleCellCoaddConfig()
-        assembleTask = MockAssembleCellCoaddTask(config=config)
-        self.checkRun(assembleTask)
+        # Check that we produced an exposure.
+        self.assertTrue(self.result.multipleCellCoadd is not None)
+
+    def test_visit_count(self):
+        """Check that the visit_count method returns a number less than or
+        equal to the total number of input exposures available.
+        """
+        max_visit_count = len(self.dataRefList)
+        for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
+            with self.subTest(x=cellId.x, y=cellId.y):
+                self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
+
+    def test_inputs_sorted(self):
+        """Check that the inputs are sorted."""
+        for _, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
+            packed = -np.inf
+            for obsId in singleCellCoadd.inputs:
+                with self.subTest(input_number=obsId):
+                    self.assertGreaterEqual(obsId.packed, packed)
+                packed = obsId.packed
 
 
 class MyMemoryTestCase(lsst.utils.tests.MemoryTestCase):
