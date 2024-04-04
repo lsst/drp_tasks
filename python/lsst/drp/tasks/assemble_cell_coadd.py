@@ -28,6 +28,7 @@ __all__ = (
 
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
+import lsst.geom as geom
 import numpy as np
 from lsst.cell_coadds import (
     CellIdentifiers,
@@ -290,9 +291,9 @@ class AssembleCellCoaddTask(PipelineTask):
         # (they share a common WCS). These are needed to find the various
         # warp + detector combinations that contributed to each cell, and later
         # get the corresponding PSFs as well.
-        cell_centers_sky = GridContainer(gc.shape)
+        cell_centers_sky = GridContainer[geom.SpherePoint](gc.shape)
         # Make a container to hold the observation identifiers for each cell.
-        observation_identifiers_gc = GridContainer(gc.shape)
+        observation_identifiers_gc = GridContainer[list](gc.shape)
         # Populate them.
         for cellInfo in skyInfo.patchInfo:
             coadd_inputs = self.input_recorder.makeCoaddInputs()
