@@ -265,7 +265,7 @@ class AssembleCellCoaddTask(PipelineTask):
             stacker = AccumulatorMeanStack(
                 # The shape is for the numpy arrays, hence transposed.
                 shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
-                bit_mask_value=afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes),
+                bit_mask_value=0,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
             )
