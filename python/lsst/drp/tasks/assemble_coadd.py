@@ -279,11 +279,6 @@ class AssembleCoaddConfig(
 
     def validate(self):
         super().validate()
-        if self.doPsfMatch:  # TODO: Remove this in DM-39841
-            # Backwards compatibility.
-            # Configs do not have loggers
-            log.warning("Config doPsfMatch deprecated. Setting warpType='psfMatched'")
-            self.warpType = "psfMatched"
         if self.doSigmaClip and self.statistic != "MEANCLIP":
             log.warning('doSigmaClip deprecated. To replicate behavior, setting statistic to "MEANCLIP"')
             self.statistic = "MEANCLIP"
