@@ -320,6 +320,12 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
                 Catalog of forced measurement results
                 (`lsst.afw.table.SourceCatalog`).
         """
+        # We want to cache repeated PSF evaluations at the same point coming
+        # from different measurement plugins.  We assume each algorithm tries
+        # to evaluate the PSF twice, which is more than enough since many don't
+        # evaluate it at all, and there's no *good* reason for any algorithm to
+        # evaluate it more than once.
+        exposure.psf.setCacheCapacity(2 * len(self.config.measurement.plugins.names))
         self.measurement.run(measCat, exposure, refCat, refWcs, exposureId=exposureId)
         if self.config.doApCorr:
             self.applyApCorr.run(catalog=measCat, apCorrMap=exposure.getInfo().getApCorrMap())
