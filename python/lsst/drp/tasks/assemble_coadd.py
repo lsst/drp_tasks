@@ -276,6 +276,7 @@ class AssembleCoaddConfig(
     def setDefaults(self):
         super().setDefaults()
         self.badMaskPlanes = ["NO_DATA", "BAD", "SAT", "EDGE"]
+        self.coaddPsf.cacheSize = 0
 
     def validate(self):
         super().validate()
