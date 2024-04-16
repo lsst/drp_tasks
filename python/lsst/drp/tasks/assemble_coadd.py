@@ -45,11 +45,10 @@ import lsst.utils as utils
 import lsstDebug
 import numpy
 from deprecated.sphinx import deprecated
-from lsst.meas.algorithms import AccumulatorMeanStack, ScaleVarianceTask, SourceDetectionTask
+from lsst.meas.algorithms import AccumulatorMeanStack, MaskStreaksTask, ScaleVarianceTask, SourceDetectionTask
 from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
 from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
 from lsst.pipe.tasks.interpImage import InterpImageTask
-from lsst.pipe.tasks.maskStreaks import MaskStreaksTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
 from lsst.utils.timer import timeMethod
