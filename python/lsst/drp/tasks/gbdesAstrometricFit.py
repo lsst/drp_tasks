@@ -19,6 +19,8 @@
 # the GNU General Public License along with this program.  If not,
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
+import re
+
 import astropy.coordinates
 import astropy.time
 import astropy.units as u
@@ -241,6 +243,12 @@ class GbdesAstrometricFitConnections(
         deferLoad=True,
         multiple=True,
     )
+    inputCameraModel = pipeBase.connectionTypes.PrerequisiteInput(
+        doc="Camera parameters to use for 'device' part of model",
+        name="gbdesAstrometricFit_cameraModel",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
     outputWcs = pipeBase.connectionTypes.Output(
         doc=(
             "Per-tract, per-visit world coordinate systems derived from the fitted model."
@@ -276,6 +284,12 @@ class GbdesAstrometricFitConnections(
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
+    outputCameraModel = pipeBase.connectionTypes.Output(
+        doc="Camera parameters to use for 'device' part of model",
+        name="gbdesAstrometricFit_cameraModel",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
 
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
@@ -285,6 +299,10 @@ class GbdesAstrometricFitConnections(
 
         if not self.config.saveModelParams:
             self.outputs.remove("modelParams")
+        if not self.config.useInputCameraModel:
+            self.prerequisiteInputs.remove("inputCameraModel")
+        if not self.config.saveCameraModel:
+            self.outputs.remove("outputCameraModel")
 
 
 class GbdesAstrometricFitConfig(
@@ -385,6 +403,19 @@ class GbdesAstrometricFitConfig(
         ),
         default=False,
     )
+    useInputCameraModel = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Use a preexisting model for the 'device' part of the model. When true, the device part of the"
+            " model will be held fixed in the fitting process."
+        ),
+        default=False,
+    )
+    saveCameraModel = pexConfig.Field(
+        dtype=bool,
+        doc="Save the 'device' part of the model to be used as input in future runs.",
+        default=False,
+    )
 
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
@@ -435,6 +466,13 @@ class GbdesAstrometricFitConfig(
                     f"exposureModel component {component} is not supported.",
                 )
 
+        if self.saveCameraModel and self.useInputCameraModel:
+            raise pexConfig.FieldValidationError(
+                GbdesAstrometricFitConfig.saveCameraModel,
+                self,
+                "saveCameraModel and useInputCameraModel cannot both be true.",
+            )
+
 
 class GbdesAstrometricFitTask(pipeBase.PipelineTask):
     """Calibrate the WCS across multiple visits of the same field using the
@@ -484,9 +522,17 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
         if self.config.saveModelParams:
             butlerQC.put(output.modelParams, outputRefs.modelParams)
+        if self.config.saveCameraModel:
+            butlerQC.put(output.cameraModelParams, outputRefs.outputCameraModel)
 
     def run(
-        self, inputCatalogRefs, inputVisitSummaries, instrumentName="", refEpoch=None, refObjectLoader=None
+        self,
+        inputCatalogRefs,
+        inputVisitSummaries,
+        instrumentName="",
+        refEpoch=None,
+        refObjectLoader=None,
+        inputCameraModel=None,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -504,6 +550,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refObjectLoader : instance of
             `lsst.meas.algorithms.loadReferenceObjects.ReferenceObjectLoader`
             Referencef object loader instance.
+        inputCameraModel : `dict` [`str`, `np.ndarray`], optional
+            Parameters to use for the device part of the model.
 
         Returns
         -------
@@ -519,6 +567,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 Catalog with best-fit positions of the objects fit.
             ``modelParams`` : `dict`
                 Parameters and covariance of the best-fit WCS model.
+            ``cameraModelParams`` : `dict` [`str`, `np.ndarray`]
+                Parameters of the device part of the model, in the format
+                needed as input for future runs.
         """
         self.log.info("Gather instrument, exposure, and field info")
         # Set up an instrument object
@@ -563,7 +614,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self.log.info("Fit the WCSs")
         # Set up a YAML-type string using the config variables and a sample
         # visit
-        inputYaml, mapTemplate = self.make_yaml(inputVisitSummaries[0])
+        inputYaml, mapTemplate = self.make_yaml(
+            inputVisitSummaries[0],
+            inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
+        )
 
         # Set the verbosity level for WCSFit from the task log level.
         # TODO: DM-36850, Add lsst.log to gbdes so that log messages are
@@ -577,6 +631,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             verbose = 2
 
         # Set up the WCS-fitting class using the results of the FOF associator
+        fixMaps = ",".join([f"HSC/{i}/poly" for i in exposureInfo.detectors])
         wcsf = wcsfit.WCSFit(
             fields,
             [instrument],
@@ -592,6 +647,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             refSysErr=self.config.referenceSystematicError,
             usePM=self.config.fitProperMotion,
             verbose=verbose,
+            fixMaps=(fixMaps if self.config.useInputCameraModel else ""),
         )
 
         # Add the science and reference sources
@@ -611,7 +667,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWcss = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo, mapTemplate=mapTemplate)
+        outputWcss, cameraParams = self._make_outputs(
+            wcsf,
+            inputVisitSummaries,
+            exposureInfo,
+            mapTemplate,
+            inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
+        )
         outputCatalog = wcsf.getOutputCatalog()
         starCatalog = wcsf.getStarCatalog()
         modelParams = self._compute_model_params(wcsf) if self.config.saveModelParams else None
@@ -622,6 +684,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             outputCatalog=outputCatalog,
             starCatalog=starCatalog,
             modelParams=modelParams,
+            cameraModelParams=cameraParams,
         )
 
     def _prep_sky(self, inputVisitSummaries, epoch, fieldName="Field"):
@@ -1201,7 +1264,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             whichDetector[ex_ind] = detector
             whichVisit[ex_ind] = visit
 
-        if "BAND/DEVICE/poly" in self.config.deviceModel:
+        if (not self.config.useInputCameraModel) and ("BAND/DEVICE/poly" in self.config.deviceModel):
             nCoeffDetectorModel = _nCoeffsFromDegree(self.config.devicePolyOrder)
             unconstrainedDetectors = []
             for detector in np.unique(extensionInfo.detector):
@@ -1216,7 +1279,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                     ", ".join(unconstrainedDetectors),
                 )
 
-    def make_yaml(self, inputVisitSummary, inputFile=None):
+    def make_yaml(self, inputVisitSummary, inputFile=None, inputCameraModel=None):
         """Make a YAML-type object that describes the parameters of the fit
         model.
 
@@ -1226,6 +1289,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             Catalog with per-detector summary information.
         inputFile : `str`
             Path to a file that contains a basic model.
+        inputCameraModel : `dict` [`str`, `np.ndarray`], optional
+            Parameters to use for the device part of the model.
 
         Returns
         -------
@@ -1265,6 +1330,33 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 componentDict = {"Type": "Identity"}
 
             inputDict[component] = componentDict
+
+        if (inputCameraModel is not None) and self.config.useInputCameraModel:
+            # This assumes that the input camera model is a 'poly' model
+            nCoeffs = _nCoeffsFromDegree(self.config.devicePolyOrder)
+            for key, coeffs in inputCameraModel.items():
+                if len(coeffs) != nCoeffs * 2:
+                    raise RuntimeError(
+                        "Input camera model polynomial order does not match the devicePolyOrder"
+                    )
+                mapDict = {
+                    "Type": "Poly",
+                    "XPoly": {
+                        "OrderX": self.config.devicePolyOrder,
+                        "SumOrder": True,
+                        "Coefficients": coeffs[:nCoeffs].tolist(),
+                    },
+                    "YPoly": {
+                        "OrderX": self.config.devicePolyOrder,
+                        "SumOrder": True,
+                        "Coefficients": coeffs[nCoeffs:].tolist(),
+                    },
+                    "XMin": xMin,
+                    "XMax": xMax,
+                    "YMin": yMin,
+                    "YMax": yMax,
+                }
+                inputDict[key] = mapDict
 
         exposureModel = {"Type": "Composite", "Elements": self.config.exposureModel.list()}
         inputDict["EXPOSURE"] = exposureModel
@@ -1465,7 +1557,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         outWCS = afwgeom.SkyWcs(frameDict)
         return outWCS
 
-    def _make_outputs(self, wcsf, visitSummaryTables, exposureInfo, mapTemplate=None):
+    def _make_outputs(self, wcsf, visitSummaryTables, exposureInfo, mapTemplate, inputCameraModel=None):
         """Make a WCS object out of the WCS models.
 
         Parameters
@@ -1489,14 +1581,38 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 Initial WCS for this extension.
             ``extensionType`` : `np.ndarray` [`str`]
                 "SCIENCE" or "REFERENCE".
+        mapTemplate : `dict` [`str`, `str`]
+            Dictionary containing the model description.
+        inputCameraModel : `dict` [`str`, `np.ndarray`], optional
+            Parameters to use for the device part of the model. This must be
+            provided if an input camera model was used.
+
         Returns
         -------
         catalogs : `dict` [`str`, `lsst.afw.table.ExposureCatalog`]
             Dictionary of `lsst.afw.table.ExposureCatalog` objects with the WCS
             set to the WCS fit in wcsf, keyed by the visit name.
+        cameraParams : `dict` [`str`, `np.ndarray`], optional
+            Parameters for the device part of the model in the format needed
+            when used as input for future runs.
         """
         # Get the parameters of the fit models
         mapParams = wcsf.mapCollection.getParamDict()
+        cameraParams = {}
+        if self.config.saveCameraModel:
+            for element in mapTemplate["INSTRUMENT/DEVICE"]["Elements"]:
+                for detector in exposureInfo.detectors:
+                    detectorTemplate = element.replace("DEVICE", str(detector))
+                    detectorTemplate = detectorTemplate.replace("BAND", ".+")
+                    for k, params in mapParams.items():
+                        if re.fullmatch(detectorTemplate, k):
+                            cameraParams[k] = params
+        if self.config.useInputCameraModel:
+            if inputCameraModel is None:
+                raise RuntimeError(
+                    "inputCameraModel must be provided to _make_outputs in order to build output WCS."
+                )
+            mapParams.update(inputCameraModel)
 
         # Set up the schema for the output catalogs
         schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
@@ -1578,7 +1694,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             catalog.sort()
             catalogs[visit] = catalog
 
-        return catalogs
+        return catalogs, cameraParams
 
     def _compute_model_params(self, wcsf):
         """Get the WCS model parameters and covariance and convert to a
@@ -1671,6 +1787,12 @@ class GbdesGlobalAstrometricFitConnections(
         multiple=True,
         deferLoad=True,
     )
+    inputCameraModel = pipeBase.connectionTypes.PrerequisiteInput(
+        doc="Camera parameters to use for 'device' part of model",
+        name="gbdesAstrometricFit_cameraModel",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
     outputWcs = pipeBase.connectionTypes.Output(
         doc=(
             "Per-visit world coordinate systems derived from the fitted model. These catalogs only contain "
@@ -1706,6 +1828,12 @@ class GbdesGlobalAstrometricFitConnections(
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "physical_filter"),
     )
+    outputCameraModel = pipeBase.connectionTypes.Output(
+        doc="Camera parameters to use for 'device' part of model",
+        name="gbdesAstrometricFit_cameraModel",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
 
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
@@ -1715,6 +1843,10 @@ class GbdesGlobalAstrometricFitConnections(
 
         if not self.config.saveModelParams:
             self.outputs.remove("modelParams")
+        if not self.config.useInputCameraModel:
+            self.prerequisiteInputs.remove("inputCameraModel")
+        if not self.config.saveCameraModel:
+            self.outputs.remove("outputCameraModel")
 
 
 class GbdesGlobalAstrometricFitConfig(
@@ -1793,6 +1925,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
         if self.config.saveModelParams:
             butlerQC.put(output.modelParams, outputRefs.modelParams)
+        if self.config.saveCameraModel:
+            butlerQC.put(output.cameraModelParams, outputRefs.outputCameraModel)
 
     def run(
         self,
@@ -1802,6 +1936,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         instrumentName="",
         refEpoch=None,
         refObjectLoader=None,
+        inputCameraModel=None,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -1821,6 +1956,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             `lsst.meas.algorithms.loadReferenceObjects.ReferenceObjectLoader`,
             optional
             Reference object loader instance.
+        inputCameraModel : `dict` [`str`, `np.ndarray`], optional
+            Parameters to use for the device part of the model.
 
         Returns
         -------
@@ -1836,6 +1973,9 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                 Catalog with best-fit positions of the objects fit.
             ``modelParams`` : `dict`
                 Parameters and covariance of the best-fit WCS model.
+            ``cameraModelParams`` : `dict` [`str`, `np.ndarray`]
+                Parameters of the device part of the model, in the format
+                needed as input for future runs.
         """
         self.log.info("Gather instrument, exposure, and field info")
         # Set up an instrument object
@@ -1866,7 +2006,10 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         self.log.info("Fit the WCSs")
         # Set up a YAML-type string using the config variables and a sample
         # visit
-        inputYaml, mapTemplate = self.make_yaml(inputVisitSummaries[0])
+        inputYaml, mapTemplate = self.make_yaml(
+            inputVisitSummaries[0],
+            inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
+        )
 
         # Set the verbosity level for WCSFit from the task log level.
         # TODO: DM-36850, Add lsst.log to gbdes so that log messages are
@@ -1911,7 +2054,13 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWcss = self._make_outputs(wcsf, inputVisitSummaries, exposureInfo, mapTemplate=mapTemplate)
+        outputWcss, cameraParams = self._make_outputs(
+            wcsf,
+            inputVisitSummaries,
+            exposureInfo,
+            mapTemplate,
+            inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
+        )
         outputCatalog = wcsf.getOutputCatalog()
         starCatalog = wcsf.getStarCatalog()
         modelParams = self._compute_model_params(wcsf) if self.config.saveModelParams else None
@@ -1922,6 +2071,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             outputCatalog=outputCatalog,
             starCatalog=starCatalog,
             modelParams=modelParams,
+            cameraModelParams=cameraParams,
         )
 
     def _prep_sky(self, inputVisitSummaries):

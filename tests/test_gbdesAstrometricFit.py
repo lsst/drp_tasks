@@ -21,6 +21,7 @@
 
 import os.path
 import unittest
+from copy import copy
 
 import astropy.units as u
 import lsst.afw.geom as afwgeom
@@ -84,6 +85,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.config.fitReserveRandomSeed = 1234
         cls.config.saveModelParams = True
         cls.config.allowSelfMatches = True
+        cls.config.saveCameraModel = True
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
         cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
@@ -643,6 +645,44 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         testSky = testWcs.pixelToSky(0, 0)
         self.assertTrue(testSky.isFinite())
 
+    def test_inputCameraModel(self):
+        """Test running task with an input camera model, and check that true
+        object coordinates are recovered.
+        """
+        config = copy(self.config)
+        config.saveCameraModel = False
+        config.useInputCameraModel = True
+        task = GbdesAstrometricFitTask(config=config)
+        with open(os.path.join(self.datadir, "sample_camera_model.yaml"), "r") as f:
+            cameraModel = yaml.load(f, Loader=yaml.Loader)
+
+        outputs = task.run(
+            self.inputCatalogRefs,
+            self.inputVisitSummary,
+            instrumentName=self.instrumentName,
+            refObjectLoader=self.refObjectLoader,
+            inputCameraModel=cameraModel,
+        )
+
+        # Check that the output WCS is close (not necessarily exactly equal) to
+        # the result when fitting the full model.
+        for v, visit in enumerate(self.testVisits):
+            visitSummary = self.inputVisitSummary[v]
+            outputWcsCatalog = outputs.outputWcss[visit]
+            visitSources = self.inputCatalogRefs[v].get()
+            for d, detectorRow in enumerate(visitSummary):
+                detectorId = detectorRow["id"]
+                fitwcs = outputWcsCatalog[d].getWcs()
+                detSources = visitSources[visitSources["detector"] == detectorId]
+                fitRA, fitDec = fitwcs.pixelToSkyArray(detSources["x"], detSources["y"], degrees=True)
+                dRA = fitRA - detSources["trueRA"]
+                dDec = fitDec - detSources["trueDec"]
+                # Check that input coordinates match the output coordinates
+                self.assertAlmostEqual(np.mean(dRA), 0)
+                self.assertAlmostEqual(np.std(dRA), 0)
+                self.assertAlmostEqual(np.mean(dDec), 0)
+                self.assertAlmostEqual(np.std(dDec), 0)
+
 
 class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
     @classmethod
@@ -680,6 +720,7 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
         cls.config.fitReserveFraction = 0
         cls.config.fitReserveRandomSeed = 1234
         cls.config.saveModelParams = True
+        cls.config.saveCameraModel = True
         cls.task = GbdesGlobalAstrometricFitTask(config=cls.config)
 
         cls.fields, cls.fieldRegions = cls.task._prep_sky(cls.inputVisitSummary)
@@ -967,6 +1008,47 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
         testWcs = outputs.outputWcss[self.testVisits[testVisit]][testDetector].getWcs()
         testSky = testWcs.pixelToSky(0, 0)
         self.assertTrue(testSky.isFinite())
+
+    def test_inputCameraModel(self):
+        """Test running task with an input camera model, and check that true
+        object coordinates are recovered.
+        """
+        config = copy(self.config)
+        config.saveCameraModel = False
+        config.useInputCameraModel = True
+        task = GbdesGlobalAstrometricFitTask(config=config)
+        with open(os.path.join(self.datadir, "sample_global_camera_model.yaml"), "r") as f:
+            cameraModel = yaml.load(f, Loader=yaml.Loader)
+
+        outputs = task.run(
+            self.inputVisitSummary,
+            self.isolatedStarSources,
+            self.isolatedStarCatalogs,
+            instrumentName=self.instrumentName,
+            refObjectLoader=self.refObjectLoader,
+            inputCameraModel=cameraModel,
+        )
+
+        # Check that the output WCS is close (not necessarily exactly equal) to
+        # the result when fitting the full model.
+        for isolatedStarSourceRef in self.isolatedStarSources:
+            iss = isolatedStarSourceRef.get()
+            visits = np.unique(iss["visit"])
+            for v, visit in enumerate(visits):
+                outputWcsCatalog = outputs.outputWcss[visit]
+                visitSources = iss[iss["visit"] == visit]
+                detectors = outputWcsCatalog["id"]
+                for d, detectorId in enumerate(detectors):
+                    fitwcs = outputWcsCatalog[d].getWcs()
+                    detSources = visitSources[visitSources["detector"] == detectorId]
+                    fitRA, fitDec = fitwcs.pixelToSkyArray(detSources["x"], detSources["y"], degrees=True)
+                    dRA = fitRA - detSources["trueRA"]
+                    dDec = fitDec - detSources["trueDec"]
+                    # Check that input coordinates match the output coordinates
+                    self.assertAlmostEqual(np.mean(dRA), 0, places=6)
+                    self.assertAlmostEqual(np.std(dRA), 0)
+                    self.assertAlmostEqual(np.mean(dDec), 0, places=6)
+                    self.assertAlmostEqual(np.std(dDec), 0)
 
 
 def setup_module(module):
