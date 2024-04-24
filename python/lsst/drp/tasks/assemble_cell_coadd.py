@@ -28,6 +28,7 @@ __all__ = (
 
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
+import lsst.geom as geom
 import numpy as np
 from lsst.cell_coadds import (
     CellIdentifiers,
@@ -41,12 +42,11 @@ from lsst.cell_coadds import (
     SingleCellCoadd,
     UniformGrid,
 )
-from lsst.meas.algorithms import AccumulatorMeanStack, CoaddPsf, CoaddPsfConfig
+from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, Field, ListField, RangeField
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
-from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderTask
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
@@ -113,14 +113,15 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         inclusiveMin=True,
         inclusiveMax=False,
     )
-    # The following config options are specific to the CoaddPsf.
-    coadd_psf = ConfigField(
-        doc="Configuration for CoaddPsf",
-        dtype=CoaddPsfConfig,
+    psf_warper = ConfigField(
+        doc="Configuration for the warper that warps the PSFs. It must have the same configuration used to "
+        "warp the images.",
+        dtype=afwMath.Warper.ConfigClass,
     )
-    input_recorder = ConfigurableField(
-        doc="Subtask that helps fill CoaddInputs catalogs added to the final Exposure",
-        target=CoaddInputRecorderTask,
+    psf_dimensions = Field[int](
+        default=21,
+        doc="Dimensions of the PSF image stamp size to be assigned to cells (must be odd).",
+        check=lambda x: (x > 0) and (x % 2 == 1),
     )
 
 
@@ -162,11 +163,12 @@ class AssembleCellCoaddTask(PipelineTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.makeSubtask("input_recorder")
         if self.config.do_interpolate_coadd:
             self.makeSubtask("interpolate_coadd")
         if self.config.do_scale_zero_point:
             self.makeSubtask("scale_zero_point")
+
+        self.psf_warper = afwMath.Warper.fromConfig(self.config.psf_warper)
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # Docstring inherited.
@@ -244,15 +246,13 @@ class AssembleCellCoaddTask(PipelineTask):
         grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
         return grid
 
-    def _construct_grid_container(self, skyInfo, statsCtrl):
+    def _construct_grid_container(self, skyInfo):
         """Construct a grid of AccumulatorMeanStack instances.
 
         Parameters
         ----------
         skyInfo : `~lsst.pipe.base.Struct`
             A Struct object
-        statsCtrl : `~lsst.afw.math.StatisticsControl`
-            A control (config-like) object for StatisticsStack.
 
         Returns
         -------
@@ -267,7 +267,7 @@ class AssembleCellCoaddTask(PipelineTask):
             stacker = AccumulatorMeanStack(
                 # The shape is for the numpy arrays, hence transposed.
                 shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
-                bit_mask_value=afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes),
+                bit_mask_value=0,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
             )
@@ -284,28 +284,34 @@ class AssembleCellCoaddTask(PipelineTask):
     def run(self, inputWarps, skyInfo, **kwargs):
         statsCtrl = self._construct_stats_control()
 
-        gc = self._construct_grid_container(skyInfo, statsCtrl)
-        coadd_inputs_gc = GridContainer(gc.shape)
+        gc = self._construct_grid_container(skyInfo)
+        psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
+        psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
 
         # Make a container to hold the cell centers in sky coordinates now,
         # so we don't have to recompute them for each warp
         # (they share a common WCS). These are needed to find the various
         # warp + detector combinations that contributed to each cell, and later
         # get the corresponding PSFs as well.
-        cell_centers_sky = GridContainer(gc.shape)
+        cell_centers_sky = GridContainer[geom.SpherePoint](gc.shape)
         # Make a container to hold the observation identifiers for each cell.
-        observation_identifiers_gc = GridContainer(gc.shape)
+        observation_identifiers_gc = GridContainer[list](gc.shape)
         # Populate them.
         for cellInfo in skyInfo.patchInfo:
-            coadd_inputs = self.input_recorder.makeCoaddInputs()
-            # Reserve the absolute maximum of how many ccds, visits
-            # we could potentially have.
-            coadd_inputs.ccds.reserve(len(inputWarps))
-            coadd_inputs.visits.reserve(len(inputWarps))
-            coadd_inputs_gc[cellInfo.index] = coadd_inputs
             # Make a list to hold the observation identifiers for each cell.
             observation_identifiers_gc[cellInfo.index] = []
             cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
+            psf_bbox_gc[cellInfo.index] = geom.Box2I.makeCenteredBox(
+                geom.Point2D(cellInfo.inner_bbox.getCenter()),
+                geom.Extent2I(self.config.psf_dimensions, self.config.psf_dimensions),
+            )
+            psf_gc[cellInfo.index] = AccumulatorMeanStack(
+                # The shape is for the numpy arrays, hence transposed.
+                shape=(self.config.psf_dimensions, self.config.psf_dimensions),
+                bit_mask_value=0,
+                calc_error_from_input_variance=self.config.calc_error_from_input_variance,
+                compute_n_image=False,
+            )
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
@@ -323,7 +329,6 @@ class AssembleCellCoaddTask(PipelineTask):
             edge = afwImage.Mask.getPlaneBitMask("EDGE")
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
-                stacker = gc[cellInfo.index]
                 mi = warp[bbox].getMaskedImage()
 
                 if (mi.getMask().array & edge).any():
@@ -340,29 +345,48 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                stacker.add_masked_image(mi, weight=weight)
-
-                coadd_inputs = coadd_inputs_gc[cellInfo.index]
-                self.input_recorder.addVisitToCoadd(coadd_inputs, warp[bbox], weight)
-                if True:
-                    ccd_table = (
-                        warp.getInfo()
-                        .getCoaddInputs()
-                        .ccds.subsetContaining(cell_centers_sky[cellInfo.index])
-                    )
-                    assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
-                    assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
-                    ccd_row = ccd_table[0]
-                else:
-                    for ccd_row in warp.getInfo().getCoaddInputs().ccds:
-                        if ccd_row.contains(cell_centers_sky[cellInfo.index]):
-                            break
+                ccd_table = (
+                    warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
+                )
+                assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
+                assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
+                ccd_row = ccd_table[0]
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
                     backup_detector=ccd_row["ccd"],
                 )
                 observation_identifiers_gc[cellInfo.index].append(observation_identifier)
+
+                stacker = gc[cellInfo.index]
+                stacker.add_masked_image(mi, weight=weight)
+
+                calexp_point = ccd_row.getWcs().skyToPixel(cell_centers_sky[cellInfo.index])
+                undistorted_psf_im = ccd_row.getPsf().computeImage(calexp_point)
+
+                assert undistorted_psf_im.getBBox() == geom.Box2I.makeCenteredBox(
+                    calexp_point,
+                    undistorted_psf_im.getDimensions(),
+                ), "PSF image does not share the coordinates of the 'calexp'"
+
+                # Convert the PSF image from Image to MaskedImage.
+                undistorted_psf_maskedImage = afwImage.MaskedImageD(image=undistorted_psf_im)
+                # TODO: In DM-43585, use the variance plane value from noise.
+                undistorted_psf_maskedImage.variance += 1.0  # Set variance to 1
+
+                warped_psf_maskedImage = self.psf_warper.warpImage(
+                    destWcs=skyInfo.wcs,
+                    srcImage=undistorted_psf_maskedImage,
+                    srcWcs=ccd_row.getWcs(),
+                    destBBox=psf_bbox_gc[cellInfo.index],
+                )
+
+                # There may be NaNs in the PSF image. Set them to 0.0
+                warped_psf_maskedImage.variance.array[np.isnan(warped_psf_maskedImage.image.array)] = 1.0
+                warped_psf_maskedImage.image.array[np.isnan(warped_psf_maskedImage.image.array)] = 0.0
+
+                psf_stacker = psf_gc[cellInfo.index]
+                psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
 
             del warp
 
@@ -374,7 +398,9 @@ class AssembleCellCoaddTask(PipelineTask):
 
             stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
-            stacker.fill_stacked_masked_image(cell_masked_image)
+            psf_masked_image = afwImage.MaskedImageF(psf_bbox_gc[cellInfo.index])
+            gc[cellInfo.index].fill_stacked_masked_image(cell_masked_image)
+            psf_gc[cellInfo.index].fill_stacked_masked_image(psf_masked_image)
 
             # Post-process the coadd before converting to new data structures.
             if self.config.do_interpolate_coadd:
@@ -383,12 +409,6 @@ class AssembleCellCoaddTask(PipelineTask):
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
                     varArray[:] = np.where(varArray > 0, varArray, np.inf)
-
-            # Finalize the PSF on the cell coadds.
-            coadd_inputs = coadd_inputs_gc[cellInfo.index]
-            coadd_inputs.ccds.sort()
-            coadd_inputs.visits.sort()
-            cell_coadd_psf = CoaddPsf(coadd_inputs.ccds, skyInfo.wcs, self.config.coadd_psf.makeControl())
 
             image_planes = OwnedImagePlanes.from_masked_image(cell_masked_image)
             identifiers = CellIdentifiers(
@@ -401,9 +421,9 @@ class AssembleCellCoaddTask(PipelineTask):
 
             singleCellCoadd = SingleCellCoadd(
                 outer=image_planes,
-                psf=cell_coadd_psf.computeKernelImage(cell_coadd_psf.getAveragePosition()),
+                psf=psf_masked_image.image,
                 inner_bbox=cellInfo.inner_bbox,
-                inputs=frozenset(observation_identifiers_gc[cellInfo.index]),
+                inputs=observation_identifiers_gc[cellInfo.index],
                 common=self.common,
                 identifiers=identifiers,
             )
