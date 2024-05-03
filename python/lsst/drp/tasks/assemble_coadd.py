@@ -161,12 +161,6 @@ class AssembleCoaddConfig(
         doc='Perform online coaddition when statistic="MEAN" to save memory?',
         default=False,
     )
-    doSigmaClip = pexConfig.Field(
-        dtype=bool,
-        doc="Perform sigma clipped outlier rejection with MEANCLIP statistic?",
-        deprecated=True,
-        default=False,
-    )
     sigmaClip = pexConfig.Field(
         dtype=float,
         doc="Sigma for outlier rejection; ignored if non-clipping statistic " "selected.",
@@ -279,9 +273,6 @@ class AssembleCoaddConfig(
 
     def validate(self):
         super().validate()
-        if self.doSigmaClip and self.statistic != "MEANCLIP":
-            log.warning('doSigmaClip deprecated. To replicate behavior, setting statistic to "MEANCLIP"')
-            self.statistic = "MEANCLIP"
         if self.doInterp and self.statistic not in ["MEAN", "MEDIAN", "MEANCLIP", "VARIANCE", "VARIANCECLIP"]:
             raise ValueError(
                 "Must set doInterp=False for statistic=%s, which does not "
