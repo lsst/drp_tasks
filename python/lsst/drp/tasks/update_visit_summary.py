@@ -708,14 +708,16 @@ class UpdateVisitSummaryTask(PipelineTask):
                 sources = psf_star_catalog[psf_star_catalog["detector"] == detector_id]
                 if len(sources) == 0:
                     sources = None
-                self.compute_summary_stats.update_psf_stats(
-                    summary_stats,
-                    psf,
-                    bbox,
-                    sources,
-                    image_mask=exposure.mask,
-                    sources_is_astropy=True,
-                )
+                if not ap_corr_overrides:  # If also overriding apCorr, update all PSF stats below.
+                    self.compute_summary_stats.update_psf_stats(
+                        summary_stats,
+                        psf,
+                        bbox,
+                        sources,
+                        image_mask=exposure.mask,
+                        image_ap_corr_map=exposure.apCorrMap,
+                        sources_is_astropy=True,
+                    )
 
             if ap_corr_overrides:
                 if (ap_corr_record := ap_corr_overrides.find(detector_id)) is not None:
@@ -723,6 +725,15 @@ class UpdateVisitSummaryTask(PipelineTask):
                 else:
                     ap_corr = None
                 output_record.setApCorrMap(ap_corr)
+                self.compute_summary_stats.update_psf_stats(
+                    summary_stats,
+                    psf,
+                    bbox,
+                    sources,
+                    image_mask=exposure.mask,
+                    image_ap_corr_map=ap_corr,
+                    sources_is_astropy=True,
+                )
 
             if photo_calib_overrides:
                 center = compute_center_for_detector_record(output_record, bbox, wcs)
