@@ -20,13 +20,19 @@
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
 
+from __future__ import annotations
+
 import unittest
+from typing import TYPE_CHECKING, Iterable
 
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
 import numpy as np
 from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 from lsst.drp.tasks.assemble_cell_coadd import AssembleCellCoaddConfig, AssembleCellCoaddTask
+
+if TYPE_CHECKING:
+    from lsst.cell_coadds import ObservationIdentifiers
 
 __all__ = (
     "MockAssembleCellCoaddConfig",
@@ -108,6 +114,27 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         assembleTask = MockAssembleCellCoaddTask(config=config)
         cls.result = assembleTask.runQuantum(cls.skyInfo, cls.dataRefList)
 
+    def checkSortOrder(self, inputs: Iterable[ObservationIdentifiers]) -> None:
+        """Check that the inputs are sorted.
+
+        The inputs must be sorted first by visit, and within the same visit,
+        by detector.
+
+        Parameters
+        ----------
+        inputs : `Iterable` [`ObservationIdentifiers`]
+            The inputs to be checked.
+        """
+        visit, detector = -np.inf, -np.inf  # Previous visit, detector IDs.
+        for _, obsId in enumerate(inputs):
+            with self.subTest(input_number=obsId):
+                self.assertGreaterEqual(obsId.visit, visit)
+            if visit == obsId.visit:
+                with self.subTest(detector_number=obsId.detector):
+                    self.assertGreaterEqual(obsId.detector, detector)
+
+            visit, detector = obsId.visit, obsId.detector
+
     def checkRun(self, assembleTask):
         """Check that the task runs successfully."""
         result = assembleTask.runQuantum(self.skyInfo, self.dataRefList)
@@ -121,11 +148,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
             with self.subTest(x=cellId.x, y=cellId.y):
                 self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
             # Check that the inputs are sorted.
-            packed = -np.inf
-            for idx, obsId in enumerate(singleCellCoadd.inputs):
-                with self.subTest(input_number=obsId):
-                    self.assertGreaterEqual(obsId.packed, packed)
-                    packed = obsId.packed
+            self.checkSortOrder(singleCellCoadd.inputs)
 
     def test_assemble_basic(self):
         """Test that AssembleCellCoaddTask runs successfully without errors.
@@ -146,13 +169,13 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
                 self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
 
     def test_inputs_sorted(self):
-        """Check that the inputs are sorted."""
+        """Check that the inputs are sorted.
+
+        The ordering is that inputs are sorted first by visit, and within the
+        same visit, they are ordered by detector.
+        """
         for _, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
-            packed = -np.inf
-            for obsId in singleCellCoadd.inputs:
-                with self.subTest(input_number=obsId):
-                    self.assertGreaterEqual(obsId.packed, packed)
-                packed = obsId.packed
+            self.checkSortOrder(singleCellCoadd.inputs)
 
 
 class MyMemoryTestCase(lsst.utils.tests.MemoryTestCase):
