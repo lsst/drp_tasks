@@ -102,7 +102,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     calc_error_from_input_variance = Field[bool](
         doc="Calculate coadd variance from input variance by stacking "
         "statistic. Passed to AccumulatorMeanStack.",
-        default=False,
+        default=True,
     )
     max_maskfrac = RangeField[float](
         doc="Maximum fraction of masked pixels in a cell. This is currently "
