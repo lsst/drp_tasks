@@ -138,10 +138,14 @@ class AssembleCoaddConnections(
 class AssembleCoaddConfig(
     CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig, pipelineConnections=AssembleCoaddConnections
 ):
-    warpType = pexConfig.Field(
+    warpType = pexConfig.ChoiceField(
         doc="Warp name: one of 'direct' or 'psfMatched'",
         dtype=str,
         default="direct",
+        allowed={
+            "direct": "Weighted mean of directWarps, with outlier rejection",
+            "psfMatched": "Weighted mean of PSF-matched warps",
+        },
     )
     subregionSize = pexConfig.ListField(
         dtype=int,
