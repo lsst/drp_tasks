@@ -265,6 +265,12 @@ class AssembleCoaddConfig(
         doc="Input map creation subtask.",
         target=HealSparseInputMapTask,
     )
+    matchingKernelSize = pexConfig.Field(
+        dtype=int,
+        doc="Size in pixels of matching kernel. Must be odd.",
+        default=21,
+        check=lambda x: x % 2 == 1,
+    )
 
     def setDefaults(self):
         super().setDefaults()
