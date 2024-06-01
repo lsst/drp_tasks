@@ -210,6 +210,9 @@ class AssembleCoaddConfig(
         "to True by CompareWarp only.",
         dtype=bool,
         default=False,
+        deprecated=("This configuration is handled internally and deprecated "
+                    "without replacement."
+                    ),
     )
     maskPropagationThresholds = pexConfig.DictField(
         keytype=str,
@@ -364,6 +367,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             self.makeSubtask("inputMapper")
 
         self.warpType = self.config.warpType
+        self._doUsePsfMatchedPolygons = False
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         inputData = butlerQC.get(inputRefs)
@@ -760,7 +764,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         for tempExp, weight in zip(tempExpList, weightList):
             self.inputRecorder.addVisitToCoadd(coaddInputs, tempExp, weight)
 
-        if self.config.doUsePsfMatchedPolygons:
+        if self._doUsePsfMatchedPolygons:
             self.shrinkValidPolygons(coaddInputs)
 
         coaddInputs.visits.sort()
@@ -1020,12 +1024,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         mask : `lsst.afw.image.Mask`
             Updated mask.
         """
-        if self.config.doUsePsfMatchedPolygons:
+        if self._doUsePsfMatchedPolygons:
             if ("NO_DATA" in altMaskSpans) and ("NO_DATA" in self.config.badMaskPlanes):
                 # Clear away any other masks outside the validPolygons. These
                 # pixels are no longer contributing to inexact PSFs, and will
                 # still be rejected because of NO_DATA.
-                # self.config.doUsePsfMatchedPolygons should be True only in
+                # self._doUsePsfMatchedPolygons should be True only in
                 # CompareWarpAssemble. This mask-clearing step must only occur
                 # *before* applying the new masks below.
                 for spanSet in altMaskSpans["NO_DATA"]:
@@ -1320,7 +1324,6 @@ class CompareWarpAssembleCoaddConfig(
     def setDefaults(self):
         AssembleCoaddConfig.setDefaults(self)
         self.statistic = "MEAN"
-        self.doUsePsfMatchedPolygons = True
 
         # Real EDGE removed by psfMatched NO_DATA border half the width of the
         # matching kernel. CompareWarp applies psfMatched EDGE pixels to
@@ -1421,6 +1424,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
     def __init__(self, *args, **kwargs):
         AssembleCoaddTask.__init__(self, *args, **kwargs)
+        self._doUsePsfMatchedPolygons = True
         self.makeSubtask("assembleStaticSkyModel")
         detectionSchema = afwTable.SourceTable.makeMinimalSchema()
         self.makeSubtask("detect", schema=detectionSchema)
