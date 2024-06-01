@@ -405,9 +405,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
         retStruct = self.run(
             inputData["skyInfo"],
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            tempExpRefList=inputs.tempExpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
             supplementaryData=supplementaryData,
         )
 
@@ -588,6 +588,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def run(
         self,
         skyInfo,
+        *,
         tempExpRefList,
         imageScalerList,
         weightList,
@@ -1520,7 +1521,15 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
     @utils.inheritDoc(AssembleCoaddTask)
     @timeMethod
-    def run(self, skyInfo, tempExpRefList, imageScalerList, weightList, supplementaryData):
+    def run(
+        self,
+        skyInfo,
+        *,
+        tempExpRefList,
+        imageScalerList,
+        weightList,
+        supplementaryData,
+    ):
         """Notes
         -----
         Assemble the coadd.
@@ -1556,7 +1565,13 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         badPixelMask = afwImage.Mask.getPlaneBitMask(badMaskPlanes)
 
         result = AssembleCoaddTask.run(
-            self, skyInfo, tempExpRefList, imageScalerList, weightList, spanSetMaskList, mask=badPixelMask
+            self,
+            skyInfo,
+            tempExpRefList=tempExpRefList,
+            imageScalerList=imageScalerList,
+            weightList=weightList,
+            altMaskList=spanSetMaskList,
+            mask=badPixelMask,
         )
 
         # Propagate PSF-matched EDGE pixels to coadd SENSOR_EDGE and

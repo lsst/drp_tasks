@@ -360,9 +360,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
         retStruct = self.run(
             inputData["skyInfo"],
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            warpRefList=inputs.tempExpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
             supplementaryData=supplementaryData,
         )
 
@@ -498,7 +498,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         return dcrModels
 
     @timeMethod
-    def run(self, skyInfo, warpRefList, imageScalerList, weightList, supplementaryData=None):
+    def run(self, skyInfo, *, warpRefList, imageScalerList, weightList, supplementaryData=None):
         r"""Assemble the coadd.
 
         Requires additional inputs Struct ``supplementaryData`` to contain a

@@ -92,9 +92,9 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
 
         retStruct = self.run(
             mockSkyInfo,
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            tempExpRefList=inputs.tempExpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
             supplementaryData=pipeBase.Struct(),
         )
         return retStruct
@@ -139,9 +139,9 @@ class MockCompareWarpAssembleCoaddTask(MockAssembleCoaddTask, CompareWarpAssembl
 
         retStruct = self.run(
             mockSkyInfo,
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            tempExpRefList=inputs.tempExpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
             supplementaryData=supplementaryData,
         )
         return retStruct
