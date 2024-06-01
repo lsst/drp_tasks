@@ -788,6 +788,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         """
         assert len(tempExpRefList) == len(weightList), "Length mismatch"
 
+        if psfMatchedWarpRefList:
+            assert len(tempExpRefList) == len(psfMatchedWarpRefList), "Length mismatch"
+
         # We load a single pixel of each coaddTempExp, because we just want to
         # get at the metadata (and we need more than just the PropertySet that
         # contains the header), which is not possible with the current butler
@@ -805,11 +808,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddInputs.ccds.reserve(numCcds)
         coaddInputs.visits.reserve(len(tempExpList))
 
+        # psfMatchedWarpRefList should be empty except in CompareWarpCoadd.
+        if self._doUsePsfMatchedPolygons:
+            # Set validPolygons for tempExp before addVisitToCoadd
+            self._setValidPolygons(tempExpList, psfMatchedWarpRefList)
+
         for tempExp, weight in zip(tempExpList, weightList):
             self.inputRecorder.addVisitToCoadd(coaddInputs, tempExp, weight)
-
-        if self._doUsePsfMatchedPolygons:
-            self.shrinkValidPolygons(coaddInputs)
 
         coaddInputs.visits.sort()
         coaddInputs.ccds.sort()
@@ -1085,26 +1090,40 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 spanSet.clippedTo(mask.getBBox()).setMask(mask, 2**maskClipValue)
         return mask
 
-    def shrinkValidPolygons(self, coaddInputs):
-        """Shrink coaddInputs' ccds' ValidPolygons in place.
-
-        Either modify each ccd's validPolygon in place, or if CoaddInputs
-        does not have a validPolygon, create one from its bbox.
+    def _setValidPolygons(self, tempExpList, psfMatchedWarpRefList):
+        """Set the valid polygons for the warps the same as psfMatchedWarps, if
+        it exists.
 
         Parameters
         ----------
-        coaddInputs : `lsst.afw.image.coaddInputs`
-            Original mask.
+        tempExpList : `Iterable` [`lsst.afw.image.Exposure`]
+            List of tempExps or warps.
+        psfMatchedWarpRefList : `Iterable` \
+            [`lsst.daf.butler.DeferredDatasetHandle`]
+            List of references to psfMatchedWarps, in the same order as
+            ``warpList``.
+
+        Raises
+        ------
+        AssertionError
+            Raised if the detector IDs in the coaddInputs do not match.
         """
-        for ccd in coaddInputs.ccds:
-            polyOrig = ccd.getValidPolygon()
-            validPolyBBox = polyOrig.getBBox() if polyOrig else ccd.getBBox()
-            validPolyBBox.grow(-self.config.matchingKernelSize // 2)
-            if polyOrig:
-                validPolygon = polyOrig.intersectionSingle(validPolyBBox)
-            else:
-                validPolygon = afwGeom.polygon.Polygon(geom.Box2D(validPolyBBox))
-            ccd.setValidPolygon(validPolygon)
+        for tempExp, psfMatchedWarpRef in zip(tempExpList, psfMatchedWarpRefList):
+            psfMatchedCcdTable = psfMatchedWarpRef.get(component="coaddInputs").ccds
+            ccdTable = tempExp.getInfo().getCoaddInputs().ccds
+            psfMatchedCcdTable.sort()
+            ccdTable.sort()
+            for idx in range(len(ccdTable)):
+                assert ccdTable[idx].id == psfMatchedCcdTable[idx].id, "ID mismatch"
+                if not psfMatchedCcdTable[idx].validPolygon:
+                    self.log.warning(
+                        "No validPolygon in PSF-matched warp found for %s. This is likely due to a mismatch "
+                        "in the LSST Science Pipelines version used to produce the warps and the current "
+                        "version.",
+                        ccdTable[idx].id,
+                    )
+                else:
+                    ccdTable[idx].validPolygon = psfMatchedCcdTable[idx].validPolygon
 
     def setBrightObjectMasks(self, exposure, brightObjectMasks, dataId=None):
         """Set the bright object masks.
