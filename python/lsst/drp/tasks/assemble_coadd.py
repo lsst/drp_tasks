@@ -397,7 +397,23 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         else:
             warpRefList = inputData["inputWarps"]
 
-        inputs = self.prepareInputs(warpRefList)
+        # Although psfMatchedWarps are specifically required by only by a
+        # specific set of a subclass, and since runQuantum is not overridden,
+        # the selection and filtering must happen here on a conditional basis.
+        # Otherwise, the elements in the various lists will not line up.
+        # This design cries out for a refactor, which is planned in DM-38630.
+        if self._doUsePsfMatchedPolygons:
+            if self.config.doSelectVisits:
+                psfMatchedWarpRefList = self.filterWarps(
+                    inputData["psfMatchedWarps"],
+                    inputData["selectedVisits"],
+                )
+            else:
+                psfMatchedWarpRefList = inputData["psfMatchedWarps"]
+        else:
+            psfMatchedWarpRefList = []
+
+        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
         self.log.info("Found %d %s", len(inputs.tempExpRefList), self.getTempExpDatasetName(self.warpType))
         if len(inputs.tempExpRefList) == 0:
             raise pipeBase.NoWorkFound("No coadd temporary exposures found")
@@ -408,6 +424,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             tempExpRefList=inputs.tempExpRefList,
             imageScalerList=inputs.imageScalerList,
             weightList=inputs.weightList,
+            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
             supplementaryData=supplementaryData,
         )
 
@@ -475,7 +492,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def makeSupplementaryDataGen3(self, butlerQC, inputRefs, outputRefs):
         return self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
 
-    def prepareInputs(self, refList):
+    def prepareInputs(self, refList, psfMatchedWarpRefList=None):
         """Prepare the input warps for coaddition by measuring the weight for
         each warp and the scaling for the photometric zero point.
 
@@ -488,6 +505,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         ----------
         refList : `list`
             List of data references to tempExp.
+        psfMatchedWarpRefList : `list` | None, optional
+            List of data references to psfMatchedWarp.
 
         Returns
         -------
@@ -513,8 +532,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         tempExpRefList = []
         weightList = []
         imageScalerList = []
+        outputPsfMatchedWarpRefList = []
+
+        if not psfMatchedWarpRefList:
+            psfMatchedWarpRefList = [None] * len(refList)
+
         tempExpName = self.getTempExpDatasetName(self.warpType)
-        for tempExpRef in refList:
+        for tempExpRef, psfMatchedWarpRef in zip(refList, psfMatchedWarpRefList, strict=True):
             tempExp = tempExpRef.get()
             # Ignore any input warp that is empty of data
             if numpy.isnan(tempExp.image.array).all():
@@ -545,9 +569,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             tempExpRefList.append(tempExpRef)
             weightList.append(weight)
             imageScalerList.append(imageScaler)
+            outputPsfMatchedWarpRefList.append(psfMatchedWarpRef)
 
         return pipeBase.Struct(
-            tempExpRefList=tempExpRefList, weightList=weightList, imageScalerList=imageScalerList
+            tempExpRefList=tempExpRefList,
+            weightList=weightList,
+            imageScalerList=imageScalerList,
+            psfMatchedWarpRefList=outputPsfMatchedWarpRefList,
         )
 
     def prepareStats(self, mask=None):
@@ -592,6 +620,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         tempExpRefList,
         imageScalerList,
         weightList,
+        psfMatchedWarpRefList=None,
         altMaskList=None,
         mask=None,
         supplementaryData=None,
@@ -616,6 +645,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             List of image scalers.
         weightList : `list`
             List of weights.
+        psfMatchedWarpRefList : `list`, optional
+            List of data references to psfMatchedWarps.
         altMaskList : `list`, optional
             List of alternate masks to use rather than those stored with
             tempExp.
@@ -663,7 +694,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
         coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
         coaddExposure.getInfo().setCoaddInputs(self.inputRecorder.makeCoaddInputs())
-        self.assembleMetadata(coaddExposure, tempExpRefList, weightList)
+        self.assembleMetadata(coaddExposure, tempExpRefList, weightList, psfMatchedWarpRefList)
         coaddMaskedImage = coaddExposure.getMaskedImage()
         subregionSizeArr = self.config.subregionSize
         subregionSize = geom.Extent2I(subregionSizeArr[0], subregionSizeArr[1])
@@ -734,7 +765,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             inputMap=inputMap,
         )
 
-    def assembleMetadata(self, coaddExposure, tempExpRefList, weightList):
+    def assembleMetadata(self, coaddExposure, tempExpRefList, weightList, psfMatchedWarpRefList=None):
         """Set the metadata for the coadd.
 
         This basic implementation sets the filter from the first input.
@@ -747,6 +778,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             List of data references to tempExp.
         weightList : `list`
             List of weights.
+        psfMatchedWarpRefList : `list` | None, optional
+            List of data references to psfMatchedWarps.
 
         Raises
         ------
@@ -1500,6 +1533,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             warpRefList=templateCoadd.warpRefList,
             imageScalerList=templateCoadd.imageScalerList,
             weightList=templateCoadd.weightList,
+            psfMatchedWarpRefList=inputRefs.psfMatchedWarps,
         )
 
     def _noTemplateMessage(self, warpType):
@@ -1528,6 +1562,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         tempExpRefList,
         imageScalerList,
         weightList,
+        psfMatchedWarpRefList,
         supplementaryData,
     ):
         """Notes
@@ -1572,6 +1607,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             weightList=weightList,
             altMaskList=spanSetMaskList,
             mask=badPixelMask,
+            psfMatchedWarpRefList=psfMatchedWarpRefList,
         )
 
         # Propagate PSF-matched EDGE pixels to coadd SENSOR_EDGE and
