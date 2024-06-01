@@ -67,7 +67,7 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
 
     ref_cat = cT.PrerequisiteInput(
         doc="Reference catalog used to mask bright objects.",
-        name="ref_cat",
+        name="cal_ref_cat_2_2",
         storageClass="SimpleCatalog",
         dimensions=("skypix",),
         deferLoad=True,
@@ -142,8 +142,8 @@ class MetadetectionShearConfig(
         "missing will be skipped.  Bands other than those listed here will "
         "not be processed.",
         # TODO learn how to set in a config file
-        default=["g", "r", "i", "z"],
-        # default=["r"],
+        # default=["g", "r", "i", "z"],
+        default=["r"],
         optional=False,
     )
 
@@ -559,7 +559,7 @@ class MetadetectionShearTask(PipelineTask):
             config=self.config.ref_loader,
             log=self.log,
         )
-        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region)
+        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region, filterName="r")
 
         coadds_by_band = {
             ref.dataId["band"]: qc.get(ref) for ref in inputRefs.input_coadds
