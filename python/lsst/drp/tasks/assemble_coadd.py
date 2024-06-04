@@ -211,7 +211,7 @@ class AssembleCoaddConfig(
         dtype=bool,
         default=False,
         deprecated=("This configuration is handled internally and deprecated "
-                    "without replacement."
+                    "without replacement. This will be removed after v29."
                     ),
     )
     maskPropagationThresholds = pexConfig.DictField(
