@@ -349,19 +349,19 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         )
 
         # Construct list of input Deferred Datasets
-        tempExpRefList = inputData["inputWarps"]
+        warpRefList = inputData["inputWarps"]
         psfMatchedWarpRefList = inputData["psfMatchedWarps"]
 
-        inputs = self.prepareInputs(tempExpRefList, psfMatchedWarpRefList)
-        self.log.info("Found %d %s", len(inputs.tempExpRefList), self.getTempExpDatasetName(self.warpType))
-        if len(inputs.tempExpRefList) == 0:
+        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
+        self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
+        if len(inputs.warpRefList) == 0:
             self.log.warning("No coadd temporary exposures found")
             return
 
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
         retStruct = self.run(
             inputData["skyInfo"],
-            warpRefList=inputs.tempExpRefList,
+            warpRefList=inputs.warpRefList,
             imageScalerList=inputs.imageScalerList,
             weightList=inputs.weightList,
             psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
