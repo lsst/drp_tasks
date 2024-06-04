@@ -335,6 +335,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     ConfigClass = AssembleCoaddConfig
     _DefaultName = "assembleCoadd"
 
+    """Use ValidPolygons from shrunk Psf-Matched Calexps?"""
+    _doUsePsfMatchedPolygons: bool = False
+
     def __init__(self, *args, **kwargs):
         # TODO: DM-17415 better way to handle previously allowed passed args
         # e.g.`AssembleCoaddTask(config)`
@@ -367,7 +370,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             self.makeSubtask("inputMapper")
 
         self.warpType = self.config.warpType
-        self._doUsePsfMatchedPolygons = False
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         inputData = butlerQC.get(inputRefs)
@@ -1422,9 +1424,11 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
     ConfigClass = CompareWarpAssembleCoaddConfig
     _DefaultName = "compareWarpAssembleCoadd"
 
+    """Use ValidPolygons from shrunk Psf-Matched Calexps?"""
+    _doUsePsfMatchedPolygons : bool = True
+
     def __init__(self, *args, **kwargs):
         AssembleCoaddTask.__init__(self, *args, **kwargs)
-        self._doUsePsfMatchedPolygons = True
         self.makeSubtask("assembleStaticSkyModel")
         detectionSchema = afwTable.SourceTable.makeMinimalSchema()
         self.makeSubtask("detect", schema=detectionSchema)
