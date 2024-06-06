@@ -559,7 +559,7 @@ class MetadetectionShearTask(PipelineTask):
             config=self.config.ref_loader,
             log=self.log,
         )
-        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region, filterName="r")
+        ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region, filterName="lsst_r")
 
         coadds_by_band = {
             ref.dataId["band"]: qc.get(ref) for ref in inputRefs.input_coadds
