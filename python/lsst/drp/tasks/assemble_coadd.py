@@ -207,11 +207,16 @@ class AssembleCoaddConfig(
         dtype=bool,
         default=False,
     )
+    # TODO: Remove this field in DM-44791 after v28 release is cut.
     doUsePsfMatchedPolygons = pexConfig.Field(
         doc="Use ValidPolygons from shrunk Psf-Matched Calexps? Should be set "
         "to True by CompareWarp only.",
         dtype=bool,
         default=False,
+        deprecated=(
+            "This configuration is handled internally and deprecated "
+            "without replacement. This will be removed after v28."
+        ),
     )
     maskPropagationThresholds = pexConfig.DictField(
         keytype=str,
@@ -1329,7 +1334,6 @@ class CompareWarpAssembleCoaddConfig(
     def setDefaults(self):
         AssembleCoaddConfig.setDefaults(self)
         self.statistic = "MEAN"
-        self.doUsePsfMatchedPolygons = True
 
         # Real EDGE removed by psfMatched NO_DATA border half the width of the
         # matching kernel. CompareWarp applies psfMatched EDGE pixels to
