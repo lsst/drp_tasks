@@ -769,7 +769,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         for tempExp, weight in zip(tempExpList, weightList):
             self.inputRecorder.addVisitToCoadd(coaddInputs, tempExp, weight)
 
-        if self.config.doUsePsfMatchedPolygons:
+        if self._doUsePsfMatchedPolygons:
             self.shrinkValidPolygons(coaddInputs)
 
         coaddInputs.visits.sort()
@@ -1029,12 +1029,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         mask : `lsst.afw.image.Mask`
             Updated mask.
         """
-        if self.config.doUsePsfMatchedPolygons:
+        if self._doUsePsfMatchedPolygons:
             if ("NO_DATA" in altMaskSpans) and ("NO_DATA" in self.config.badMaskPlanes):
                 # Clear away any other masks outside the validPolygons. These
                 # pixels are no longer contributing to inexact PSFs, and will
                 # still be rejected because of NO_DATA.
-                # self.config.doUsePsfMatchedPolygons should be True only in
+                # self._doUsePsfMatchedPolygons should be True only in
                 # CompareWarpAssemble. This mask-clearing step must only occur
                 # *before* applying the new masks below.
                 for spanSet in altMaskSpans["NO_DATA"]:
