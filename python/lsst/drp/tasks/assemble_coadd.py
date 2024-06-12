@@ -19,6 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 __all__ = [
     "AssembleCoaddTask",
     "AssembleCoaddConnections",
@@ -331,6 +333,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
     ConfigClass = AssembleCoaddConfig
     _DefaultName = "assembleCoadd"
+
+    _doUsePsfMatchedPolygons: bool = False
+    """Use ValidPolygons from shrunk Psf-Matched Calexps?
+
+    This needs to be set to True by child classes that use compare Psf-Matched
+    warps to non Psf-Matched warps.
+    """
 
     def __init__(self, *args, **kwargs):
         # TODO: DM-17415 better way to handle previously allowed passed args
@@ -1418,6 +1427,9 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
     ConfigClass = CompareWarpAssembleCoaddConfig
     _DefaultName = "compareWarpAssembleCoadd"
+
+    # See the parent class for docstring.
+    _doUsePsfMatchedPolygons: bool = True
 
     def __init__(self, *args, **kwargs):
         AssembleCoaddTask.__init__(self, *args, **kwargs)
