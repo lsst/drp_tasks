@@ -47,9 +47,13 @@ __all__ = [
     "GbdesAstrometricFitConnections",
     "GbdesAstrometricFitConfig",
     "GbdesAstrometricFitTask",
+    "GbdesAstrometricMultibandFitConnections",
+    "GbdesAstrometricMultibandFitTask",
     "GbdesGlobalAstrometricFitConnections",
     "GbdesGlobalAstrometricFitConfig",
     "GbdesGlobalAstrometricFitTask",
+    "GbdesGlobalAstrometricMultibandFitConnections",
+    "GbdesGlobalAstrometricMultibandFitTask",
 ]
 
 
@@ -209,6 +213,38 @@ def _convert_to_ast_polymap_coefficients(coefficients):
 
     astPoly = astshim.PolyMap(polyArray, 2, options="IterInverse=1,NIterInverse=10,TolInverse=1e-7")
     return astPoly
+
+
+def _get_instruments(inputVisitSummaries):
+    """Make `wcsfit.Instrument` objects for all of the instruments and filters
+    used for the input visits. This also returns the indices to match the
+    visits to the instrument/filter used.
+
+    Parameters
+    ----------
+    inputVisitSummaries: `list` [`lsst.afw.table.ExposureCatalog`]
+        List of catalogs with per-detector summary information.
+
+    Returns
+    -------
+    instruments : `list` [`wcsfit.Instrument`]
+        List of instrument objects.
+    instrumentIndices : `list` [`int`]
+        Indices matching each visit to the instrument/filter used.
+    """
+    instruments = []
+    filters = []
+    instrumentIndices = []
+    for visitSummary in inputVisitSummaries:
+        filter = visitSummary[0]["physical_filter"]
+        instrumentName = visitSummary[0].getVisitInfo().instrumentLabel
+        if filter not in filters:
+            filters.append(filter)
+            filter_instrument = wcsfit.Instrument(instrumentName)
+            filter_instrument.band = filter
+            instruments.append(filter_instrument)
+        instrumentIndices.append(filters.index(filter))
+    return instruments, instrumentIndices
 
 
 class GbdesAstrometricFitConnections(
@@ -572,12 +608,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 needed as input for future runs.
         """
         self.log.info("Gather instrument, exposure, and field info")
-        # Set up an instrument object
-        instrument = wcsfit.Instrument(instrumentName)
 
         # Get RA, Dec, MJD, etc., for the input visits
-        exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(
-            inputVisitSummaries, instrument
+        exposureInfo, exposuresHelper, extensionInfo, instruments = self._get_exposure_info(
+            inputVisitSummaries
         )
 
         # Get information about the extent of the input visits
@@ -588,7 +622,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         # friends-of-friends algorithm
         associations = wcsfit.FoFClass(
             fields,
-            [instrument],
+            instruments,
             exposuresHelper,
             [fieldRadius.asDegrees()],
             (self.config.matchRadius * u.arcsec).to(u.degree).value,
@@ -634,7 +668,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         fixMaps = ",".join([f"HSC/{i}/poly" for i in exposureInfo.detectors])
         wcsf = wcsfit.WCSFit(
             fields,
-            [instrument],
+            instruments,
             exposuresHelper,
             extensionInfo.visitIndex,
             extensionInfo.detectorIndex,
@@ -732,9 +766,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
     def _get_exposure_info(
         self,
         inputVisitSummaries,
-        instrument,
         fieldNumber=0,
-        instrumentNumber=0,
         refEpoch=None,
         fieldRegions=None,
     ):
@@ -745,14 +777,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         ----------
         inputVisitSummaries : `list [`lsst.afw.table.ExposureCatalog`]
             Tables for each visit with information for detectors.
-        instrument : `wcsfit.Instrument`
-            Instrument object to which detector information is added.
         fieldNumber : `int`, optional
             Index of the field for these visits. Should be zero if all data is
             being fit together. This is ignored if `fieldRegions` is not None.
-        instrumentNumber : `int`, optional
-            Index of the instrument for these visits. Should be zero if all
-            data comes from the same instrument.
         refEpoch : `float`, optional
             Epoch of the reference objects in MJD.
         fieldRegions : `dict` [`int`, `lsst.sphgeom.ConvexPolygon`], optional
@@ -789,6 +816,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 Initial WCS for this extension.
             ``extensionType`` : `np.ndarray` [`str`]
                 "SCIENCE" or "REFERENCE".
+        instruments : `list` [`wcsfit.Instrument`]
+            List of instrument objects used for the input visits.
         """
         exposureNames = []
         ras = []
@@ -807,6 +836,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         extensionDetectorIndices = []
         extensionVisits = []
         extensionDetectors = []
+
+        instruments, instrumentNumbers = _get_instruments(inputVisitSummaries)
+
         # Get information for all the science visits
         for v, visitSummary in enumerate(inputVisitSummaries):
             visitInfo = visitSummary[0].getVisitInfo()
@@ -863,10 +895,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
                 if detector not in detectors:
                     detectors.append(detector)
+                if not instruments[instrumentNumbers[v]].hasDevice(str(detector)):
                     detectorBounds = wcsfit.Bounds(
                         row["bbox_min_x"], row["bbox_max_x"], row["bbox_min_y"], row["bbox_max_y"]
                     )
-                    instrument.addDevice(str(detector), detectorBounds)
+                    instruments[instrumentNumbers[v]].addDevice(str(detector), detectorBounds)
 
                 detectorIndex = np.flatnonzero(detector == np.array(detectors))[0]
                 extensionVisitIndices.append(v)
@@ -874,8 +907,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 extensionVisits.append(visit)
                 extensionDetectors.append(detector)
                 extensionType.append("SCIENCE")
-
-        instrumentNumbers = list(np.ones(len(exposureNames), dtype=int) * instrumentNumber)
 
         # Set the reference epoch to be the median of the science visits.
         # The reference catalog will be shifted to this date.
@@ -940,7 +971,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             visits=visits, detectors=detectors, ras=ras, decs=decs, medianEpoch=medianEpoch
         )
 
-        return exposureInfo, exposuresHelper, extensionInfo
+        return exposureInfo, exposuresHelper, extensionInfo, instruments
 
     def _load_refcat(
         self,
@@ -1189,7 +1220,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 goodShapes = xyCov**2 <= (xCov * yCov)
                 selected = self.sourceSelector.run(detectorSources)
                 goodInds = selected.selected & goodShapes
-
                 isStar = np.ones(goodInds.sum())
                 extensionIndex = self._find_extension_index(extensionInfo, visit, detector)
                 if extensionIndex is None:
@@ -1304,7 +1334,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         else:
             inputYaml = wcsfit.YAMLCollector("", "PixelMapCollection")
         inputDict = {}
-        modelComponents = ["INSTRUMENT/DEVICE", "EXPOSURE"]
+        modelComponents = ["BAND/DEVICE", "EXPOSURE"]
         baseMap = {"Type": "Composite", "Elements": modelComponents}
         inputDict["EXPOSURE/DEVICE/base"] = baseMap
 
@@ -1314,7 +1344,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         yMax = str(inputVisitSummary["bbox_max_y"].max())
 
         deviceModel = {"Type": "Composite", "Elements": self.config.deviceModel.list()}
-        inputDict["INSTRUMENT/DEVICE"] = deviceModel
+        inputDict["BAND/DEVICE"] = deviceModel
         for component in self.config.deviceModel:
             if "poly" in component.lower():
                 componentDict = {
@@ -1600,7 +1630,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         mapParams = wcsf.mapCollection.getParamDict()
         cameraParams = {}
         if self.config.saveCameraModel:
-            for element in mapTemplate["INSTRUMENT/DEVICE"]["Elements"]:
+            for element in mapTemplate["BAND/DEVICE"]["Elements"]:
                 for detector in exposureInfo.detectors:
                     detectorTemplate = element.replace("DEVICE", str(detector))
                     detectorTemplate = detectorTemplate.replace("BAND", ".+")
@@ -1654,7 +1684,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                     # this visit.
                     genericElements = mapTemplate["EXPOSURE/DEVICE/base"]["Elements"]
                     mapElements = []
-                    instrument = visitSummary[0].getVisitInfo().instrumentLabel
+                    band = visitSummary[0]["physical_filter"]
+
                     # Go through the generic map components to build the names
                     # of the specific maps for this extension.
                     for component in genericElements:
@@ -1664,7 +1695,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                             # instrument name currently. This will need to be
                             # disambiguated if we run on multiple bands at
                             # once.
-                            element = element.replace("BAND", str(instrument))
+                            element = element.replace("BAND", str(band))
                             element = element.replace("EXPOSURE", str(visit))
                             element = element.replace("DEVICE", str(detector))
                             mapElements.append(element)
@@ -1739,6 +1770,44 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             modelParams[key] = np.array(value)
 
         return modelParams
+
+
+class GbdesAstrometricMultibandFitConnections(
+    GbdesAstrometricFitConnections, dimensions=("skymap", "tract", "instrument")
+):
+    outputCatalog = pipeBase.connectionTypes.Output(
+        doc=(
+            "Catalog of sources used in fit, along with residuals in pixel coordinates and tangent "
+            "plane coordinates and chisq values."
+        ),
+        name="gbdesAstrometricMultibandFit_fitStars",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "skymap", "tract"),
+    )
+    starCatalog = pipeBase.connectionTypes.Output(
+        doc=(
+            "Catalog of best-fit object positions. Also includes the fit proper motion and parallax if "
+            "fitProperMotion is True."
+        ),
+        name="gbdesAstrometricMultibandFit_starCatalog",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "skymap", "tract"),
+    )
+    modelParams = pipeBase.connectionTypes.Output(
+        doc="WCS parameters and covariance.",
+        name="gbdesAstrometricMultibandFit_modelParams",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "skymap", "tract"),
+    )
+
+
+class GbdesAstrometricMultibandFitTask(GbdesAstrometricFitTask):
+    """Calibrate the WCS across multiple visits in multiple filters of the same
+    field using the GBDES package.
+    """
+
+    ConfigClass = GbdesAstrometricFitConfig
+    _DefaultName = "gbdesAstrometricMultibandFit"
 
 
 class GbdesGlobalAstrometricFitConnections(
@@ -1978,15 +2047,13 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                 needed as input for future runs.
         """
         self.log.info("Gather instrument, exposure, and field info")
-        # Set up an instrument object
-        instrument = wcsfit.Instrument(instrumentName)
 
         # Get information about the extent of the input visits
         fields, fieldRegions = self._prep_sky(inputVisitSummaries)
 
         # Get RA, Dec, MJD, etc., for the input visits
-        exposureInfo, exposuresHelper, extensionInfo = self._get_exposure_info(
-            inputVisitSummaries, instrument, fieldRegions=fieldRegions
+        exposureInfo, exposuresHelper, extensionInfo, instruments = self._get_exposure_info(
+            inputVisitSummaries, fieldRegions=fieldRegions
         )
 
         self.log.info("Load associated sources")
@@ -2026,7 +2093,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         # isolated star sources plus the reference catalog.
         wcsf = wcsfit.WCSFit(
             fields,
-            [instrument],
+            instruments,
             exposuresHelper,
             extensionInfo.visitIndex,
             extensionInfo.detectorIndex,
@@ -2341,3 +2408,42 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                     "xyCov": np.array(sourceCat["xyCov"]),
                 }
                 wcsf.setObjects(extensionIndex, d, "x", "y", ["xCov", "yCov", "xyCov"])
+
+
+class GbdesGlobalAstrometricMultibandFitConnections(
+    GbdesGlobalAstrometricFitConnections,
+    dimensions=("instrument",),
+):
+    outputCatalog = pipeBase.connectionTypes.Output(
+        doc=(
+            "Catalog of sources used in fit, along with residuals in pixel coordinates and tangent "
+            "plane coordinates and chisq values."
+        ),
+        name="gbdesGlobalAstrometricMultibandFit_fitStars",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument",),
+    )
+    starCatalog = pipeBase.connectionTypes.Output(
+        doc=(
+            "Catalog of best-fit object positions. Also includes the fit proper motion and parallax if "
+            "fitProperMotion is True."
+        ),
+        name="gbdesGlobalAstrometricMultibandFit_starCatalog",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument",),
+    )
+    modelParams = pipeBase.connectionTypes.Output(
+        doc="WCS parameters and covariance.",
+        name="gbdesGlobalAstrometricMultibandFit_modelParams",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument",),
+    )
+
+
+class GbdesGlobalAstrometricMultibandFitTask(GbdesGlobalAstrometricFitTask):
+    """Calibrate the WCS across multiple visits in multiple filters and
+    multiple fields using the GBDES package.
+    """
+
+    ConfigClass = GbdesGlobalAstrometricFitConfig
+    _DefaultName = "gbdesAstrometricMultibandFit"

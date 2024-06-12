@@ -64,7 +64,6 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.fieldNumber = 0
         cls.nFields = 1
         cls.instrumentName = "HSC"
-        cls.instrument = wcsfit.Instrument(cls.instrumentName)
         cls.refEpoch = 57205.5
 
         # Make test inputVisitSummary. VisitSummaryTables are taken from
@@ -88,9 +87,12 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.config.saveCameraModel = True
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
-        cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
-            cls.inputVisitSummary, cls.instrument, refEpoch=cls.refEpoch
-        )
+        (
+            cls.exposureInfo,
+            cls.exposuresHelper,
+            cls.extensionInfo,
+            cls.instruments,
+        ) = cls.task._get_exposure_info(cls.inputVisitSummary, refEpoch=cls.refEpoch)
 
         cls.fields, cls.fieldCenter, cls.fieldRadius = cls.task._prep_sky(
             cls.inputVisitSummary, cls.exposureInfo.medianEpoch
@@ -406,7 +408,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
             for d, detector in enumerate(visitSum):
                 detectorId = detector["id"]
-                detectorMapName = f"HSC/{detectorId}/poly"
+                filterName = detector["physical_filter"]
+                detectorMapName = f"{filterName}/{detectorId}/poly"
                 detectorModel = model[detectorMapName]
 
                 detectorMapType = detectorModel["Type"]
@@ -490,7 +493,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
         tmpAssociations = wcsfit.FoFClass(
             self.fields,
-            [self.instrument],
+            self.instruments,
             self.exposuresHelper,
             [self.fieldRadius.asDegrees()],
             (self.task.config.matchRadius * u.arcsec).to(u.degree).value,
@@ -520,14 +523,13 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         # Running `_load_catalogs_and_associate` changes the input WCSs, so
         # recalculate them here so that the variables shared among tests are
         # not affected.
-        instrument = wcsfit.Instrument(self.instrumentName)
-        _, exposuresHelper, extensionInfo = self.task._get_exposure_info(
-            self.inputVisitSummary, instrument, refEpoch=self.refEpoch
+        _, exposuresHelper, extensionInfo, instruments = self.task._get_exposure_info(
+            self.inputVisitSummary, refEpoch=self.refEpoch
         )
 
         tmpAssociations = wcsfit.FoFClass(
             self.fields,
-            [self.instrument],
+            self.instruments,
             exposuresHelper,
             [self.fieldRadius.asDegrees()],
             (self.task.config.matchRadius * u.arcsec).to(u.degree).value,
@@ -606,7 +608,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                 np.testing.assert_array_less(absDiffY, 1e-6)
             for d, detectorRow in enumerate(visitSummary):
                 detectorId = detectorRow["id"]
-                detectorMapName = f"HSC/{detectorId}/poly"
+                filterName = detectorRow["physical_filter"]
+                detectorMapName = f"{filterName}/{detectorId}/poly"
                 origModel = self.trueModel[detectorMapName]
                 if (origModel["Type"] != "Identity") and (v == 0):
                     fitModel = outputMaps[detectorMapName]
@@ -700,7 +703,6 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
 
         cls.nFields = 2
         cls.instrumentName = "HSC"
-        cls.instrument = wcsfit.Instrument(cls.instrumentName)
         cls.refEpoch = 57205.5
 
         # Make test inputVisitSummary. VisitSummaryTables are taken from
@@ -725,9 +727,12 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
 
         cls.fields, cls.fieldRegions = cls.task._prep_sky(cls.inputVisitSummary)
 
-        cls.exposureInfo, cls.exposuresHelper, cls.extensionInfo = cls.task._get_exposure_info(
-            cls.inputVisitSummary, cls.instrument, fieldRegions=cls.fieldRegions
-        )
+        (
+            cls.exposureInfo,
+            cls.exposuresHelper,
+            cls.extensionInfo,
+            cls.instruments,
+        ) = cls.task._get_exposure_info(cls.inputVisitSummary, fieldRegions=cls.fieldRegions)
 
         refDataIds, deferredRefCats = [], []
         allStarIds = []
