@@ -19,6 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 __all__ = [
     "AssembleCoaddTask",
     "AssembleCoaddConnections",
@@ -138,10 +140,14 @@ class AssembleCoaddConnections(
 class AssembleCoaddConfig(
     CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig, pipelineConnections=AssembleCoaddConnections
 ):
-    warpType = pexConfig.Field(
+    warpType = pexConfig.ChoiceField(
         doc="Warp name: one of 'direct' or 'psfMatched'",
         dtype=str,
         default="direct",
+        allowed={
+            "direct": "Weighted mean of directWarps, with outlier rejection",
+            "psfMatched": "Weighted mean of PSF-matched warps",
+        },
     )
     subregionSize = pexConfig.ListField(
         dtype=int,
@@ -201,11 +207,16 @@ class AssembleCoaddConfig(
         dtype=bool,
         default=False,
     )
+    # TODO: Remove this field in DM-44791 after v28 release is cut.
     doUsePsfMatchedPolygons = pexConfig.Field(
         doc="Use ValidPolygons from shrunk Psf-Matched Calexps? Should be set "
         "to True by CompareWarp only.",
         dtype=bool,
         default=False,
+        deprecated=(
+            "This configuration is handled internally and deprecated "
+            "without replacement. This will be removed after v28."
+        ),
     )
     maskPropagationThresholds = pexConfig.DictField(
         keytype=str,
@@ -327,6 +338,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
     ConfigClass = AssembleCoaddConfig
     _DefaultName = "assembleCoadd"
+
+    _doUsePsfMatchedPolygons: bool = False
+    """Use ValidPolygons from shrunk Psf-Matched Calexps?
+
+    This needs to be set to True by child classes that use compare Psf-Matched
+    warps to non Psf-Matched warps.
+    """
 
     def __init__(self, *args, **kwargs):
         # TODO: DM-17415 better way to handle previously allowed passed args
@@ -756,7 +774,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         for tempExp, weight in zip(tempExpList, weightList):
             self.inputRecorder.addVisitToCoadd(coaddInputs, tempExp, weight)
 
-        if self.config.doUsePsfMatchedPolygons:
+        if self._doUsePsfMatchedPolygons:
             self.shrinkValidPolygons(coaddInputs)
 
         coaddInputs.visits.sort()
@@ -1016,12 +1034,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         mask : `lsst.afw.image.Mask`
             Updated mask.
         """
-        if self.config.doUsePsfMatchedPolygons:
+        if self._doUsePsfMatchedPolygons:
             if ("NO_DATA" in altMaskSpans) and ("NO_DATA" in self.config.badMaskPlanes):
                 # Clear away any other masks outside the validPolygons. These
                 # pixels are no longer contributing to inexact PSFs, and will
                 # still be rejected because of NO_DATA.
-                # self.config.doUsePsfMatchedPolygons should be True only in
+                # self._doUsePsfMatchedPolygons should be True only in
                 # CompareWarpAssemble. This mask-clearing step must only occur
                 # *before* applying the new masks below.
                 for spanSet in altMaskSpans["NO_DATA"]:
@@ -1316,7 +1334,6 @@ class CompareWarpAssembleCoaddConfig(
     def setDefaults(self):
         AssembleCoaddConfig.setDefaults(self)
         self.statistic = "MEAN"
-        self.doUsePsfMatchedPolygons = True
 
         # Real EDGE removed by psfMatched NO_DATA border half the width of the
         # matching kernel. CompareWarp applies psfMatched EDGE pixels to
@@ -1414,6 +1431,9 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
     ConfigClass = CompareWarpAssembleCoaddConfig
     _DefaultName = "compareWarpAssembleCoadd"
+
+    # See the parent class for docstring.
+    _doUsePsfMatchedPolygons: bool = True
 
     def __init__(self, *args, **kwargs):
         AssembleCoaddTask.__init__(self, *args, **kwargs)
