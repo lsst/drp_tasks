@@ -397,17 +397,34 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         else:
             warpRefList = inputData["inputWarps"]
 
-        inputs = self.prepareInputs(warpRefList)
-        self.log.info("Found %d %s", len(inputs.tempExpRefList), self.getTempExpDatasetName(self.warpType))
-        if len(inputs.tempExpRefList) == 0:
+        # Although psfMatchedWarps are specifically required by only by a
+        # specific set of a subclass, and since runQuantum is not overridden,
+        # the selection and filtering must happen here on a conditional basis.
+        # Otherwise, the elements in the various lists will not line up.
+        # This design cries out for a refactor, which is planned in DM-38630.
+        if self._doUsePsfMatchedPolygons:
+            if self.config.doSelectVisits:
+                psfMatchedWarpRefList = self.filterWarps(
+                    inputData["psfMatchedWarps"],
+                    inputData["selectedVisits"],
+                )
+            else:
+                psfMatchedWarpRefList = inputData["psfMatchedWarps"]
+        else:
+            psfMatchedWarpRefList = []
+
+        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
+        self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
+        if len(inputs.warpRefList) == 0:
             raise pipeBase.NoWorkFound("No coadd temporary exposures found")
 
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
         retStruct = self.run(
             inputData["skyInfo"],
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            warpRefList=inputs.warpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
+            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
             supplementaryData=supplementaryData,
         )
 
@@ -475,7 +492,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def makeSupplementaryDataGen3(self, butlerQC, inputRefs, outputRefs):
         return self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
 
-    def prepareInputs(self, refList):
+    def prepareInputs(self, refList, psfMatchedWarpRefList=None):
         """Prepare the input warps for coaddition by measuring the weight for
         each warp and the scaling for the photometric zero point.
 
@@ -487,15 +504,17 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         Parameters
         ----------
         refList : `list`
-            List of data references to tempExp.
+            List of data references to warp.
+        psfMatchedWarpRefList : `list` | None, optional
+            List of data references to psfMatchedWarp.
 
         Returns
         -------
         result : `~lsst.pipe.base.Struct`
             Results as a struct with attributes:
 
-            ``tempExprefList``
-                `list` of data references to tempExp.
+            ``warpRefList``
+                `list` of data references to warp.
             ``weightList``
                 `list` of weightings.
             ``imageScalerList``
@@ -506,28 +525,33 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         statsCtrl.setNumIter(self.config.clipIter)
         statsCtrl.setAndMask(self.getBadPixelMask())
         statsCtrl.setNanSafe(True)
-        # compute tempExpRefList: a list of tempExpRef that actually exist
-        # and weightList: a list of the weight of the associated coadd tempExp
+        # compute warpRefList: a list of warpRef that actually exist
+        # and weightList: a list of the weight of the associated coadd warp
         # and imageScalerList: a list of scale factors for the associated coadd
-        # tempExp.
-        tempExpRefList = []
+        # warp.
+        warpRefList = []
         weightList = []
         imageScalerList = []
-        tempExpName = self.getTempExpDatasetName(self.warpType)
-        for tempExpRef in refList:
-            tempExp = tempExpRef.get()
+        outputPsfMatchedWarpRefList = []
+
+        if not psfMatchedWarpRefList:
+            psfMatchedWarpRefList = [None] * len(refList)
+
+        warpName = self.getTempExpDatasetName(self.warpType)
+        for warpRef, psfMatchedWarpRef in zip(refList, psfMatchedWarpRefList, strict=True):
+            warp = warpRef.get()
             # Ignore any input warp that is empty of data
-            if numpy.isnan(tempExp.image.array).all():
+            if numpy.isnan(warp.image.array).all():
                 continue
-            maskedImage = tempExp.getMaskedImage()
+            maskedImage = warp.getMaskedImage()
             imageScaler = self.scaleZeroPoint.computeImageScaler(
-                exposure=tempExp,
-                dataRef=tempExpRef,  # FIXME
+                exposure=warp,
+                dataRef=warpRef,  # FIXME
             )
             try:
                 imageScaler.scaleMaskedImage(maskedImage)
             except Exception as e:
-                self.log.warning("Scaling failed for %s (skipping it): %s", tempExpRef.dataId, e)
+                self.log.warning("Scaling failed for %s (skipping it): %s", warpRef.dataId, e)
                 continue
             statObj = afwMath.makeStatistics(
                 maskedImage.getVariance(), maskedImage.getMask(), afwMath.MEANCLIP, statsCtrl
@@ -535,19 +559,23 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             meanVar, meanVarErr = statObj.getResult(afwMath.MEANCLIP)
             weight = 1.0 / float(meanVar)
             if not numpy.isfinite(weight):
-                self.log.warning("Non-finite weight for %s: skipping", tempExpRef.dataId)
+                self.log.warning("Non-finite weight for %s: skipping", warpRef.dataId)
                 continue
-            self.log.info("Weight of %s %s = %0.3f", tempExpName, tempExpRef.dataId, weight)
+            self.log.info("Weight of %s %s = %0.3f", warpName, warpRef.dataId, weight)
 
             del maskedImage
-            del tempExp
+            del warp
 
-            tempExpRefList.append(tempExpRef)
+            warpRefList.append(warpRef)
             weightList.append(weight)
             imageScalerList.append(imageScaler)
+            outputPsfMatchedWarpRefList.append(psfMatchedWarpRef)
 
         return pipeBase.Struct(
-            tempExpRefList=tempExpRefList, weightList=weightList, imageScalerList=imageScalerList
+            warpRefList=warpRefList,
+            weightList=weightList,
+            imageScalerList=imageScalerList,
+            psfMatchedWarpRefList=outputPsfMatchedWarpRefList,
         )
 
     def prepareStats(self, mask=None):
@@ -588,9 +616,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def run(
         self,
         skyInfo,
-        tempExpRefList,
+        *,
+        warpRefList,
         imageScalerList,
         weightList,
+        psfMatchedWarpRefList=None,
         altMaskList=None,
         mask=None,
         supplementaryData=None,
@@ -609,15 +639,17 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         ----------
         skyInfo : `~lsst.pipe.base.Struct`
             Struct with geometric information about the patch.
-        tempExpRefList : `list`
+        warpRefList : `list`
             List of data references to Warps (previously called CoaddTempExps).
         imageScalerList : `list`
             List of image scalers.
         weightList : `list`
             List of weights.
+        psfMatchedWarpRefList : `list`, optional
+            List of data references to psfMatchedWarps.
         altMaskList : `list`, optional
             List of alternate masks to use rather than those stored with
-            tempExp.
+            warp.
         mask : `int`, optional
             Bit mask value to exclude from coaddition.
         supplementaryData : `~lsst.pipe.base.Struct`, optional
@@ -649,20 +681,20 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         lsst.pipe.base.NoWorkFound
             Raised if no data references are provided.
         """
-        tempExpName = self.getTempExpDatasetName(self.warpType)
-        self.log.info("Assembling %s %s", len(tempExpRefList), tempExpName)
-        if not tempExpRefList:
+        warpName = self.getTempExpDatasetName(self.warpType)
+        self.log.info("Assembling %s %s", len(warpRefList), warpName)
+        if not warpRefList:
             raise pipeBase.NoWorkFound("No exposures provided for co-addition.")
 
         stats = self.prepareStats(mask=mask)
 
         if altMaskList is None:
-            altMaskList = [None] * len(tempExpRefList)
+            altMaskList = [None] * len(warpRefList)
 
         coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
         coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
         coaddExposure.getInfo().setCoaddInputs(self.inputRecorder.makeCoaddInputs())
-        self.assembleMetadata(coaddExposure, tempExpRefList, weightList)
+        self.assembleMetadata(coaddExposure, warpRefList, weightList, psfMatchedWarpRefList)
         coaddMaskedImage = coaddExposure.getMaskedImage()
         subregionSizeArr = self.config.subregionSize
         subregionSize = geom.Extent2I(subregionSizeArr[0], subregionSizeArr[1])
@@ -683,7 +715,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             try:
                 self.assembleOnlineMeanCoadd(
                     coaddExposure,
-                    tempExpRefList,
+                    warpRefList,
                     imageScalerList,
                     weightList,
                     altMaskList,
@@ -699,7 +731,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                     self.assembleSubregion(
                         coaddExposure,
                         subBBox,
-                        tempExpRefList,
+                        warpRefList,
                         imageScalerList,
                         weightList,
                         altMaskList,
@@ -727,13 +759,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         return pipeBase.Struct(
             coaddExposure=coaddExposure,
             nImage=nImage,
-            warpRefList=tempExpRefList,
+            warpRefList=warpRefList,
             imageScalerList=imageScalerList,
             weightList=weightList,
             inputMap=inputMap,
         )
 
-    def assembleMetadata(self, coaddExposure, tempExpRefList, weightList):
+    def assembleMetadata(self, coaddExposure, warpRefList, weightList, psfMatchedWarpRefList=None):
         """Set the metadata for the coadd.
 
         This basic implementation sets the filter from the first input.
@@ -742,17 +774,22 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         ----------
         coaddExposure : `lsst.afw.image.Exposure`
             The target exposure for the coadd.
-        tempExpRefList : `list`
-            List of data references to tempExp.
+        warpRefList : `list`
+            List of data references to warp.
         weightList : `list`
             List of weights.
+        psfMatchedWarpRefList : `list` | None, optional
+            List of data references to psfMatchedWarps.
 
         Raises
         ------
         AssertionError
             Raised if there is a length mismatch.
         """
-        assert len(tempExpRefList) == len(weightList), "Length mismatch"
+        assert len(warpRefList) == len(weightList), "Length mismatch"
+
+        if psfMatchedWarpRefList:
+            assert len(warpRefList) == len(psfMatchedWarpRefList), "Length mismatch"
 
         # We load a single pixel of each coaddTempExp, because we just want to
         # get at the metadata (and we need more than just the PropertySet that
@@ -760,22 +797,24 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         # (see #2777).
         bbox = geom.Box2I(coaddExposure.getBBox().getMin(), geom.Extent2I(1, 1))
 
-        tempExpList = [tempExpRef.get(parameters={"bbox": bbox}) for tempExpRef in tempExpRefList]
+        warpList = [warpRef.get(parameters={"bbox": bbox}) for warpRef in warpRefList]
 
-        numCcds = sum(len(tempExp.getInfo().getCoaddInputs().ccds) for tempExp in tempExpList)
+        numCcds = sum(len(warp.getInfo().getCoaddInputs().ccds) for warp in warpList)
 
         # Set the coadd FilterLabel to the band of the first input exposure:
         # Coadds are calibrated, so the physical label is now meaningless.
-        coaddExposure.setFilter(afwImage.FilterLabel(tempExpList[0].getFilter().bandLabel))
+        coaddExposure.setFilter(afwImage.FilterLabel(warpList[0].getFilter().bandLabel))
         coaddInputs = coaddExposure.getInfo().getCoaddInputs()
         coaddInputs.ccds.reserve(numCcds)
-        coaddInputs.visits.reserve(len(tempExpList))
+        coaddInputs.visits.reserve(len(warpList))
 
-        for tempExp, weight in zip(tempExpList, weightList):
-            self.inputRecorder.addVisitToCoadd(coaddInputs, tempExp, weight)
-
+        # psfMatchedWarpRefList should be empty except in CompareWarpCoadd.
         if self._doUsePsfMatchedPolygons:
-            self.shrinkValidPolygons(coaddInputs)
+            # Set validPolygons for warp before addVisitToCoadd
+            self._setValidPolygons(warpList, psfMatchedWarpRefList)
+
+        for warp, weight in zip(warpList, weightList):
+            self.inputRecorder.addVisitToCoadd(coaddInputs, warp, weight)
 
         coaddInputs.visits.sort()
         coaddInputs.ccds.sort()
@@ -785,7 +824,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             # bounding its spatially-variable, pre-matched WarpedPsf.
             # Likewise, set the PSF of a PSF-Matched Coadd to the modelPsf
             # having the maximum width (sufficient because square)
-            modelPsfList = [tempExp.getPsf() for tempExp in tempExpList]
+            modelPsfList = [warp.getPsf() for warp in warpList]
             modelPsfWidthList = [
                 modelPsf.computeBBox(modelPsf.getAveragePosition()).getWidth() for modelPsf in modelPsfList
             ]
@@ -807,7 +846,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         self,
         coaddExposure,
         bbox,
-        tempExpRefList,
+        warpRefList,
         imageScalerList,
         weightList,
         altMaskList,
@@ -832,15 +871,15 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             The target exposure for the coadd.
         bbox : `lsst.geom.Box`
             Sub-region to coadd.
-        tempExpRefList : `list`
-            List of data reference to tempExp.
+        warpRefList : `list`
+            List of data reference to warp.
         imageScalerList : `list`
             List of image scalers.
         weightList : `list`
             List of weights.
         altMaskList : `list`
             List of alternate masks to use rather than those stored with
-            tempExp, or None.  Each element is dict with keys = mask plane
+            warp, or None.  Each element is dict with keys = mask plane
             name to which to add the spans.
         statsFlags : `lsst.afw.math.Property`
             Property object for statistic for coadd.
@@ -859,8 +898,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         maskedImageList = []
         if nImage is not None:
             subNImage = afwImage.ImageU(bbox.getWidth(), bbox.getHeight())
-        for tempExpRef, imageScaler, altMask in zip(tempExpRefList, imageScalerList, altMaskList):
-            exposure = tempExpRef.get(parameters={"bbox": bbox})
+        for warpRef, imageScaler, altMask in zip(warpRefList, imageScalerList, altMaskList):
+            exposure = warpRef.get(parameters={"bbox": bbox})
 
             maskedImage = exposure.getMaskedImage()
             mask = maskedImage.getMask()
@@ -895,7 +934,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             nImage.assign(subNImage, bbox)
 
     def assembleOnlineMeanCoadd(
-        self, coaddExposure, tempExpRefList, imageScalerList, weightList, altMaskList, statsCtrl, nImage=None
+        self, coaddExposure, warpRefList, imageScalerList, weightList, altMaskList, statsCtrl, nImage=None
     ):
         """Assemble the coadd using the "online" method.
 
@@ -906,15 +945,15 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         ----------
         coaddExposure : `lsst.afw.image.Exposure`
             The target exposure for the coadd.
-        tempExpRefList : `list`
-            List of data reference to tempExp.
+        warpRefList : `list`
+            List of data reference to warp.
         imageScalerList : `list`
             List of image scalers.
         weightList : `list`
             List of weights.
         altMaskList : `list`
             List of alternate masks to use rather than those stored with
-            tempExp, or None.  Each element is dict with keys = mask plane
+            warp, or None.  Each element is dict with keys = mask plane
             name to which to add the spans.
         statsCtrl : `lsst.afw.math.StatisticsControl`
             Statistics control object for coadd.
@@ -941,10 +980,10 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             compute_n_image=(nImage is not None),
         )
 
-        for tempExpRef, imageScaler, altMask, weight in zip(
-            tempExpRefList, imageScalerList, altMaskList, weightList
+        for warpRef, imageScaler, altMask, weight in zip(
+            warpRefList, imageScalerList, altMaskList, weightList
         ):
-            exposure = tempExpRef.get()
+            exposure = warpRef.get()
             maskedImage = exposure.getMaskedImage()
             mask = maskedImage.getMask()
             if altMask is not None:
@@ -1051,26 +1090,40 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 spanSet.clippedTo(mask.getBBox()).setMask(mask, 2**maskClipValue)
         return mask
 
-    def shrinkValidPolygons(self, coaddInputs):
-        """Shrink coaddInputs' ccds' ValidPolygons in place.
-
-        Either modify each ccd's validPolygon in place, or if CoaddInputs
-        does not have a validPolygon, create one from its bbox.
+    def _setValidPolygons(self, warpList, psfMatchedWarpRefList):
+        """Set the valid polygons for the warps the same as psfMatchedWarps, if
+        it exists.
 
         Parameters
         ----------
-        coaddInputs : `lsst.afw.image.coaddInputs`
-            Original mask.
+        warpList : `Iterable` [`lsst.afw.image.Exposure`]
+            List of warps.
+        psfMatchedWarpRefList : `Iterable` \
+            [`lsst.daf.butler.DeferredDatasetHandle`]
+            List of references to psfMatchedWarps, in the same order as
+            ``warpList``.
+
+        Raises
+        ------
+        AssertionError
+            Raised if the detector IDs in the coaddInputs do not match.
         """
-        for ccd in coaddInputs.ccds:
-            polyOrig = ccd.getValidPolygon()
-            validPolyBBox = polyOrig.getBBox() if polyOrig else ccd.getBBox()
-            validPolyBBox.grow(-self.config.matchingKernelSize // 2)
-            if polyOrig:
-                validPolygon = polyOrig.intersectionSingle(validPolyBBox)
-            else:
-                validPolygon = afwGeom.polygon.Polygon(geom.Box2D(validPolyBBox))
-            ccd.setValidPolygon(validPolygon)
+        for warp, psfMatchedWarpRef in zip(warpList, psfMatchedWarpRefList):
+            psfMatchedCcdTable = psfMatchedWarpRef.get(component="coaddInputs").ccds
+            ccdTable = warp.getInfo().getCoaddInputs().ccds
+            psfMatchedCcdTable.sort()
+            ccdTable.sort()
+            for idx in range(len(ccdTable)):
+                assert ccdTable[idx].id == psfMatchedCcdTable[idx].id, "ID mismatch"
+                if not psfMatchedCcdTable[idx].validPolygon:
+                    self.log.warning(
+                        "No validPolygon in PSF-matched warp found for %s. This is likely due to a mismatch "
+                        "in the LSST Science Pipelines version used to produce the warps and the current "
+                        "version.",
+                        ccdTable[idx].id,
+                    )
+                else:
+                    ccdTable[idx].validPolygon = psfMatchedCcdTable[idx].validPolygon
 
     def setBrightObjectMasks(self, exposure, brightObjectMasks, dataId=None):
         """Set the bright object masks.
@@ -1499,6 +1552,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             warpRefList=templateCoadd.warpRefList,
             imageScalerList=templateCoadd.imageScalerList,
             weightList=templateCoadd.weightList,
+            psfMatchedWarpRefList=inputRefs.psfMatchedWarps,
         )
 
     def _noTemplateMessage(self, warpType):
@@ -1520,7 +1574,16 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
     @utils.inheritDoc(AssembleCoaddTask)
     @timeMethod
-    def run(self, skyInfo, tempExpRefList, imageScalerList, weightList, supplementaryData):
+    def run(
+        self,
+        skyInfo,
+        *,
+        warpRefList,
+        imageScalerList,
+        weightList,
+        psfMatchedWarpRefList,
+        supplementaryData,
+    ):
         """Notes
         -----
         Assemble the coadd.
@@ -1533,7 +1596,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         # Check and match the order of the supplementaryData
         # (PSF-matched) inputs to the order of the direct inputs,
         # so that the artifact mask is applied to the right warp
-        dataIds = [ref.dataId for ref in tempExpRefList]
+        dataIds = [ref.dataId for ref in warpRefList]
         psfMatchedDataIds = [ref.dataId for ref in supplementaryData.warpRefList]
 
         if dataIds != psfMatchedDataIds:
@@ -1556,7 +1619,14 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         badPixelMask = afwImage.Mask.getPlaneBitMask(badMaskPlanes)
 
         result = AssembleCoaddTask.run(
-            self, skyInfo, tempExpRefList, imageScalerList, weightList, spanSetMaskList, mask=badPixelMask
+            self,
+            skyInfo,
+            warpRefList=warpRefList,
+            imageScalerList=imageScalerList,
+            weightList=weightList,
+            altMaskList=spanSetMaskList,
+            mask=badPixelMask,
+            psfMatchedWarpRefList=psfMatchedWarpRefList,
         )
 
         # Propagate PSF-matched EDGE pixels to coadd SENSOR_EDGE and
@@ -1583,7 +1653,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 for spanSet in visitMask["EDGE"]:
                     spanSet.clippedTo(mask.getBBox()).setMask(mask, maskValue)
 
-    def findArtifacts(self, templateCoadd, tempExpRefList, imageScalerList):
+    def findArtifacts(self, templateCoadd, warpRefList, imageScalerList):
         """Find artifacts.
 
         Loop through warps twice. The first loop builds a map with the count
@@ -1597,7 +1667,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         ----------
         templateCoadd : `lsst.afw.image.Exposure`
             Exposure to serve as model of static sky.
-        tempExpRefList : `list`
+        warpRefList : `list`
             List of data references to warps.
         imageScalerList : `list`
             List of image scalers.
@@ -1627,7 +1697,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         else:
             templateFootprints = None
 
-        for warpRef, imageScaler in zip(tempExpRefList, imageScalerList):
+        for warpRef, imageScaler in zip(warpRefList, imageScalerList):
             warpDiffExp = self._readAndComputeWarpDiff(warpRef, imageScaler, templateCoadd)
             if warpDiffExp is not None:
                 # This nImage only approximates the final nImage because it
@@ -1703,7 +1773,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                 spanSetBadMorphoList.append(spanSetStreak)
 
         if lsstDebug.Info(__name__).saveCountIm:
-            path = self._dataRef2DebugPath("epochCountIm", tempExpRefList[0], coaddLevel=True)
+            path = self._dataRef2DebugPath("epochCountIm", warpRefList[0], coaddLevel=True)
             epochCountImage.writeFits(path)
 
         for i, spanSetList in enumerate(spanSetArtifactList):

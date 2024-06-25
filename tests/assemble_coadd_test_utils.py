@@ -40,6 +40,7 @@ from lsst.geom import arcseconds, degrees
 from lsst.meas.algorithms.testUtils import plantSources
 from lsst.obs.base import MakeRawVisitInfoViaObsInfo
 from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderConfig, CoaddInputRecorderTask
+from lsst.pipe.tasks.make_psf_matched_warp import growValidPolygons
 from lsst.skymap import Index2D, PatchInfo
 
 __all__ = ["makeMockSkyInfo", "MockCoaddTestData"]
@@ -238,6 +239,7 @@ class MockCoaddTestData:
         tempExpInputRecorder = inputRecorder.makeCoaddTempExpRecorder(expId, num=1)
         tempExpInputRecorder.addCalExp(exposure, expId, nGoodPix)
         tempExpInputRecorder.finish(exposure, nGoodPix=nGoodPix)
+        growValidPolygons(exposure.getInfo().getCoaddInputs(), growBy=0)
 
     def makeCoaddTempExp(self, rawExposure, visitInfo, expId):
         """Add the metadata required by `AssembleCoaddTask` to an exposure.

@@ -69,7 +69,7 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
         "This should be tested separately."
         pass
 
-    def runQuantum(self, mockSkyInfo, warpRefList, *args):
+    def runQuantum(self, mockSkyInfo, warpRefList, **kwargs):
         """Modified interface for testing coaddition algorithms without a
         Butler.
 
@@ -92,9 +92,9 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
 
         retStruct = self.run(
             mockSkyInfo,
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            warpRefList=inputs.warpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
             supplementaryData=pipeBase.Struct(),
         )
         return retStruct
@@ -123,8 +123,8 @@ class MockCompareWarpAssembleCoaddTask(MockAssembleCoaddTask, CompareWarpAssembl
     def __init__(self, *args, **kwargs):
         CompareWarpAssembleCoaddTask.__init__(self, *args, **kwargs)
 
-    def runQuantum(self, mockSkyInfo, warpRefList, *args):
-        inputs = self.prepareInputs(warpRefList)
+    def runQuantum(self, mockSkyInfo, warpRefList, psfMatchedWarpRefList=None, *args):
+        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
 
         assembleStaticSkyModel = MockAssembleCoaddTask(config=self.config.assembleStaticSkyModel)
         templateCoadd = assembleStaticSkyModel.runQuantum(mockSkyInfo, warpRefList)
@@ -139,9 +139,10 @@ class MockCompareWarpAssembleCoaddTask(MockAssembleCoaddTask, CompareWarpAssembl
 
         retStruct = self.run(
             mockSkyInfo,
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            warpRefList=inputs.warpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
+            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
             supplementaryData=supplementaryData,
         )
         return retStruct
@@ -221,7 +222,11 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
     def checkRun(self, assembleTask, warpType="direct"):
         """Check that the task runs successfully."""
         dataRefList = self.dataRefListPsfMatched if warpType == "psfMatched" else self.dataRefList
-        result = assembleTask.runQuantum(self.skyInfo, dataRefList)
+        result = assembleTask.runQuantum(
+            self.skyInfo,
+            dataRefList,
+            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+        )
 
         # Check that we produced an exposure.
         self.assertTrue(result.coaddExposure is not None)
@@ -252,7 +257,11 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         assembleTask = MockInputMapAssembleCoaddTask(config=config)
 
         dataRefList = self.dataRefList
-        results = assembleTask.runQuantum(self.skyInfo, dataRefList)
+        results = assembleTask.runQuantum(
+            self.skyInfo,
+            dataRefList,
+            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+        )
         coadd = results.coaddExposure
 
         configOnline = MockInputMapAssembleCoaddConfig()
@@ -261,7 +270,11 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         configOnline.validate()
         assembleTaskOnline = MockInputMapAssembleCoaddTask(config=configOnline)
 
-        resultsOnline = assembleTaskOnline.runQuantum(self.skyInfo, dataRefList)
+        resultsOnline = assembleTaskOnline.runQuantum(
+            self.skyInfo,
+            dataRefList,
+            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+        )
         coaddOnline = resultsOnline.coaddExposure
 
         self.assertFloatsAlmostEqual(coaddOnline.image.array, coadd.image.array, rtol=1e-3)
@@ -291,7 +304,11 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
             exposures, matchedExposures, "direct", patch=patch, tract=tract
         )
 
-        results = assembleTask.runQuantum(self.skyInfo, dataRefList)
+        results = assembleTask.runQuantum(
+            self.skyInfo,
+            dataRefList,
+            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+        )
 
         inputMap = results.inputMap
         validPix, raPix, decPix = inputMap.valid_pixels_pos(return_pixels=True)

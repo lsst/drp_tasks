@@ -350,19 +350,21 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
 
         # Construct list of input Deferred Datasets
         warpRefList = inputData["inputWarps"]
+        psfMatchedWarpRefList = inputData["psfMatchedWarps"]
 
-        inputs = self.prepareInputs(warpRefList)
-        self.log.info("Found %d %s", len(inputs.tempExpRefList), self.getTempExpDatasetName(self.warpType))
-        if len(inputs.tempExpRefList) == 0:
+        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
+        self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
+        if len(inputs.warpRefList) == 0:
             self.log.warning("No coadd temporary exposures found")
             return
 
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
         retStruct = self.run(
             inputData["skyInfo"],
-            inputs.tempExpRefList,
-            inputs.imageScalerList,
-            inputs.weightList,
+            warpRefList=inputs.warpRefList,
+            imageScalerList=inputs.imageScalerList,
+            weightList=inputs.weightList,
+            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
             supplementaryData=supplementaryData,
         )
 
@@ -498,7 +500,17 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         return dcrModels
 
     @timeMethod
-    def run(self, skyInfo, warpRefList, imageScalerList, weightList, supplementaryData=None):
+    def run(
+        self,
+        skyInfo,
+        *,
+        warpRefList,
+        imageScalerList,
+        weightList,
+        psfMatchedWarpRefList=None,
+        supplementaryData=None,
+        **kwargs
+    ):
         r"""Assemble the coadd.
 
         Requires additional inputs Struct ``supplementaryData`` to contain a
@@ -527,12 +539,15 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         ----------
         skyInfo : `lsst.pipe.base.Struct`
             Patch geometry information, from getSkyInfo
-        warpRefList : `list` of `lsst.daf.butler.DeferredDatasetHandle`
+        warpRefList : `list` [`lsst.daf.butler.DeferredDatasetHandle`]
             The data references to the input warped exposures.
-        imageScalerList : `list` of `lsst.pipe.task.ImageScaler`
+        imageScalerList : `list` [`lsst.pipe.task.ImageScaler`]
             The image scalars correct for the zero point of the exposures.
-        weightList : `list` of `float`
-            The weight to give each input exposure in the coadd
+        weightList : `list` [`float`]
+            The weight to give each input exposure in the coadd.
+        psfMatchedWarpRefList : `list` \
+            [`lsst.daf.butler.DeferredDatasetHandle`], optional
+            The data references to the input PSF-matched warped exposures.
         supplementaryData : `lsst.pipe.base.Struct`
             Result struct returned by ``_makeSupplementaryData`` with
             attributes:
@@ -710,6 +725,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             skyInfo,
             warpRefList,
             weightList,
+            psfMatchedWarpRefList=psfMatchedWarpRefList,
             calibration=self.scaleZeroPoint.getPhotoCalib(),
             coaddInputs=templateCoadd.getInfo().getCoaddInputs(),
             mask=baseMask,
@@ -1109,6 +1125,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         skyInfo,
         warpRefList,
         weightList,
+        psfMatchedWarpRefList=None,
         calibration=None,
         coaddInputs=None,
         mask=None,
@@ -1153,7 +1170,12 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 coaddExposure.getInfo().setCoaddInputs(coaddInputs)
             # Set the metadata for the coadd, including PSF and aperture
             # corrections.
-            self.assembleMetadata(coaddExposure, warpRefList, weightList)
+            self.assembleMetadata(
+                coaddExposure,
+                warpRefList,
+                weightList,
+                psfMatchedWarpRefList=psfMatchedWarpRefList,
+            )
             # Overwrite the PSF
             coaddExposure.setPsf(dcrModels.psf)
             coaddUtils.setCoaddEdgeBits(dcrModels.mask[skyInfo.bbox], dcrModels.variance[skyInfo.bbox])
