@@ -1119,7 +1119,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                     self.log.warning(
                         "No validPolygon in PSF-matched warp found for %s. This is likely due to a mismatch "
                         "in the LSST Science Pipelines version used to produce the warps and the current "
-                        "version.",
+                        "version. To avoid this warning, regenerate the warps with the current version.",
                         ccdTable[idx].id,
                     )
                 else:
