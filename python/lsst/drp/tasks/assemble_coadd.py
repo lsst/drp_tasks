@@ -1105,25 +1105,40 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         Raises
         ------
-        AssertionError
-            Raised if the detector IDs in the coaddInputs do not match.
+        ValueError
+            Raised if PSF-matched warps have detectors that are absent in the
+            (direct) warps.
         """
         for warp, psfMatchedWarpRef in zip(warpList, psfMatchedWarpRefList):
             psfMatchedCcdTable = psfMatchedWarpRef.get(component="coaddInputs").ccds
             ccdTable = warp.getInfo().getCoaddInputs().ccds
-            psfMatchedCcdTable.sort()
-            ccdTable.sort()
-            for idx in range(len(ccdTable)):
-                assert ccdTable[idx].id == psfMatchedCcdTable[idx].id, "ID mismatch"
-                if not psfMatchedCcdTable[idx].validPolygon:
+
+            # In some (literal) edge cases, a small part of the CCD may be
+            # present in directWarp that gets excluded in psfMatchedWarp. It is
+            # okay to leave validPolygon for those CCDs empty. However, the
+            # converse is not expected, and an error is raised in that case.
+            if not set(psfMatchedCcdTable["id"]).issubset(ccdTable["id"]):
+                visit = psfMatchedWarpRef.dataId["visit"]
+                raise ValueError(f"PSF-matched warp has additional CCDs for {visit=}")
+
+            if len(psfMatchedCcdTable) < len(ccdTable):
+                self.log.debug(
+                    "PSF-matched warp has missing CCDs for visit = %d, which leaves some CCDs in the direct "
+                    "warp without a validPolygon",
+                    psfMatchedWarpRef.dataId["visit"],
+                )
+
+            for psfMatchedCcdRow in psfMatchedCcdTable:
+                if not psfMatchedCcdRow.validPolygon:
                     self.log.warning(
                         "No validPolygon in PSF-matched warp found for %s. This is likely due to a mismatch "
                         "in the LSST Science Pipelines version used to produce the warps and the current "
                         "version. To avoid this warning, regenerate the warps with the current version.",
-                        ccdTable[idx].id,
+                        psfMatchedCcdRow.id,
                     )
                 else:
-                    ccdTable[idx].validPolygon = psfMatchedCcdTable[idx].validPolygon
+                    ccdRow = ccdTable.find(value=psfMatchedCcdRow.id, key=ccdTable.getIdKey())
+                    ccdRow.validPolygon = psfMatchedCcdRow.validPolygon
 
     def setBrightObjectMasks(self, exposure, brightObjectMasks, dataId=None):
         """Set the bright object masks.
