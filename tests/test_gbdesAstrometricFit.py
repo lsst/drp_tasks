@@ -628,7 +628,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         extension and that the fit WCS for that extension returns a finite
         result.
         """
-        inputVisitSummary = self.inputVisitSummary.copy()
+        # Need to copy the catalogs since they are modified later.
+        inputVisitSummary = [cat.copy(deep=True) for cat in self.inputVisitSummary]
         # Set one WCS to be None
         testVisit = 0
         testDetector = 20
@@ -993,7 +994,8 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
         extension and that the fit WCS for that extension returns a finite
         result.
         """
-        inputVisitSummary = self.inputVisitSummary.copy()
+        # Need to copy the catalogs since they are modified later.
+        inputVisitSummary = [cat.copy(deep=True) for cat in self.inputVisitSummary]
         # Set one WCS to be None
         testVisit = 0
         testDetector = 20
