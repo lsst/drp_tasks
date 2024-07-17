@@ -392,6 +392,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"]
         )
 
+        # Attach the bounding box of the coadd this task is producing.
+        self.coadd_bbox = inputData["skyInfo"].bbox
+
         if self.config.doSelectVisits:
             warpRefList = self.filterWarps(inputData["inputWarps"], inputData["selectedVisits"])
         else:
@@ -547,7 +550,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         warpName = self.getTempExpDatasetName(self.warpType)
         for warpRef in refList:
-            warp = warpRef.get()
+            warp = warpRef.get(parameters={"bbox": self.coadd_bbox})
             # Ignore any input warp that is empty of data
             if numpy.isnan(warp.image.array).all():
                 continue
@@ -994,7 +997,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         for warpRef, imageScaler, altMask, weight in zip(
             warpRefList, imageScalerList, altMaskList, weightList
         ):
-            exposure = warpRef.get()
+            exposure = warpRef.get(parameters={"bbox": bbox})
             maskedImage = exposure.getMaskedImage()
             mask = maskedImage.getMask()
             if altMask is not None:
@@ -1927,7 +1930,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         if warpRef is None:
             return None
 
-        warp = warpRef.get()
+        warp = warpRef.get(parameters={"bbox": templateCoadd.getBBox()})
         # direct image scaler OK for PSF-matched Warp
         imageScaler.scaleMaskedImage(warp.getMaskedImage())
         mi = warp.getMaskedImage()

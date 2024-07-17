@@ -88,8 +88,8 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
         retStruct : `lsst.pipe.base.Struct`
             The coadded exposure and associated metadata.
         """
+        self.coadd_bbox = mockSkyInfo.bbox
         inputs = self.prepareInputs(warpRefList)
-
         retStruct = self.run(
             mockSkyInfo,
             warpRefList=inputs.warpRefList,
@@ -124,6 +124,7 @@ class MockCompareWarpAssembleCoaddTask(MockAssembleCoaddTask, CompareWarpAssembl
         CompareWarpAssembleCoaddTask.__init__(self, *args, **kwargs)
 
     def runQuantum(self, mockSkyInfo, warpRefList, psfMatchedWarpRefList=None, *args):
+        self.coadd_bbox = mockSkyInfo.bbox
         inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
 
         assembleStaticSkyModel = MockAssembleCoaddTask(config=self.config.assembleStaticSkyModel)
