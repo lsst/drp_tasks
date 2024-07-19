@@ -539,7 +539,10 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         warpName = self.getTempExpDatasetName(self.warpType)
         for warpRef, psfMatchedWarpRef in zip(refList, psfMatchedWarpRefList, strict=True):
-            bbox = psfMatchedWarpRef.get(component="bbox")
+            if psfMatchedWarpRef is None:
+                bbox = warpRef.get(component="bbox")
+            else:
+                bbox = psfMatchedWarpRef.get(component="bbox")
             warp = warpRef.get(parameters={"bbox": bbox})
             # Ignore any input warp that is empty of data
             if numpy.isnan(warp.image.array).all():
