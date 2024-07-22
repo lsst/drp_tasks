@@ -1121,6 +1121,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             (direct) warps.
         """
         for warp, psfMatchedWarpRef in zip(warpList, psfMatchedWarpRefList):
+            if psfMatchedWarpRef is None:
+                continue
+
             psfMatchedCcdTable = psfMatchedWarpRef.get(component="coaddInputs").ccds
             ccdTable = warp.getInfo().getCoaddInputs().ccds
 
