@@ -534,11 +534,19 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         imageScalerList = []
         outputPsfMatchedWarpRefList = []
 
-        if not psfMatchedWarpRefList:
-            psfMatchedWarpRefList = [None] * len(refList)
+        # Convert psfMatchedWarpRefList to a dict, so we can look them up by
+        # their dataId.
+        # Note: Some warps may not have a corresponding psfMatchedWarp, which
+        # could have happened due to a failure in the PSF matching, or not
+        # having enough good pixels to support the PSF-matching kernel.
+
+        if psfMatchedWarpRefList is None:
+            psfMatchedWarpRefDict = {ref.dataId: None for ref in refList}
+        else:
+            psfMatchedWarpRefDict = {ref.dataId: ref for ref in psfMatchedWarpRefList}
 
         warpName = self.getTempExpDatasetName(self.warpType)
-        for warpRef, psfMatchedWarpRef in zip(refList, psfMatchedWarpRefList, strict=True):
+        for warpRef in refList:
             warp = warpRef.get()
             # Ignore any input warp that is empty of data
             if numpy.isnan(warp.image.array).all():
@@ -569,6 +577,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             warpRefList.append(warpRef)
             weightList.append(weight)
             imageScalerList.append(imageScaler)
+
+            dataId = warpRef.dataId
+            psfMatchedWarpRef = psfMatchedWarpRefDict.get(dataId, None)
             outputPsfMatchedWarpRefList.append(psfMatchedWarpRef)
 
         return pipeBase.Struct(
@@ -1110,6 +1121,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             (direct) warps.
         """
         for warp, psfMatchedWarpRef in zip(warpList, psfMatchedWarpRefList):
+            if psfMatchedWarpRef is None:
+                continue
+
             psfMatchedCcdTable = psfMatchedWarpRef.get(component="coaddInputs").ccds
             ccdTable = warp.getInfo().getCoaddInputs().ccds
 
