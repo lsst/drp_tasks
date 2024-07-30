@@ -257,7 +257,7 @@ class UpdateVisitSummaryConnections(
             "Per-detector images to obtain image, mask, and variance from "
             "(embedded summary stats and other components are ignored)."
         ),
-        name="calexp",
+        name="initial_pvi",
         dimensions=("instrument", "detector", "visit"),
         storageClass="ExposureF",
         multiple=True,
@@ -317,7 +317,7 @@ class UpdateVisitSummaryConnections(
     )
     background_originals = cT.Input(
         doc="Per-detector original background that has already been subtracted from 'input_exposures'.",
-        name="calexpBackground",
+        name="initial_pvi_background",
         dimensions=("instrument", "visit", "detector"),
         storageClass="Background",
         multiple=True,
