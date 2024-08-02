@@ -23,6 +23,8 @@ import os.path
 import unittest
 from copy import copy
 
+import astropy.table
+import astropy.time
 import astropy.units as u
 import lsst.afw.geom as afwgeom
 import lsst.afw.table as afwTable
@@ -32,6 +34,7 @@ import numpy as np
 import pandas as pd
 import wcsfit
 import yaml
+from astropy.coordinates import Distance, SkyCoord
 from lsst import sphgeom
 from lsst.daf.base import PropertyList
 from lsst.drp.tasks.gbdesAstrometricFit import (
@@ -39,6 +42,7 @@ from lsst.drp.tasks.gbdesAstrometricFit import (
     GbdesAstrometricFitTask,
     GbdesGlobalAstrometricFitConfig,
     GbdesGlobalAstrometricFitTask,
+    calculate_apparent_motion,
 )
 from lsst.meas.algorithms import ReferenceObjectLoader
 from lsst.meas.algorithms.testUtils import MockRefcatDataId
@@ -1134,6 +1138,119 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
             colorCatalog=self.colorCatalog,
         )
         self.assertEqual(len(outputs.colorParams["visit"]), len(self.testVisits))
+
+
+class TestApparentMotion(lsst.utils.tests.TestCase):
+    """This class simulates an array of objects with random proper motions and
+    parallaxes and compares the results of
+    `lsst.drp.tasks.gbdesAstrometricFit.calculate_apparent_motion` against the
+    results calculated by astropy."""
+
+    def setUp(self):
+        np.random.seed(12345)
+
+        self.ras = (np.random.rand(10) + 150.0) * u.degree
+        self.decs = (np.random.rand(10) + 2.5) * u.degree
+
+        self.pmRAs = (np.random.random(10) * 10) * u.mas / u.yr
+        self.pmDecs = (np.random.random(10) * 10) * u.mas / u.yr
+
+        self.parallaxes = (abs(np.random.random(10) * 5)) * u.mas
+
+        self.mjds = astropy.time.Time(np.random.rand(10) * 20 + 57000, format="mjd", scale="tai")
+
+        self.refEpoch = astropy.time.Time(57100, format="mjd", scale="tai")
+
+    def test_proper_motion(self):
+        """Calculate the change in position due to proper motion only for a
+        given time change, and compare the results against astropy.
+        """
+        # Set parallaxes to zero to test proper motion part by itself.
+        parallaxes = np.zeros(len(self.ras)) * u.mas
+
+        data = astropy.table.Table(
+            {
+                "ra": self.ras,
+                "dec": self.decs,
+                "pmRA": self.pmRAs,
+                "pmDec": self.pmDecs,
+                "parallax": parallaxes,
+                "MJD": self.mjds,
+            }
+        )
+        raCorrection, decCorrection = calculate_apparent_motion(data, self.refEpoch)
+
+        pmRACosDec = self.pmRAs * np.cos(self.decs)
+        coords = SkyCoord(
+            ra=self.ras,
+            dec=self.decs,
+            pm_ra_cosdec=pmRACosDec,
+            pm_dec=self.pmDecs,
+            obstime=self.refEpoch,
+        )
+
+        newCoords = coords.apply_space_motion(new_obstime=self.mjds)
+        astropyDRA = newCoords.ra.degree - coords.ra.degree
+        astropyDDec = newCoords.dec.degree - coords.dec.degree
+
+        # The proper motion values are on the order of 0-3 mas/yr and the
+        # differences are on the scale of 1e-8 mas.
+        self.assertFloatsAlmostEqual(astropyDRA, raCorrection.value, rtol=1e-6)
+        self.assertFloatsAlmostEqual(astropyDDec, decCorrection.value, rtol=1e-6)
+
+    def test_parallax(self):
+        """Calculate the change in position due to parallax for a given time
+        change and compare the results against astropy. Astropy will not give
+        the parallax part separate from other sources of space motion, such as
+        annual aberration, but it can be obtained by comparing the calculated
+        positions of an object with a given parallax and one with a much
+        further distance. The result is still only approximately the same, but
+        is close enough for accuracy needed here.
+        """
+        # Set proper motions to zero to test parallax correction by itself.
+        pms = np.zeros(len(self.ras)) * u.mas / u.yr
+
+        data = astropy.table.Table(
+            {
+                "ra": self.ras,
+                "dec": self.decs,
+                "pmRA": pms,
+                "pmDec": pms,
+                "parallax": self.parallaxes,
+                "MJD": self.mjds,
+            }
+        )
+        raCorrection, decCorrection = calculate_apparent_motion(data, self.refEpoch)
+
+        coords = SkyCoord(
+            ra=self.ras,
+            dec=self.decs,
+            pm_ra_cosdec=pms,
+            pm_dec=pms,
+            distance=Distance(parallax=self.parallaxes),
+            obstime=self.refEpoch,
+        )
+        # Make another set of objects at the same coordinates but a much
+        # greater distant in order to isolate parallax when applying space
+        # motion.
+        refCoords = SkyCoord(
+            ra=self.ras,
+            dec=self.decs,
+            pm_ra_cosdec=pms,
+            pm_dec=pms,
+            distance=1e10 * Distance(parallax=self.parallaxes),
+            obstime=self.refEpoch,
+        )
+
+        newCoords = coords.apply_space_motion(new_obstime=self.mjds).transform_to("gcrs")
+        refNewCoords = refCoords.apply_space_motion(new_obstime=self.mjds).transform_to("gcrs")
+        astropyDRA = newCoords.ra.degree - refNewCoords.ra.degree
+        astropyDDec = newCoords.dec.degree - refNewCoords.dec.degree
+
+        # The parallax values are on the scale of 1-3 mas, and the difference
+        # between the two calculation methods is ~0.05 mas.
+        self.assertFloatsAlmostEqual(astropyDRA, raCorrection.value, rtol=2e-2)
+        self.assertFloatsAlmostEqual(astropyDDec, decCorrection.value, rtol=2e-2)
 
 
 def setup_module(module):
