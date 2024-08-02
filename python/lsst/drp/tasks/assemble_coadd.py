@@ -413,7 +413,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         else:
             psfMatchedWarpRefList = []
 
-        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
+        inputs = self.prepareInputs(warpRefList, inputData["skyInfo"].bbox, psfMatchedWarpRefList)
         self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
         if len(inputs.warpRefList) == 0:
             raise pipeBase.NoWorkFound("No coadd temporary exposures found")
@@ -492,7 +492,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def makeSupplementaryDataGen3(self, butlerQC, inputRefs, outputRefs):
         return self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
 
-    def prepareInputs(self, refList, psfMatchedWarpRefList=None):
+    def prepareInputs(self, refList, coadd_bbox, psfMatchedWarpRefList=None):
         """Prepare the input warps for coaddition by measuring the weight for
         each warp and the scaling for the photometric zero point.
 
@@ -547,7 +547,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         warpName = self.getTempExpDatasetName(self.warpType)
         for warpRef in refList:
-            warp = warpRef.get()
+            warp = warpRef.get(parameters={"bbox": coadd_bbox})
             # Ignore any input warp that is empty of data
             if numpy.isnan(warp.image.array).all():
                 continue
@@ -994,7 +994,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         for warpRef, imageScaler, altMask, weight in zip(
             warpRefList, imageScalerList, altMaskList, weightList
         ):
-            exposure = warpRef.get()
+            exposure = warpRef.get(parameters={"bbox": bbox})
             maskedImage = exposure.getMaskedImage()
             mask = maskedImage.getMask()
             if altMask is not None:
@@ -1927,7 +1927,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         if warpRef is None:
             return None
 
-        warp = warpRef.get()
+        warp = warpRef.get(parameters={"bbox": templateCoadd.getBBox()})
         # direct image scaler OK for PSF-matched Warp
         imageScaler.scaleMaskedImage(warp.getMaskedImage())
         mi = warp.getMaskedImage()
