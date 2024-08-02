@@ -392,9 +392,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"]
         )
 
-        # Attach the bounding box of the coadd this task is producing.
-        self.coadd_bbox = inputData["skyInfo"].bbox
-
         if self.config.doSelectVisits:
             warpRefList = self.filterWarps(inputData["inputWarps"], inputData["selectedVisits"])
         else:
@@ -416,7 +413,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         else:
             psfMatchedWarpRefList = []
 
-        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
+        inputs = self.prepareInputs(warpRefList, inputData["skyInfo"].bbox, psfMatchedWarpRefList)
         self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
         if len(inputs.warpRefList) == 0:
             raise pipeBase.NoWorkFound("No coadd temporary exposures found")
@@ -495,7 +492,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def makeSupplementaryDataGen3(self, butlerQC, inputRefs, outputRefs):
         return self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
 
-    def prepareInputs(self, refList, psfMatchedWarpRefList=None):
+    def prepareInputs(self, refList, coadd_bbox, psfMatchedWarpRefList=None):
         """Prepare the input warps for coaddition by measuring the weight for
         each warp and the scaling for the photometric zero point.
 
@@ -550,7 +547,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         warpName = self.getTempExpDatasetName(self.warpType)
         for warpRef in refList:
-            warp = warpRef.get(parameters={"bbox": self.coadd_bbox})
+            warp = warpRef.get(parameters={"bbox": coadd_bbox})
             # Ignore any input warp that is empty of data
             if numpy.isnan(warp.image.array).all():
                 continue
