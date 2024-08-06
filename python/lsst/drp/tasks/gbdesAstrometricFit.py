@@ -279,13 +279,11 @@ class GbdesAstrometricFitConnections(
         deferLoad=True,
         multiple=True,
     )
-    colorReferenceCatalog = pipeBase.connectionTypes.PrerequisiteInput(
+    colorCatalog = pipeBase.connectionTypes.Input(
         doc="The catalog of magnitudes to match to loaded input catalog sources.",
-        name="ps1_pv3_3pi_20170110",
+        name="fgcm_Cycle4_StandardStars",
         storageClass="SimpleCatalog",
-        dimensions=("skypix",),
-        deferLoad=True,
-        multiple=True,
+        dimensions=("instrument",),
     )
     inputCameraModel = pipeBase.connectionTypes.PrerequisiteInput(
         doc="Camera parameters to use for 'device' part of model",
@@ -342,7 +340,7 @@ class GbdesAstrometricFitConnections(
         super().__init__(config=config)
 
         if not self.config.useColor:
-            self.inputs.remove.colorReferenceCatalog
+            self.inputs.remove.colorCatalog
         if not self.config.saveModelParams:
             self.outputs.remove("modelParams")
         if not self.config.useInputCameraModel:
@@ -407,6 +405,11 @@ class GbdesAstrometricFitConfig(
         dtype=bool,
         doc="Use color information to correct for differential chromatic refraction.",
         default=False,
+    )
+    color = pexConfig.ListField(
+        dtype=str,
+        doc="The bands to use for calculating color.",
+        default=["g", "i"]
     )
     referenceColor = pexConfig.Field(
         dtype=float,
@@ -559,12 +562,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         inputRefCatRefs = [inputRefs.referenceCatalog[htm7] for htm7 in inputRefHtm7s.argsort()]
         inputRefCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputs["referenceCatalog"]])
         inputs["referenceCatalog"] = [inputs["referenceCatalog"][v] for v in inputRefCats.argsort()]
-        inputColorHtm7s = np.array([inputRefCat.dataId["htm7"] for inputRefCat in
-                                    inputRefs.colorReferenceCatalog])
-        inputColorCatRefs = [inputRefs.colorReferenceCatalog[htm7] for htm7 in inputColorHtm7s.argsort()]
-        inputColorCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in
-                                   inputs["colorReferenceCatalog"]])
-        inputs["colorReferenceCatalog"] = [inputs["colorReferenceCatalog"][v] for v in inputColorCats.argsort()]
+        #inputColorHtm7s = np.array([inputRefCat.dataId["htm7"] for inputRefCat in
+        #                            inputRefs.colorReferenceCatalog])
+        #inputColorCatRefs = [inputRefs.colorReferenceCatalog[htm7] for htm7 in inputColorHtm7s.argsort()]
+        #inputColorCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in
+        #                           inputs["colorReferenceCatalog"]])
+        #inputs["colorReferenceCatalog"] = [inputs["colorReferenceCatalog"][v] for v in inputColorCats.argsort()]
 
         refConfig = LoadReferenceObjectsConfig()
         if self.config.applyRefCatProperMotion:
@@ -576,20 +579,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             log=self.log,
         )
         if self.config.useColor:
-            colorConfig = LoadReferenceObjectsConfig()
-            # This is for HSC:
-            #colorConfig.load('/sdf/home/c/csaunder/u/clones/obs_subaru/config/filterMap.py')
-            colorObjectLoader = ReferenceObjectLoader(
-                dataIds=[ref.datasetRef.dataId for ref in inputColorCatRefs],
-                refCats=inputs.pop("colorReferenceCatalog"),
-                config=colorConfig,
-                log=self.log,
-            )
+            colorCatalog = inputs.pop("colorCatalog")
         else:
-            colorObjectLoader = None
+            colorCatalog = None
 
         output = self.run(**inputs, instrumentName=instrumentName, refObjectLoader=refObjectLoader,
-                          colorObjectLoader=colorObjectLoader)
+                          colorCatalog=colorCatalog)
 
         wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
         for visit, outputWcs in output.outputWcss.items():
@@ -608,7 +603,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         instrumentName="",
         refEpoch=None,
         refObjectLoader=None,
-        colorObjectLoader=None,
+        colorCatalog=None,
         inputCameraModel=None,
     ):
         """Run the WCS fit for a given set of visits
@@ -733,7 +728,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self._add_objects(wcsf, inputCatalogRefs, sourceIndices, extensionInfo, usedColumns)
         self._add_ref_objects(wcsf, refObjects, refCovariance, extensionInfo)
         if self.config.useColor:
-            self._add_color_objects(wcsf, colorObjectLoader, center=fieldCenter, radius=fieldRadius)
+            self._add_color_objects(wcsf, colorCatalog)
 
         # There must be at least as many sources per visit as the number of
         # free parameters in the per-visit mapping. Set minFitExposures to be
@@ -1567,8 +1562,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         else:
             wcsf.setObjects(extensionIndex, refObjects, "ra", "dec", ["raCov", "decCov", "raDecCov"])
 
-    def _add_color_objects(self, wcsf, colorObjectLoader, center=None, radius=None, region=None,):
-
+    def _add_color_objects(self, wcsf, colorCatalog, center=None, radius=None, region=None,):
+        """
         if region is not None:
             skyRegion = colorObjectLoader.loadRegion(region)
         elif (center is not None) and (radius is not None):
@@ -1579,21 +1574,24 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             raise RuntimeError("Either `region` or `center` and `radius` must be set.")
         # TODO: any source selecting needed here?
         refCat = skyRegion.refCat
+        """
 
         # Get current best position for matches
         starCat = wcsf.getStarCatalog()
 
         with Matcher(np.array(starCat["starX"]), np.array(starCat["starY"])) as matcher:
             idx, i1, i2, d = matcher.query_radius(
-                (refCat['coord_ra']*u.radian).to(u.degree).value,
-                (refCat['coord_dec']*u.radian).to(u.degree).value,
+                (colorCatalog['coord_ra']*u.radian).to(u.degree).value,
+                (colorCatalog['coord_dec']*u.radian).to(u.degree).value,
                 self.config.matchRadius / 3600.0,
                 return_indices=True,
             )
         # For HSC:
         #colors = (refCat['r_flux'] * u.nJy).to(u.ABmag) - (refCat['i_flux'] * u.nJy).to(u.ABmag)
         # FOr ComCamSIm
-        colors = (refCat['lsst_r_flux'] * u.nJy).to(u.ABmag) - (refCat['lsst_i_flux'] * u.nJy).to(u.ABmag)
+        #colors = (refCat['lsst_r_flux'] * u.nJy).to(u.ABmag) - (refCat['lsst_i_flux'] * u.nJy).to(u.ABmag)
+        import ipdb; ipdb.set_trace()
+        catalogBands = colorCatalog.metadata.getArray("BANDS")
 
         matchesWithColor = starCat['starMatchID'][i1]
         matchColors = np.ones(len(matchesWithColor)) * self.config.referenceColor
