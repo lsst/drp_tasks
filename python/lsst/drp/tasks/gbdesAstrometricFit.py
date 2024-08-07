@@ -280,7 +280,7 @@ class GbdesAstrometricFitConnections(
         multiple=True,
     )
     colorCatalog = pipeBase.connectionTypes.Input(
-        doc="The catalog of magnitudes to match to loaded input catalog sources.",
+        doc="The catalog of magnitudes to match to input sources.",
         name="fgcm_Cycle4_StandardStars",
         storageClass="SimpleCatalog",
         dimensions=("instrument",),
@@ -332,6 +332,12 @@ class GbdesAstrometricFitConnections(
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "physical_filter"),
     )
+    dcrCoefficients = pipeBase.connectionTypes.Output(
+        doc="Per-visit coefficients for DCR correction.",
+        name="gbdesAstrometricFit_dcrCoefficients",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "skymap", "tract", "physical_filter"),
+    )
 
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
@@ -340,7 +346,8 @@ class GbdesAstrometricFitConnections(
         super().__init__(config=config)
 
         if not self.config.useColor:
-            self.inputs.remove.colorCatalog
+            self.inputs.remove("colorCatalog")
+            self.outputs.remove("dcrCoefficients")
         if not self.config.saveModelParams:
             self.outputs.remove("modelParams")
         if not self.config.useInputCameraModel:
@@ -406,14 +413,10 @@ class GbdesAstrometricFitConfig(
         doc="Use color information to correct for differential chromatic refraction.",
         default=False,
     )
-    color = pexConfig.ListField(
-        dtype=str,
-        doc="The bands to use for calculating color.",
-        default=["g", "i"]
-    )
+    color = pexConfig.ListField(dtype=str, doc="The bands to use for calculating color.", default=["g", "i"])
     referenceColor = pexConfig.Field(
         dtype=float,
-        doc="The g-i color for which DCR is defined as zero.",
+        doc="The color for which DCR is defined as zero.",
         default=0.61,
     )
     modelComponents = pexConfig.ListField(
@@ -438,7 +441,7 @@ class GbdesAstrometricFitConfig(
             "List of mappings to apply to transform from intermediate frame to sky coordinates. Map names"
             "should match the format 'EXPOSURE/<map name>'."
         ),
-        default=["EXPOSURE/poly", "EXPOSURE/dcr"],
+        default=["EXPOSURE/poly"],
     )
     devicePolyOrder = pexConfig.Field(dtype=int, doc="Order of device polynomial model.", default=4)
     exposurePolyOrder = pexConfig.Field(dtype=int, doc="Order of exposure polynomial model.", default=6)
@@ -518,8 +521,11 @@ class GbdesAstrometricFitConfig(
                 )
 
         for component in self.exposureModel:
-            if not (("poly" in component.lower()) or ("identity" in component.lower())
-                    or ("dcr" in component.lower())):
+            if not (
+                ("poly" in component.lower())
+                or ("identity" in component.lower())
+                or ("dcr" in component.lower())
+            ):
                 raise pexConfig.FieldValidationError(
                     GbdesAstrometricFitConfig.exposureModel,
                     self,
@@ -562,12 +568,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         inputRefCatRefs = [inputRefs.referenceCatalog[htm7] for htm7 in inputRefHtm7s.argsort()]
         inputRefCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputs["referenceCatalog"]])
         inputs["referenceCatalog"] = [inputs["referenceCatalog"][v] for v in inputRefCats.argsort()]
-        #inputColorHtm7s = np.array([inputRefCat.dataId["htm7"] for inputRefCat in
-        #                            inputRefs.colorReferenceCatalog])
-        #inputColorCatRefs = [inputRefs.colorReferenceCatalog[htm7] for htm7 in inputColorHtm7s.argsort()]
-        #inputColorCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in
-        #                           inputs["colorReferenceCatalog"]])
-        #inputs["colorReferenceCatalog"] = [inputs["colorReferenceCatalog"][v] for v in inputColorCats.argsort()]
 
         refConfig = LoadReferenceObjectsConfig()
         if self.config.applyRefCatProperMotion:
@@ -578,13 +578,20 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             config=refConfig,
             log=self.log,
         )
+
+        self.exposureModel = self.config.exposureModel.list()
         if self.config.useColor:
             colorCatalog = inputs.pop("colorCatalog")
+            self.exposureModel.append("EXPOSURE/dcr")
         else:
             colorCatalog = None
 
-        output = self.run(**inputs, instrumentName=instrumentName, refObjectLoader=refObjectLoader,
-                          colorCatalog=colorCatalog)
+        output = self.run(
+            **inputs,
+            instrumentName=instrumentName,
+            refObjectLoader=refObjectLoader,
+            colorCatalog=colorCatalog,
+        )
 
         wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
         for visit, outputWcs in output.outputWcss.items():
@@ -595,6 +602,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             butlerQC.put(output.modelParams, outputRefs.modelParams)
         if self.config.saveCameraModel:
             butlerQC.put(output.cameraModelParams, outputRefs.outputCameraModel)
+        if self.config.useColor:
+            butlerQC.put(output.colorParams, outputRefs.dcrCoefficients)
 
     def run(
         self,
@@ -603,8 +612,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         instrumentName="",
         refEpoch=None,
         refObjectLoader=None,
-        colorCatalog=None,
         inputCameraModel=None,
+        colorCatalog=None,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -622,12 +631,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refObjectLoader : instance of
             `lsst.meas.algorithms.loadReferenceObjects.ReferenceObjectLoader`
             Reference object loader instance.
-        colorObjectLoader : instance of
-            `lsst.meas.algorithms.loadReferenceObjects.ReferenceObjectLoader`
-            Color object loader instance. Only used if `self.config.useColor`
-            is True.
         inputCameraModel : `dict` [`str`, `np.ndarray`], optional
             Parameters to use for the device part of the model.
+        colorCatalog : `lsst.afw.table.SimpleCatalog`
+            Catalog containing object coordinates and magnitudes.
 
         Returns
         -------
@@ -646,6 +653,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             ``cameraModelParams`` : `dict` [`str`, `np.ndarray`]
                 Parameters of the device part of the model, in the format
                 needed as input for future runs.
+            ``colorParams`` : `dict` [`int`, `np.ndarray`]
+                DCR parameters fit in RA and Dec directions for each visit.
         """
         self.log.info("Gather instrument, exposure, and field info")
 
@@ -743,7 +752,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWcss, cameraParams = self._make_outputs(
+        outputWcss, cameraParams, colorParams = self._make_outputs(
             wcsf,
             inputVisitSummaries,
             exposureInfo,
@@ -761,6 +770,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             starCatalog=starCatalog,
             modelParams=modelParams,
             cameraModelParams=cameraParams,
+            colorParams=colorParams,
         )
 
     def _prep_sky(self, inputVisitSummaries, epoch, fieldName="Field"):
@@ -1430,9 +1440,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 }
                 inputDict[key] = mapDict
 
-        exposureModel = {"Type": "Composite", "Elements": self.config.exposureModel.list()}
+        exposureModel = {"Type": "Composite", "Elements": self.exposureModel}
         inputDict["EXPOSURE"] = exposureModel
-        for component in self.config.exposureModel:
+        for component in self.exposureModel:
             if "poly" in component.lower():
                 componentDict = {
                     "Type": "Poly",
@@ -1442,10 +1452,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             elif "identity" in component.lower():
                 componentDict = {"Type": "Identity"}
             elif "dcr" in component.lower():
-                componentDict = {'Type': 'Color',
-                                 'Reference': self.config.referenceColor,
-                                 'Function': {'Type': 'Constant'}}
- 
+                componentDict = {
+                    "Type": "Color",
+                    "Reference": self.config.referenceColor,
+                    "Function": {"Type": "Constant"},
+                }
+
             inputDict[component] = componentDict
 
         inputYaml.addInput(yaml.dump(inputDict))
@@ -1512,8 +1524,14 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                     "xyCov": xyCov.to_numpy(),
                 }
 
-                wcsf.setObjects(extensionIndex, d, "x", "y", ["xCov", "yCov", "xyCov"],
-                                defaultColor=self.config.referenceColor)
+                wcsf.setObjects(
+                    extensionIndex,
+                    d,
+                    "x",
+                    "y",
+                    ["xCov", "yCov", "xyCov"],
+                    defaultColor=self.config.referenceColor,
+                )
 
     def _add_ref_objects(self, wcsf, refObjects, refCovariance, extensionInfo, fieldIndex=0):
         """Add reference sources to the wcsfit.WCSFit object.
@@ -1562,40 +1580,41 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         else:
             wcsf.setObjects(extensionIndex, refObjects, "ra", "dec", ["raCov", "decCov", "raDecCov"])
 
-    def _add_color_objects(self, wcsf, colorCatalog, center=None, radius=None, region=None,):
-        """
-        if region is not None:
-            skyRegion = colorObjectLoader.loadRegion(region)
-        elif (center is not None) and (radius is not None):
-            skyRegion = colorObjectLoader.loadSkyCircle(
-                center, radius, "lsst_g", #'HSC-Z',
-            )
-        else:
-            raise RuntimeError("Either `region` or `center` and `radius` must be set.")
-        # TODO: any source selecting needed here?
-        refCat = skyRegion.refCat
+    def _add_color_objects(self, wcsf, colorCatalog):
+        """Associate input matches with objects in color catalog and set their
+        color value.
+
+        Parameters
+        ----------
+        wcsf : `wcsfit.WCSFit`
+            WCSFit object, assumed to have fit model.
+        colorCatalog : `lsst.afw.table.SimpleCatalog`
+            Catalog containing object coordinates and magnitudes.
         """
 
         # Get current best position for matches
         starCat = wcsf.getStarCatalog()
 
+        # TODO: DM-45650, update how the colors are read in here.
+        catalogBands = colorCatalog.metadata.getArray("BANDS")
+        colorInd1 = catalogBands.index(self.config.color[0])
+        colorInd2 = catalogBands.index(self.config.color[1])
+        colors = colorCatalog["mag_std_noabs"][:, colorInd1] - colorCatalog["mag_std_noabs"][:, colorInd2]
+        goodInd = (colorCatalog["mag_std_noabs"][:, colorInd1] != 99.0) & (
+            colorCatalog["mag_std_noabs"][:, colorInd2] != 99.0
+        )
+
         with Matcher(np.array(starCat["starX"]), np.array(starCat["starY"])) as matcher:
             idx, i1, i2, d = matcher.query_radius(
-                (colorCatalog['coord_ra']*u.radian).to(u.degree).value,
-                (colorCatalog['coord_dec']*u.radian).to(u.degree).value,
+                (colorCatalog[goodInd]["coord_ra"] * u.radian).to(u.degree).value,
+                (colorCatalog[goodInd]["coord_dec"] * u.radian).to(u.degree).value,
                 self.config.matchRadius / 3600.0,
                 return_indices=True,
             )
-        # For HSC:
-        #colors = (refCat['r_flux'] * u.nJy).to(u.ABmag) - (refCat['i_flux'] * u.nJy).to(u.ABmag)
-        # FOr ComCamSIm
-        #colors = (refCat['lsst_r_flux'] * u.nJy).to(u.ABmag) - (refCat['lsst_i_flux'] * u.nJy).to(u.ABmag)
-        import ipdb; ipdb.set_trace()
-        catalogBands = colorCatalog.metadata.getArray("BANDS")
 
-        matchesWithColor = starCat['starMatchID'][i1]
+        matchesWithColor = starCat["starMatchID"][i1]
         matchColors = np.ones(len(matchesWithColor)) * self.config.referenceColor
-        matchColors = colors[i2]
+        matchColors = colors[goodInd][i2]
         wcsf.setColors(matchesWithColor, matchColors)
 
     def _make_afw_wcs(self, mapDict, centerRA, centerDec, doNormalizePixels=False, xScale=1, yScale=1):
@@ -1708,10 +1727,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         cameraParams : `dict` [`str`, `np.ndarray`], optional
             Parameters for the device part of the model in the format needed
             when used as input for future runs.
+        colorFits : `dict` [`int`, `np.ndarray`], optional
+            DCR parameters fit in RA and Dec directions for each visit.
         """
         # Get the parameters of the fit models
         mapParams = wcsf.mapCollection.getParamDict()
-        import ipdb; ipdb.set_trace()
         cameraParams = {}
         if self.config.saveCameraModel:
             for element in mapTemplate["BAND/DEVICE"]["Elements"]:
@@ -1743,10 +1763,15 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         yscale = sampleDetector["bbox_max_y"] - sampleDetector["bbox_min_y"]
 
         catalogs = {}
+        colorFits = {}
         for v, visitSummary in enumerate(visitSummaryTables):
             visit = visitSummary[0]["visit"]
 
-            visitMap = wcsf.mapCollection.orderAtoms(f"{visit}")[0]
+            visitMaps = wcsf.mapCollection.orderAtoms(f"{visit}")
+            if self.config.useColor:
+                colorMap = visitMaps.pop(visitMaps.index(f"{visit}/dcr"))
+                colorFits[visit] = mapParams[colorMap]
+            visitMap = visitMaps[0]
             visitMapType = wcsf.mapCollection.getMapType(visitMap)
             if (visitMap not in mapParams) and (visitMapType != "Identity"):
                 self.log.warning("Visit %d was dropped because of an insufficient number of sources.", visit)
@@ -1787,6 +1812,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 mapDict = {}
                 for m, mapElement in enumerate(mapElements):
                     mapType = wcsf.mapCollection.getMapType(mapElement)
+                    if mapType == "Color":
+                        # DCR fit should not go into the generic WCS.
+                        continue
                     mapDict[mapElement] = {"Type": mapType}
 
                     if mapType == "Poly":
@@ -1808,8 +1836,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 catalog[d].setWcs(outWCS)
             catalog.sort()
             catalogs[visit] = catalog
+        if self.config.useColor:
+            colorVisits = np.array(list(colorFits.keys()))
+            colorRA = np.array([colorFits[vis][0] for vis in colorVisits])
+            colorDec = np.array([colorFits[vis][1] for vis in colorVisits])
+            colorFits = {"visit": colorVisits, "raCoefficient": colorRA, "decCoefficient": colorDec}
 
-        return catalogs, cameraParams
+        return catalogs, cameraParams, colorFits
 
     def _compute_model_params(self, wcsf):
         """Get the WCS model parameters and covariance and convert to a
@@ -1916,6 +1949,12 @@ class GbdesGlobalAstrometricFitConnections(
         deferLoad=True,
         multiple=True,
     )
+    colorCatalog = pipeBase.connectionTypes.Input(
+        doc="The catalog of magnitudes to match to input sources.",
+        name="fgcm_Cycle4_StandardStars",
+        storageClass="SimpleCatalog",
+        dimensions=("instrument",),
+    )
     isolatedStarSources = pipeBase.connectionTypes.Input(
         doc="Catalog of matched sources.",
         name="isolated_star_sources",
@@ -1987,6 +2026,12 @@ class GbdesGlobalAstrometricFitConnections(
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "physical_filter"),
     )
+    dcrCoefficients = pipeBase.connectionTypes.Output(
+        doc="Per-visit coefficients for DCR correction.",
+        name="gbdesGlobalAstrometricFit_dcrCoefficients",
+        storageClass="ArrowNumpyDict",
+        dimensions=("instrument", "physical_filter"),
+    )
 
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
@@ -1994,6 +2039,9 @@ class GbdesGlobalAstrometricFitConnections(
     def __init__(self, *, config=None):
         super().__init__(config=config)
 
+        if not self.config.useColor:
+            self.inputs.remove("colorCatalog")
+            self.outputs.remove("dcrCoefficients")
         if not self.config.saveModelParams:
             self.outputs.remove("modelParams")
         if not self.config.useInputCameraModel:
@@ -2068,8 +2116,17 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             config=refConfig,
             log=self.log,
         )
+        if self.config.useColor:
+            colorCatalog = inputs.pop("colorCatalog")
+        else:
+            colorCatalog = None
 
-        output = self.run(**inputs, instrumentName=instrumentName, refObjectLoader=refObjectLoader)
+        output = self.run(
+            **inputs,
+            instrumentName=instrumentName,
+            refObjectLoader=refObjectLoader,
+            colorCatalog=colorCatalog,
+        )
 
         for outputRef in outputRefs.outputWcs:
             visit = outputRef.dataId["visit"]
@@ -2080,6 +2137,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             butlerQC.put(output.modelParams, outputRefs.modelParams)
         if self.config.saveCameraModel:
             butlerQC.put(output.cameraModelParams, outputRefs.outputCameraModel)
+        if self.config.useColor:
+            butlerQC.put(output.colorParams, outputRefs.dcrCoefficients)
 
     def run(
         self,
@@ -2090,6 +2149,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         refEpoch=None,
         refObjectLoader=None,
         inputCameraModel=None,
+        colorCatalog=None,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -2111,6 +2171,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             Reference object loader instance.
         inputCameraModel : `dict` [`str`, `np.ndarray`], optional
             Parameters to use for the device part of the model.
+        colorCatalog : `lsst.afw.table.SimpleCatalog`
+            Catalog containing object coordinates and magnitudes.
 
         Returns
         -------
@@ -2129,6 +2191,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             ``cameraModelParams`` : `dict` [`str`, `np.ndarray`]
                 Parameters of the device part of the model, in the format
                 needed as input for future runs.
+            ``colorParams`` : `dict` [`int`, `np.ndarray`]
+                DCR parameters fit in RA and Dec directions for each visit.
         """
         self.log.info("Gather instrument, exposure, and field info")
 
@@ -2198,7 +2262,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             self._add_ref_objects(
                 wcsf, allRefObjects[f], allRefCovariances[f], extensionInfo, fieldIndex=-1 * f
             )
-        self._add_colors(wcsf, colors)
+        if self.config.useColor:
+            self._add_color_objects(wcsf, colorCatalog)
 
         # Do the WCS fit
         wcsf.fit(
@@ -2206,7 +2271,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWcss, cameraParams = self._make_outputs(
+        outputWcss, cameraParams, colorParams = self._make_outputs(
             wcsf,
             inputVisitSummaries,
             exposureInfo,
@@ -2224,6 +2289,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             starCatalog=starCatalog,
             modelParams=modelParams,
             cameraModelParams=cameraParams,
+            colorParams=colorParams,
         )
 
     def _prep_sky(self, inputVisitSummaries):
@@ -2492,7 +2558,14 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                     "yCov": np.array(sourceCat["yCov"]),
                     "xyCov": np.array(sourceCat["xyCov"]),
                 }
-                wcsf.setObjects(extensionIndex, d, "x", "y", ["xCov", "yCov", "xyCov"])
+                wcsf.setObjects(
+                    extensionIndex,
+                    d,
+                    "x",
+                    "y",
+                    ["xCov", "yCov", "xyCov"],
+                    defaultColor=self.config.referenceColor,
+                )
 
 
 class GbdesGlobalAstrometricMultibandFitConnections(
