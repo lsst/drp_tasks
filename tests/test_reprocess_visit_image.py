@@ -19,27 +19,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import unittest
 import tempfile
-
-import numpy as np
+import unittest
 
 import lsst.afw.image
 import lsst.afw.math
 import lsst.afw.table
 import lsst.daf.butler.tests as butlerTests
 import lsst.geom
-import lsst.utils.tests
-import lsst.meas.base.tests
 import lsst.meas.algorithms
+import lsst.meas.base.tests
 import lsst.pipe.base.testUtils
-
+import lsst.utils.tests
+import numpy as np
 from lsst.drp.tasks.reprocess_visit_image import ReprocessVisitImageTask
 
 
 def make_visit_summary(wcs=None, photo_calib=None, detector=42):
-    """Return a visit summary table with an entry for the given detector.
-    """
+    """Return a visit summary table with an entry for the given detector."""
     schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
     lsst.afw.image.ExposureSummaryStats.update_schema(schema)
     summary = lsst.afw.table.ExposureCatalog(schema)
@@ -56,12 +53,14 @@ def make_visit_summary(wcs=None, photo_calib=None, detector=42):
     if wcs is not None:
         record.setWcs(wcs)
     else:
-        crpix = lsst.geom.Box2D(lsst.geom.Box2D(lsst.geom.Point2D(0, 0),
-                                                lsst.geom.Point2D(100, 100))).getCenter()
+        crpix = lsst.geom.Box2D(
+            lsst.geom.Box2D(lsst.geom.Point2D(0, 0), lsst.geom.Point2D(100, 100))
+        ).getCenter()
         crval = lsst.geom.SpherePoint(45.0, 45.0, lsst.geom.degrees)
-        cdelt = 0.2*lsst.geom.arcseconds
-        wcs = lsst.afw.geom.makeSkyWcs(crpix=crpix, crval=crval,
-                                       cdMatrix=lsst.afw.geom.makeCdMatrix(scale=cdelt))
+        cdelt = 0.2 * lsst.geom.arcseconds
+        wcs = lsst.afw.geom.makeSkyWcs(
+            crpix=crpix, crval=crval, cdMatrix=lsst.afw.geom.makeCdMatrix(scale=cdelt)
+        )
         record.setWcs(wcs)
 
     lsst.afw.image.ExposureSummaryStats().update_record(record),
@@ -70,7 +69,6 @@ def make_visit_summary(wcs=None, photo_calib=None, detector=42):
 
 
 class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
-
     def setUp(self):
         # Different x/y dimensions so they're easy to distinguish in a plot,
         # and non-zero minimum, to help catch xy0 errors.
@@ -79,21 +77,22 @@ class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
         self.photo_calib = 12.3
         dataset = lsst.meas.base.tests.TestDataset(bbox, crval=self.sky_center, calibration=self.photo_calib)
         # sqrt of area of a normalized 2d gaussian
-        psf_scale = np.sqrt(4*np.pi*(dataset.psfShape.getDeterminantRadius())**2)
+        psf_scale = np.sqrt(4 * np.pi * (dataset.psfShape.getDeterminantRadius()) ** 2)
         noise = 10.0  # stddev of noise per pixel
         # Sources ordered from faintest to brightest.
-        self.fluxes = np.array((6*noise*psf_scale,
-                                12*noise*psf_scale,
-                                45*noise*psf_scale,
-                                150*noise*psf_scale,
-                                400*noise*psf_scale,
-                                1000*noise*psf_scale))
-        self.centroids = np.array(((162, 22),
-                                   (40, 70),
-                                   (100, 160),
-                                   (50, 120),
-                                   (92, 35),
-                                   (175, 154)), dtype=np.float32)
+        self.fluxes = np.array(
+            (
+                6 * noise * psf_scale,
+                12 * noise * psf_scale,
+                45 * noise * psf_scale,
+                150 * noise * psf_scale,
+                400 * noise * psf_scale,
+                1000 * noise * psf_scale,
+            )
+        )
+        self.centroids = np.array(
+            ((162, 22), (40, 70), (100, 160), (50, 120), (92, 35), (175, 154)), dtype=np.float32
+        )
         for flux, centroid in zip(self.fluxes, self.centroids):
             dataset.addSource(instFlux=flux, centroid=lsst.geom.Point2D(centroid[0], centroid[1]))
 
@@ -101,7 +100,7 @@ class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
         # in any of the output catalogs.
         center = lsst.geom.Point2D(100, 100)
         shape = lsst.afw.geom.Quadrupole(8, 9, 3)
-        dataset.addSource(instFlux=500*noise*psf_scale, centroid=center, shape=shape)
+        dataset.addSource(instFlux=500 * noise * psf_scale, centroid=center, shape=shape)
 
         schema = dataset.makeMinimalSchema()
         self.truth_exposure, self.truth_cat = dataset.realize(noise=noise, schema=schema)
@@ -120,8 +119,9 @@ class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
         config.approxOrderX = 1
         task = lsst.meas.algorithms.SubtractBackgroundTask(config=config)
         self.background = task.run(self.truth_exposure).background
-        self.visit_summary = make_visit_summary(wcs=self.truth_exposure.wcs,
-                                                photo_calib=self.truth_exposure.photoCalib)
+        self.visit_summary = make_visit_summary(
+            wcs=self.truth_exposure.wcs, photo_calib=self.truth_exposure.photoCalib
+        )
 
         # Test-specific configuration:
         self.config = ReprocessVisitImageTask.ConfigClass()
@@ -150,15 +150,16 @@ class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
 
     def test_run(self):
         task = ReprocessVisitImageTask()
-        result = task.run(exposures=self.exposure,
-                          psf=self.truth_exposure.psf,
-                          background=self.background,
-                          ap_corr=lsst.afw.image.ApCorrMap(),
-                          photo_calib=self.truth_exposure.photoCalib,
-                          wcs=self.truth_exposure.wcs,
-                          summary_stats=lsst.afw.image.ExposureSummaryStats(),
-                          id_generator=self.id_generator,
-                          )
+        result = task.run(
+            exposures=self.exposure,
+            psf=self.truth_exposure.psf,
+            background=self.background,
+            ap_corr=lsst.afw.image.ApCorrMap(),
+            photo_calib=self.truth_exposure.photoCalib,
+            wcs=self.truth_exposure.wcs,
+            summary_stats=lsst.afw.image.ExposureSummaryStats(),
+            id_generator=self.id_generator,
+        )
 
         calibrated = result.exposure.photoCalib.calibrateImage(result.exposure.maskedImage)
         self.assertImagesAlmostEqual(result.exposure.image, calibrated.image)
@@ -174,6 +175,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
     """Tests of ``ReprocessVisitImageTask.runQuantum``, which need a test
     butler, but do not need real data.
     """
+
     def setUp(self):
         instrument = "testCam"
         exposure0 = 101
@@ -187,7 +189,10 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
 
         # A complete instrument record is necessary for the id generator.
         instrumentRecord = self.repo.dimensions["instrument"].RecordClass(
-            name=instrument, visit_max=1e6, exposure_max=1e6, detector_max=128,
+            name=instrument,
+            visit_max=1e6,
+            exposure_max=1e6,
+            detector_max=128,
             class_name="lsst.obs.base.instrument_tests.DummyCam",
         )
         self.repo.registry.syncDimensionData("instrument", instrumentRecord)
@@ -199,45 +204,41 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         butlerTests.addDataIdValue(self.repo, "visit", visit)
 
         # inputs
-        butlerTests.addDatasetType(self.repo, "postISRCCD",
-                                   {"instrument", "exposure", "detector"},
-                                   "ExposureF")
-        butlerTests.addDatasetType(self.repo, "finalVisitSummary",
-                                   {"instrument", "visit"},
-                                   "ExposureCatalog")
-        butlerTests.addDatasetType(self.repo, "initial_pvi_background",
-                                   {"instrument", "visit", "detector"},
-                                   "Background")
-        butlerTests.addDatasetType(self.repo, "skyCorr",
-                                   {"instrument", "visit", "detector"},
-                                   "Background")
+        butlerTests.addDatasetType(
+            self.repo, "postISRCCD", {"instrument", "exposure", "detector"}, "ExposureF"
+        )
+        butlerTests.addDatasetType(self.repo, "finalVisitSummary", {"instrument", "visit"}, "ExposureCatalog")
+        butlerTests.addDatasetType(
+            self.repo, "initial_pvi_background", {"instrument", "visit", "detector"}, "Background"
+        )
+        butlerTests.addDatasetType(self.repo, "skyCorr", {"instrument", "visit", "detector"}, "Background")
 
         # outputs
-        butlerTests.addDatasetType(self.repo, "source_schema",
-                                   {"instrument", "visit", "detector"},
-                                   "SourceCatalog")
-        butlerTests.addDatasetType(self.repo, "pvi",
-                                   {"instrument", "visit", "detector"},
-                                   "ExposureF")
-        butlerTests.addDatasetType(self.repo, "source_footprints_detector",
-                                   {"instrument", "visit", "detector"},
-                                   "SourceCatalog")
-        butlerTests.addDatasetType(self.repo, "source_detector",
-                                   {"instrument", "visit", "detector"},
-                                   "ArrowAstropy")
-        butlerTests.addDatasetType(self.repo, "pvi_background",
-                                   {"instrument", "visit", "detector"},
-                                   "Background")
+        butlerTests.addDatasetType(
+            self.repo, "source_schema", {"instrument", "visit", "detector"}, "SourceCatalog"
+        )
+        butlerTests.addDatasetType(self.repo, "pvi", {"instrument", "visit", "detector"}, "ExposureF")
+        butlerTests.addDatasetType(
+            self.repo, "source_footprints_detector", {"instrument", "visit", "detector"}, "SourceCatalog"
+        )
+        butlerTests.addDatasetType(
+            self.repo, "source_detector", {"instrument", "visit", "detector"}, "ArrowAstropy"
+        )
+        butlerTests.addDatasetType(
+            self.repo, "pvi_background", {"instrument", "visit", "detector"}, "Background"
+        )
 
         # dataIds
         self.exposure0_id = self.repo.registry.expandDataId(
-            {"instrument": instrument, "exposure": exposure0, "detector": detector})
+            {"instrument": instrument, "exposure": exposure0, "detector": detector}
+        )
         self.exposure1_id = self.repo.registry.expandDataId(
-            {"instrument": instrument, "exposure": exposure1, "detector": detector})
+            {"instrument": instrument, "exposure": exposure1, "detector": detector}
+        )
         self.visit_id = self.repo.registry.expandDataId(
-            {"instrument": instrument, "visit": visit, "detector": detector})
-        self.visit_only_id = self.repo.registry.expandDataId(
-            {"instrument": instrument, "visit": visit})
+            {"instrument": instrument, "visit": visit, "detector": detector}
+        )
+        self.visit_only_id = self.repo.registry.expandDataId({"instrument": instrument, "visit": visit})
 
         # put empty data
         self.butler = butlerTests.makeTestCollection(self.repo)
@@ -253,8 +254,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         self.repo_path.cleanup()
 
     def test_lintConnections(self):
-        """Check that the connections are self-consistent.
-        """
+        """Check that the connections are self-consistent."""
         Connections = ReprocessVisitImageTask.ConfigClass.ConnectionsClass
         lsst.pipe.base.testUtils.lintConnections(Connections)
 
@@ -263,22 +263,37 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         lsst.pipe.base.testUtils.assertValidInitOutput(task)
 
         quantum = lsst.pipe.base.testUtils.makeQuantum(
-            task, self.butler, self.visit_id,
-            {"exposures": [self.exposure0_id],
-             "visit_summary": self.visit_only_id,
-             "background_1": self.visit_id,
-             "background_2": self.visit_id,
-             # outputs
-             "exposure": self.visit_id,
-             "source": self.visit_id,
-             "source_footprints": self.visit_id,
-             "background": self.visit_id,
-             })
+            task,
+            self.butler,
+            self.visit_id,
+            {
+                "exposures": [self.exposure0_id],
+                "visit_summary": self.visit_only_id,
+                "background_1": self.visit_id,
+                "background_2": self.visit_id,
+                # outputs
+                "exposure": self.visit_id,
+                "source": self.visit_id,
+                "source_footprints": self.visit_id,
+                "background": self.visit_id,
+            },
+        )
         mock_run = lsst.pipe.base.testUtils.runTestQuantum(task, self.butler, quantum)
         # Check that the proper kwargs are passed to run().
-        self.assertEqual(mock_run.call_args.kwargs.keys(),
-                         {"exposures", "background", "psf", "ap_corr", "photo_calib", "wcs", "summary_stats",
-                         "result", "id_generator"})
+        self.assertEqual(
+            mock_run.call_args.kwargs.keys(),
+            {
+                "exposures",
+                "background",
+                "psf",
+                "ap_corr",
+                "photo_calib",
+                "wcs",
+                "summary_stats",
+                "result",
+                "id_generator",
+            },
+        )
 
 
 def setup_module(module):

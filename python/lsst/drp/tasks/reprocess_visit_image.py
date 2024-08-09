@@ -21,21 +21,21 @@
 
 __all__ = ["ReprocessVisitImageTask", "ReprocessVisitImageConfig"]
 
-import lsst.afw.table as afwTable
 import lsst.afw.image as afwImage
-import lsst.meas.deblender
+import lsst.afw.table as afwTable
 import lsst.meas.algorithms
+import lsst.meas.deblender
+import lsst.meas.extensions.photometryKron
+import lsst.meas.extensions.shapeHSM
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 from lsst.pipe.base import connectionTypes
 from lsst.pipe.tasks import snapCombine
 
-import lsst.meas.extensions.photometryKron
-import lsst.meas.extensions.shapeHSM
 
-
-class ReprocessVisitImageConnections(pipeBase.PipelineTaskConnections,
-                                     dimensions=("instrument", "visit", "detector")):
+class ReprocessVisitImageConnections(
+    pipeBase.PipelineTaskConnections, dimensions=("instrument", "visit", "detector")
+):
     exposures = connectionTypes.Input(
         doc="Exposure (or two snaps) to be calibrated, and detected and measured on.",
         name="postISRCCD",
@@ -86,8 +86,7 @@ class ReprocessVisitImageConnections(pipeBase.PipelineTaskConnections,
         dimensions=["instrument", "visit", "detector"],
     )
     source_footprints = connectionTypes.Output(
-        doc="Catalog of measured sources detected on the calibrated exposure; "
-            "includes source footprints.",
+        doc="Catalog of measured sources detected on the calibrated exposure; includes source footprints.",
         name="source_footprints_detector",
         storageClass="SourceCatalog",
         dimensions=["instrument", "visit", "detector"],
@@ -100,9 +99,9 @@ class ReprocessVisitImageConnections(pipeBase.PipelineTaskConnections,
     )
 
 
-class ReprocessVisitImageConfig(pipeBase.PipelineTaskConfig,
-                                pipelineConnections=ReprocessVisitImageConnections):
-
+class ReprocessVisitImageConfig(
+    pipeBase.PipelineTaskConfig, pipelineConnections=ReprocessVisitImageConnections
+):
     # To generate catalog ids consistently across subtasks.
     id_generator = lsst.meas.base.DetectorVisitIdGeneratorConfig.make_field()
 
@@ -112,7 +111,7 @@ class ReprocessVisitImageConfig(pipeBase.PipelineTaskConfig,
     )
     detection = pexConfig.ConfigurableField(
         target=lsst.meas.algorithms.SourceDetectionTask,
-        doc="Task to detect sources to return in the output catalog."
+        doc="Task to detect sources to return in the output catalog.",
     )
     sky_sources = pexConfig.ConfigurableField(
         target=lsst.meas.algorithms.SkyObjectsTask,
@@ -124,24 +123,24 @@ class ReprocessVisitImageConfig(pipeBase.PipelineTaskConfig,
     )
     measurement = pexConfig.ConfigurableField(
         target=lsst.meas.base.SingleFrameMeasurementTask,
-        doc="Task to measure sources to return in the output catalog."
+        doc="Task to measure sources to return in the output catalog.",
     )
     apply_aperture_correction = pexConfig.ConfigurableField(
         target=lsst.meas.base.ApplyApCorrTask,
-        doc="Task to apply aperture corrections to the measured sources."
+        doc="Task to apply aperture corrections to the measured sources.",
     )
     set_primary_flags = pexConfig.ConfigurableField(
         target=lsst.meas.algorithms.setPrimaryFlags.SetPrimaryFlagsTask,
-        doc="Task to add isPrimary to the catalog."
+        doc="Task to add isPrimary to the catalog.",
     )
     catalog_calculation = pexConfig.ConfigurableField(
         target=lsst.meas.base.CatalogCalculationTask,
-        doc="Task to compute catalog values using only the catalog entries."
+        doc="Task to compute catalog values using only the catalog entries.",
     )
     # TODO: hopefully we can get rid of this, once Jim sorts out SDM details.
     post_calculations = pexConfig.ConfigurableField(
         target=lsst.meas.base.SingleFrameMeasurementTask,
-        doc="Task to compute catalog values after all other calculations have been done."
+        doc="Task to compute catalog values after all other calculations have been done.",
     )
 
     def setDefaults(self):
@@ -154,22 +153,20 @@ class ReprocessVisitImageConfig(pipeBase.PipelineTaskConfig,
 
         # TODO: Note: these apertures were selected for HSC, and may not be
         # what we want for LSSTCam.
-        self.measurement.plugins["base_CircularApertureFlux"].radii = [3.0,
-                                                                       4.5,
-                                                                       6.0,
-                                                                       9.0,
-                                                                       12.0,
-                                                                       17.0,
-                                                                       25.0,
-                                                                       35.0,
-                                                                       50.0,
-                                                                       70.0
-                                                                       ]
+        self.measurement.plugins["base_CircularApertureFlux"].radii = [
+            3.0,
+            4.5,
+            6.0,
+            9.0,
+            12.0,
+            17.0,
+            25.0,
+            35.0,
+            50.0,
+            70.0,
+        ]
         lsst.meas.extensions.shapeHSM.configure_hsm(self.measurement)
-        self.measurement.plugins.names |= ["base_Jacobian",
-                                           "base_FPPosition",
-                                           "ext_photometryKron_KronFlux"
-                                           ]
+        self.measurement.plugins.names |= ["base_Jacobian", "base_FPPosition", "ext_photometryKron_KronFlux"]
         self.measurement.plugins["base_Jacobian"].pixelScale = 0.2
 
         # TODO: hopefully we can get rid of this, once Jim sorts out SDM.
@@ -222,34 +219,44 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         detector_summary = visit_summary.find(detector)
         # Specify the fields that `annotate` needs below, to ensure they
         # exist, even as None.
-        result = pipeBase.Struct(exposure=None,
-                                 source_footprints=None,
-                                 )
+        result = pipeBase.Struct(
+            exposure=None,
+            source_footprints=None,
+        )
         try:
-            self.run(exposures=exposures,
-                     psf=detector_summary.psf,
-                     background=background,
-                     ap_corr=detector_summary.apCorrMap,
-                     photo_calib=detector_summary.photoCalib,
-                     wcs=detector_summary.wcs,
-                     summary_stats=detector_summary,
-                     result=result,
-                     id_generator=id_generator)
+            self.run(
+                exposures=exposures,
+                psf=detector_summary.psf,
+                background=background,
+                ap_corr=detector_summary.apCorrMap,
+                photo_calib=detector_summary.photoCalib,
+                wcs=detector_summary.wcs,
+                summary_stats=detector_summary,
+                result=result,
+                id_generator=id_generator,
+            )
         except pipeBase.AlgorithmError as e:
             error = pipeBase.AnnotatedPartialOutputsError.annotate(
-                e,
-                self,
-                result.exposure,
-                result.source_footprints,
-                log=self.log
+                e, self, result.exposure, result.source_footprints, log=self.log
             )
             butlerQC.put(result, outputRefs)
             raise error from e
 
         butlerQC.put(result, outputRefs)
 
-    def run(self, *, exposures, psf, background, ap_corr, photo_calib, wcs,
-            summary_stats, id_generator=None, result=None):
+    def run(
+        self,
+        *,
+        exposures,
+        psf,
+        background,
+        ap_corr,
+        photo_calib,
+        wcs,
+        summary_stats,
+        id_generator=None,
+        result=None
+    ):
         """Detect and measure sources on the exposure (snap combined as
         necessary), and make a "final" Processed Visit Image using all of the
         supplied metadata.
@@ -343,8 +350,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         source
             Catalog that was detected and measured on the exposure.
         """
-        table = afwTable.SourceTable.make(self.source_schema.schema,
-                                          id_generator.make_table_id_factory())
+        table = afwTable.SourceTable.make(self.source_schema.schema, id_generator.make_table_id_factory())
 
         detections = self.detection.run(table=table, exposure=exposure, background=background)
         source = detections.sources
@@ -382,15 +388,14 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         """
         source_footprints = photo_calib.calibrateCatalog(source_footprints)
         exposure.maskedImage = photo_calib.calibrateImage(exposure.maskedImage)
-        identity = afwImage.PhotoCalib(1.0,
-                                       photo_calib.getCalibrationErr(),
-                                       bbox=exposure.getBBox())
+        identity = afwImage.PhotoCalib(1.0, photo_calib.getCalibrationErr(), bbox=exposure.getBBox())
         exposure.setPhotoCalib(identity)
         return source_footprints
 
 
 def _combine_backgrounds(initial_pvi_background, sky_corr):
-    """Return the total background that was applied to the original processing.
+    """Return the total background that was applied to the original
+    processing.
     """
     background = lsst.afw.math.BackgroundList()
     for item in initial_pvi_background:
