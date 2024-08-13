@@ -149,6 +149,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         # Make source catalogs:
         cls.inputCatalogRefs = cls._make_sourceCat(starIds, starRAs, starDecs, trueWCSs, inScienceFraction)
 
+        cls.colorCatalog = cls._make_colors(starRAs, starDecs)
+
         cls.outputs = cls.task.run(
             cls.inputCatalogRefs,
             cls.inputVisitSummary,
@@ -436,6 +438,48 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
         return catalogs
 
+    @classmethod
+    def _make_colors(cls, starRas, starDecs):
+        """Make a catalog with the star magnitudes.
+
+        Parameters
+        ----------
+        starRas : `np.ndarray` [`float`]
+            RAs of the simulated stars
+        starDecs : `np.ndarray` [`float`]
+            Decs of the simulated stars
+
+        Returns
+        -------
+        colorCatalog : `lsst.afw.table.SimpleCatalog`
+            Catalog with star magnitudes.
+        """
+        bands = ["g", "r", "i", "z", "y"]
+        nStars = len(starRas)
+
+        # Make a catalog following what is done in `fgcmCal`.
+        schema = afwTable.SimpleTable.makeMinimalSchema()
+        schema.addField(
+            "mag_std_noabs",
+            type="ArrayF",
+            doc="Standard magnitude (no absolute calibration)",
+            size=len(bands),
+        )
+        colorCatalog = afwTable.SimpleCatalog(schema)
+        colorCatalog.resize(len(starRas))
+        colorCatalog["coord_ra"] = (starRas * u.degree + 10 * np.random.randn(nStars) * u.mas).to(u.radian)
+        colorCatalog["coord_dec"] = (starDecs * u.degree + 10 * np.random.randn(nStars) * u.mas).to(u.radian)
+
+        magMin = 19
+        magMax = 23
+        for i in range(len(bands)):
+            colorCatalog["mag_std_noabs"][:, i] = np.random.random(nStars) * (magMax - magMin) + magMin
+
+        md = PropertyList()
+        md.set("BANDS", bands)
+        colorCatalog.setMetadata(md)
+        return colorCatalog
+
     def test_get_exposure_info(self):
         """Test that information for input exposures is as expected and that
         the WCS in the class object gives approximately the same results as the
@@ -687,6 +731,21 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                 self.assertAlmostEqual(np.mean(dDec), 0)
                 self.assertAlmostEqual(np.std(dDec), 0)
 
+    def test_useColor(self):
+        """Test running task with color catalog and DCR fitting."""
+        config = copy(self.config)
+        config.useColor = True
+
+        task = GbdesAstrometricFitTask(config=config)
+        outputs = task.run(
+            self.inputCatalogRefs,
+            self.inputVisitSummary,
+            instrumentName=self.instrumentName,
+            refObjectLoader=self.refObjectLoader,
+            colorCatalog=self.colorCatalog,
+        )
+        self.assertEqual(len(outputs.colorParams["visit"]), len(self.testVisits))
+
 
 class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
     @classmethod
@@ -794,6 +853,8 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
         cls.isolatedStarCatalogs, cls.isolatedStarSources = cls._make_isolatedStars(
             allStarIds, allStarRAs, allStarDecs, cls.trueWCSs, inScienceFraction
         )
+
+        cls.colorCatalog = cls._make_colors(np.concatenate(allStarRAs), np.concatenate(allStarDecs))
 
         cls.outputs = cls.task.run(
             cls.inputVisitSummary,
@@ -1056,6 +1117,23 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
                     self.assertAlmostEqual(np.std(dRA), 0)
                     self.assertAlmostEqual(np.mean(dDec), 0, places=6)
                     self.assertAlmostEqual(np.std(dDec), 0)
+
+    def test_useColor(self):
+        """Test running task with color catalog and DCR fitting."""
+        config = copy(self.config)
+        config.useColor = True
+
+        task = GbdesGlobalAstrometricFitTask(config=config)
+
+        outputs = task.run(
+            self.inputVisitSummary,
+            self.isolatedStarSources,
+            self.isolatedStarCatalogs,
+            instrumentName=self.instrumentName,
+            refObjectLoader=self.refObjectLoader,
+            colorCatalog=self.colorCatalog,
+        )
+        self.assertEqual(len(outputs.colorParams["visit"]), len(self.testVisits))
 
 
 def setup_module(module):
