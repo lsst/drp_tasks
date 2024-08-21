@@ -1172,7 +1172,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         self.log.info("Applying %d bright object masks to %s", len(brightObjectMasks), dataId)
         mask = exposure.getMaskedImage().getMask()
         wcs = exposure.getWcs()
-        plateScale = wcs.getPixelScale().asArcseconds()
+        plateScale = wcs.getPixelScale(exposure.getBBox().getCenter()).asArcseconds()
 
         for rec in brightObjectMasks:
             center = geom.PointI(wcs.skyToPixel(rec.getCoord()))
