@@ -136,6 +136,9 @@ class AssembleCoaddConnections(
         if not self.config.doInputMap:
             self.outputs.remove("inputMap")
 
+        if not self.config.doWriteArtifactMasks:
+            self.outputs.remove("artifactMasks")
+
 
 class AssembleCoaddConfig(
     CoaddBaseTask.ConfigClass, pipeBase.PipelineTaskConfig, pipelineConnections=AssembleCoaddConnections
@@ -201,6 +204,11 @@ class AssembleCoaddConfig(
         doc="Persist coadd?",
         dtype=bool,
         default=True,
+    )
+    doWriteArtifactMasks = pexConfig.Field(
+        doc="Persist artifact masks?",
+        dtype=bool,
+        default=False,
     )
     doNImage = pexConfig.Field(
         doc="Create image of number of contributing exposures for each pixel",
@@ -433,8 +441,26 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             log.warning("doMaskBrightObjects is set to True, but brightObjectMask not loaded")
         self.processResults(retStruct.coaddExposure, inputData["brightObjectMask"], outputDataId)
 
+        if self.config.doWriteArtifactMasks and supplementaryData:  # branch to see if running CompareWarp.
+            dataIds = [ref.dataId for ref in inputs.warpRefList]
+            psfMatchedDataIds = [ref.dataId for ref in supplementaryData.warpRefList]
+
+            if dataIds != psfMatchedDataIds:
+                supplementaryData.warpRefList = reorderAndPadList(
+                    supplementaryData.warpRefList, psfMatchedDataIds, dataIds
+                )
+            for warpRef, altMask, outputRef in zip(
+                inputs.warpRefList, retStruct.altMaskList, outputRefs.artifactMasks
+            ):
+                if warpRef is None:
+                    continue
+                mask = afwImage.Mask(retStruct.coaddExposure.getBBox())
+                self.applyAltMaskPlanes(mask, altMask)
+                butlerQC.put(mask, outputRef)
+
         if self.config.doWrite:
             butlerQC.put(retStruct, outputRefs)
+
         return retStruct
 
     def processResults(self, coaddExposure, brightObjectMasks=None, dataId=None):
@@ -775,6 +801,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             imageScalerList=imageScalerList,
             weightList=weightList,
             inputMap=inputMap,
+            altMaskList=altMaskList,
         )
 
     def assembleMetadata(self, coaddExposure, warpRefList, weightList, psfMatchedWarpRefList=None):
@@ -1300,6 +1327,13 @@ class CompareWarpAssembleCoaddConnections(AssembleCoaddConnections):
         name="{outputCoaddName}CoaddPsfMatched",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "band"),
+    )
+    artifactMasks = pipeBase.connectionTypes.Output(
+        doc="Mask of artifacts detected in the coadd",
+        name="compare_warp_artifact_mask",
+        storageClass="Mask",
+        dimensions=("tract", "patch", "skymap", "visit", "instrument"),
+        multiple=True,
     )
 
     def __init__(self, *, config=None):
