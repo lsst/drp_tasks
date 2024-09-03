@@ -69,7 +69,7 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
         "This should be tested separately."
         pass
 
-    def runQuantum(self, mockSkyInfo, warpRefList, **kwargs):
+    def runQuantum(self, mockSkyInfo, warpRefList, psfMatchedWarpRefList=None, **kwargs):
         """Modified interface for testing coaddition algorithms without a
         Butler.
 
@@ -88,13 +88,15 @@ class MockAssembleCoaddTask(AssembleCoaddTask):
         retStruct : `lsst.pipe.base.Struct`
             The coadded exposure and associated metadata.
         """
-        inputs = self.prepareInputs(warpRefList, mockSkyInfo.bbox)
+        inputs = self.prepareInputs(warpRefList, mockSkyInfo.bbox, psfMatchedWarpRefList)
         retStruct = self.run(
             mockSkyInfo,
             warpRefList=inputs.warpRefList,
             imageScalerList=inputs.imageScalerList,
             weightList=inputs.weightList,
+            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
             supplementaryData=pipeBase.Struct(),
+            **kwargs,
         )
         return retStruct
 
@@ -331,6 +333,52 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
                 self.assertFalse(np.all(inputMap.check_bits_pix(validPix, [visitBitDict[expId]])))
             else:
                 self.assertTrue(np.all(inputMap.check_bits_pix(validPix, [visitBitDict[expId]])))
+
+    @lsst.utils.tests.methodParameters(doOnlineForMean=[False, True])
+    def testArtifactMask(self, doOnlineForMean):
+        """Test that CompareWarp and AssembleCoadd with artifact mask produce
+        identical results.
+        """
+        config = MockCompareWarpAssembleCoaddConfig()
+        config.doOnlineForMean = doOnlineForMean
+        compareWarpTask = MockCompareWarpAssembleCoaddTask(config=config)
+        compareWarpResult = compareWarpTask.runQuantum(
+            self.skyInfo,
+            self.handleList,
+            psfMatchedWarpRefList=self.handleListPsfMatched,
+        )
+
+        # Make a new list of handles with artifact masks applied.
+        handleList = []
+        for handle, artifactMask in zip(self.handleList, compareWarpResult.altMaskList):
+            dataSet = handle.get()
+            compareWarpTask.applyAltMaskPlanes(dataSet.mask, artifactMask)
+            # Repackage the dataset into a DataRef.
+            handleList.append(
+                pipeBase.InMemoryDatasetHandle(
+                    dataSet, storageClass=handle.storageClass, copy=True, dataId=handle.dataId
+                )
+            )
+
+        config = MockAssembleCoaddConfig()
+        config.badMaskPlanes = ["NO_DATA", "BAD", "SAT", "CLIPPED", "REJECTED"]
+        config.statistic = "MEAN"  # CompareWarp sets this statistic internally.
+        config.doOnlineForMean = doOnlineForMean
+        assembleTask = MockAssembleCoaddTask(config=config)
+        assembleResult = assembleTask.runQuantum(
+            self.skyInfo,
+            handleList,
+            psfMatchedWarpRefList=self.handleListPsfMatched,
+            mask=compareWarpResult.coaddExposure.mask.getPlaneBitMask(config.badMaskPlanes),
+        )
+
+        # Mask planes vary because of removeMaskPlanes calls in AssembleCoadd.
+        # Instead, just compare the other planes.
+        self.assertMaskedImagesEqual(
+            compareWarpResult.coaddExposure,
+            assembleResult.coaddExposure,
+            doMask=False,
+        )
 
 
 class MyMemoryTestCase(lsst.utils.tests.MemoryTestCase):
