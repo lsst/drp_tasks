@@ -464,7 +464,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         Duplicates interface of `runQuantum` method.
         Available to be implemented by subclasses only if they need the
-        coadd dataRef for performing preliminary processing before
+        coadd dataRef/handle for performing preliminary processing before
         assembling the coadd.
 
         Parameters
@@ -504,9 +504,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         Parameters
         ----------
         refList : `list`
-            List of data references to warp.
+            List of dataset handles (data references) to warp.
         psfMatchedWarpRefList : `list` | None, optional
-            List of data references to psfMatchedWarp.
+            List of dataset handles (data references) to psfMatchedWarp.
 
         Returns
         -------
@@ -514,7 +514,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             Results as a struct with attributes:
 
             ``warpRefList``
-                `list` of data references to warp.
+                `list` of dataset handles (data references) to warp.
             ``weightList``
                 `list` of weightings.
             ``imageScalerList``
@@ -651,13 +651,14 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         skyInfo : `~lsst.pipe.base.Struct`
             Struct with geometric information about the patch.
         warpRefList : `list`
-            List of data references to Warps (previously called CoaddTempExps).
+            List of dataset handles (data references) to Warps
+            (previously called CoaddTempExps).
         imageScalerList : `list`
             List of image scalers.
         weightList : `list`
             List of weights.
         psfMatchedWarpRefList : `list`, optional
-            List of data references to psfMatchedWarps.
+            List of dataset handles (data references) to psfMatchedWarps.
         altMaskList : `list`, optional
             List of alternate masks to use rather than those stored with
             warp.
@@ -680,7 +681,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             ``inputMap``
                 Bit-wise map of inputs, if requested.
             ``warpRefList``
-                Input list of refs to the warps
+                Input list of dataset handles (data refs) to the warps
                 (`~lsst.daf.butler.DeferredDatasetHandle`) (unmodified).
             ``imageScalerList``
                 Input list of image scalers (`list`) (unmodified).
@@ -690,7 +691,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         Raises
         ------
         lsst.pipe.base.NoWorkFound
-            Raised if no data references are provided.
+            Raised if no dataset handles (data references) are provided.
         """
         warpName = self.getTempExpDatasetName(self.warpType)
         self.log.info("Assembling %s %s", len(warpRefList), warpName)
@@ -786,11 +787,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure : `lsst.afw.image.Exposure`
             The target exposure for the coadd.
         warpRefList : `list`
-            List of data references to warp.
+            List of dataset handles (data references) to warp.
         weightList : `list`
             List of weights.
         psfMatchedWarpRefList : `list` | None, optional
-            List of data references to psfMatchedWarps.
+            List of dataset handles (data references) to psfMatchedWarps.
 
         Raises
         ------
@@ -883,7 +884,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         bbox : `lsst.geom.Box`
             Sub-region to coadd.
         warpRefList : `list`
-            List of data reference to warp.
+            List of dataset handles (data references) to warp.
         imageScalerList : `list`
             List of image scalers.
         weightList : `list`
@@ -957,7 +958,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure : `lsst.afw.image.Exposure`
             The target exposure for the coadd.
         warpRefList : `list`
-            List of data reference to warp.
+            List of dataset handles (data references) to warp.
         imageScalerList : `list`
             List of image scalers.
         weightList : `list`
@@ -1697,7 +1698,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         templateCoadd : `lsst.afw.image.Exposure`
             Exposure to serve as model of static sky.
         warpRefList : `list`
-            List of data references to warps.
+            List of dataset handles (data references) to warps.
         imageScalerList : `list`
             List of image scalers.
 
@@ -1911,7 +1912,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         Parameters
         ----------
         warpRef : `lsst.daf.butler.DeferredDatasetHandle`
-            Handle for the warp.
+            Dataset handle for the warp.
         imageScaler : `lsst.pipe.tasks.scaleZeroPoint.ImageScaler`
             An image scaler object.
         templateCoadd : `lsst.afw.image.Exposure`

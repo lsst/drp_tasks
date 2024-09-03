@@ -210,21 +210,21 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         matchedExposures = {}
         for expId in range(100, 110):
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId)
-        self.dataRefList = testData.makeDataRefList(
+        self.handleList = testData.makeDataRefList(
             exposures, matchedExposures, "direct", patch=patch, tract=tract
         )
-        self.dataRefListPsfMatched = testData.makeDataRefList(
+        self.handleListPsfMatched = testData.makeDataRefList(
             exposures, matchedExposures, "psfMatched", patch=patch, tract=tract
         )
         self.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
     def checkRun(self, assembleTask, warpType="direct"):
         """Check that the task runs successfully."""
-        dataRefList = self.dataRefListPsfMatched if warpType == "psfMatched" else self.dataRefList
+        handleList = self.handleListPsfMatched if warpType == "psfMatched" else self.handleList
         result = assembleTask.runQuantum(
             self.skyInfo,
-            dataRefList,
-            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+            handleList,
+            psfMatchedWarpRefList=self.handleListPsfMatched,
         )
 
         # Check that we produced an exposure.
@@ -255,11 +255,11 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         config.statistic = "MEAN"
         assembleTask = MockInputMapAssembleCoaddTask(config=config)
 
-        dataRefList = self.dataRefList
+        handleList = self.handleList
         results = assembleTask.runQuantum(
             self.skyInfo,
-            dataRefList,
-            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+            handleList,
+            psfMatchedWarpRefList=self.handleListPsfMatched,
         )
         coadd = results.coaddExposure
 
@@ -271,8 +271,8 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
 
         resultsOnline = assembleTaskOnline.runQuantum(
             self.skyInfo,
-            dataRefList,
-            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+            handleList,
+            psfMatchedWarpRefList=self.handleListPsfMatched,
         )
         coaddOnline = resultsOnline.coaddExposure
 
@@ -299,14 +299,12 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
             else:
                 badBox = None
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId, badRegionBox=badBox)
-        dataRefList = testData.makeDataRefList(
-            exposures, matchedExposures, "direct", patch=patch, tract=tract
-        )
+        handleList = testData.makeDataRefList(exposures, matchedExposures, "direct", patch=patch, tract=tract)
 
         results = assembleTask.runQuantum(
             self.skyInfo,
-            dataRefList,
-            psfMatchedWarpRefList=self.dataRefListPsfMatched,
+            handleList,
+            psfMatchedWarpRefList=self.handleListPsfMatched,
         )
 
         inputMap = results.inputMap
