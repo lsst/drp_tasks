@@ -66,6 +66,15 @@ class AssembleCellCoaddConnections(
         multiple=True,
     )
 
+    artifactMasks = Input(
+        doc="Artifact masks to be applied to the input warps",
+        name="compare_warp_artifact_mask",
+        storageClass="Mask",
+        dimensions=("tract", "patch", "skymap", "visit", "instrument"),
+        deferLoad=True,
+        multiple=True,
+    )
+
     skyMap = Input(
         doc="Input definition of geometry/bbox and projection/wcs. This must be cell-based.",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
@@ -313,10 +322,21 @@ class AssembleCellCoaddTask(PipelineTask):
                 compute_n_image=False,
             )
 
+        artifactMasks = kwargs.get("artifactMasks", [None] * len(inputWarps))
+
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for warpRef in inputWarps:
+        for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
             warp = warpRef.get()
+
+            warp.mask.addMaskPlane("CLIPPED")
+            warp.mask.addMaskPlane("REJECTED")
+
+            if artifactMaskRef is not None:
+                # Apply the artifact mask to the warp.
+                artifactMask = artifactMaskRef.get()
+                warp.mask.array |= artifactMask.array
+                del artifactMask
 
             # Pre-process the warp before coadding.
             # Each Warp that goes into a coadd will typically have an
@@ -327,13 +347,24 @@ class AssembleCellCoaddTask(PipelineTask):
 
             # Coadd the warp onto the cells it completely overlaps.
             edge = afwImage.Mask.getPlaneBitMask("EDGE")
+            reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 mi = warp[bbox].getMaskedImage()
 
                 if (mi.getMask().array & edge).any():
                     self.log.debug(
-                        "Skipping %s in cell %s because it has an EDGE", warpRef.dataId, cellInfo.index
+                        "Skipping %s in cell %s because it has an EDGE bit set",
+                        warpRef.dataId,
+                        cellInfo.index,
+                    )
+                    continue
+
+                if (mi.getMask().array & reject).any():
+                    self.log.debug(
+                        "Skipping %s in cell %s because it has a CLIPPED or REJECTED bit set",
+                        warpRef.dataId,
+                        cellInfo.index,
                     )
                     continue
 

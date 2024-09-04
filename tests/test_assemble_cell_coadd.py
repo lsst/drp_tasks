@@ -105,14 +105,14 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         matchedExposures = {}
         for expId in range(100, 110):
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId)
-        cls.dataRefList = testData.makeDataRefList(
+        cls.handleList = testData.makeDataRefList(
             exposures, matchedExposures, "direct", patch=patch, tract=tract
         )
         cls.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
         config = MockAssembleCellCoaddConfig()
         assembleTask = MockAssembleCellCoaddTask(config=config)
-        cls.result = assembleTask.runQuantum(cls.skyInfo, cls.dataRefList)
+        cls.result = assembleTask.runQuantum(cls.skyInfo, cls.handleList)
 
     def checkSortOrder(self, inputs: Iterable[ObservationIdentifiers]) -> None:
         """Check that the inputs are sorted.
@@ -137,13 +137,13 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
 
     def checkRun(self, assembleTask):
         """Check that the task runs successfully."""
-        result = assembleTask.runQuantum(self.skyInfo, self.dataRefList)
+        result = assembleTask.runQuantum(self.skyInfo, self.handleList)
 
         # Check that we produced an exposure.
         self.assertTrue(result.multipleCellCoadd is not None)
         # Check that the visit_count method returns a number less than or equal
         # to the total number of input exposures available.
-        max_visit_count = len(self.dataRefList)
+        max_visit_count = len(self.handleList)
         for cellId, singleCellCoadd in result.multipleCellCoadd.cells.items():
             with self.subTest(x=cellId.x, y=cellId.y):
                 self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
@@ -163,7 +163,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         """Check that the visit_count method returns a number less than or
         equal to the total number of input exposures available.
         """
-        max_visit_count = len(self.dataRefList)
+        max_visit_count = len(self.handleList)
         for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             with self.subTest(x=cellId.x, y=cellId.y):
                 self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
