@@ -20,38 +20,25 @@
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
 import re
-import time
 from collections import defaultdict
 
 import astshim as ast
-import lsst.pex.config
 import numpy as np
 import scipy.optimize
-from lsst.afw.cameraGeom import (
-    ACTUAL_PIXELS,
-    FIELD_ANGLE,
-    FOCAL_PLANE,
-    PIXELS,
-    TAN_PIXELS,
-    Camera,
-    CameraSys,
-    DetectorConfig,
-)
-from lsst.afw.geom import TransformPoint2ToPoint2, transformConfig
+
+import lsst.pex.config
+from lsst.afw.cameraGeom import FIELD_ANGLE, FOCAL_PLANE, Camera
+from lsst.afw.geom import TransformPoint2ToPoint2
 from lsst.geom import degrees
 from lsst.pipe.base import Task
 
-from .gbdesAstrometricFit import _degreeFromNCoeffs, _nCoeffsFromDegree
-
 __all__ = [
-    "BuildCameraConfig",
-    "BuildCameraTask",
+    "BuildCameraFromAstrometryConfig",
+    "BuildCameraFromAstrometryTask",
 ]
 
-cameraSysList = [FIELD_ANGLE, FOCAL_PLANE, PIXELS, TAN_PIXELS, ACTUAL_PIXELS]
-cameraSysMap = dict((sys.getSysName(), sys) for sys in cameraSysList)
-
-Nfeval = 0
+# Set up global variable to use in minimization callback.
+nFunctionEval = 0
 
 
 def _z_function(params, x, y, order=4):
@@ -108,11 +95,11 @@ def _z_function_dx(params, x, y, order=4):
         for j in range(i + 1):
             coeffs[j, i - j] = params[c]
             c += 1
-    deriv_coeffs = np.zeros(coeffs.shape)
-    deriv_coeffs[:, :-1] = coeffs[:, 1:]
-    deriv_coeffs[:, :-1] *= np.arange(1, order + 1)
+    derivCoeffs = np.zeros(coeffs.shape)
+    derivCoeffs[:, :-1] = coeffs[:, 1:]
+    derivCoeffs[:, :-1] *= np.arange(1, order + 1)
 
-    z = np.polynomial.polynomial.polyval2d(x, y, deriv_coeffs.T)
+    z = np.polynomial.polynomial.polyval2d(x, y, derivCoeffs.T)
     return z
 
 
@@ -141,15 +128,15 @@ def _z_function_dy(params, x, y, order=4):
         for j in range(i + 1):
             coeffs[j, i - j] = params[c]
             c += 1
-    deriv_coeffs = np.zeros(coeffs.shape)
-    deriv_coeffs[:-1] = coeffs[1:]
-    deriv_coeffs[:-1] *= np.arange(1, order + 1).reshape(-1, 1)
+    derivCoeffs = np.zeros(coeffs.shape)
+    derivCoeffs[:-1] = coeffs[1:]
+    derivCoeffs[:-1] *= np.arange(1, order + 1).reshape(-1, 1)
 
-    z = np.polynomial.polynomial.polyval2d(x, y, deriv_coeffs.T)
+    z = np.polynomial.polynomial.polyval2d(x, y, derivCoeffs.T)
     return z
 
 
-class BuildCameraConfig(lsst.pex.config.Config):
+class BuildCameraFromAstrometryConfig(lsst.pex.config.Config):
     """Configuration for BuildCameraTask."""
 
     tangentPlaneDegree = lsst.pex.config.Field(
@@ -184,7 +171,7 @@ class BuildCameraConfig(lsst.pex.config.Config):
     plateScale = lsst.pex.config.Field(
         dtype=float,
         doc=("Scaling between camera coordinates in mm and angle on the sky in" " arcsec."),
-        default=1.0,
+        default=20.005867576692737,
     )
     astInversionTolerance = lsst.pex.config.Field(
         dtype=float,
@@ -201,29 +188,20 @@ class BuildCameraConfig(lsst.pex.config.Config):
     )
 
 
-class BuildCameraTask(Task):
+class BuildCameraFromAstrometryTask(Task):
     """Build an `lsst.afw.cameraGeom.Camera` object out of the `gbdes`
     polynomials mapping from pixels to the tangent plane.
 
     Parameters
     ----------
-    camera : `lsst.afw.cameraGeom.Camera`
-        Camera object from which to take pupil function, name, and other
-        properties.
-    detectorList : `list` [`int`]
-        List of detector ids.
-    visitList : `list` [`int`]
-        List of ids for visits that were used to train the input model.
+
     """
 
-    ConfigClass = BuildCameraConfig
-    _DefaultName = "buildCamera"
+    ConfigClass = BuildCameraFromAstrometryConfig
+    _DefaultName = "buildCameraFromAstrometry"
 
-    def __init__(self, camera, detectorList, visitList, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.camera = camera
-        self.detectorList = detectorList
-        self.visitList = visitList
 
         # The gbdes model normalizes the pixel positions to the range -1 - +1.
         X = np.arange(-1, 1, 0.1)
@@ -232,7 +210,7 @@ class BuildCameraTask(Task):
         self.x = x.ravel()
         self.y = y.ravel()
 
-    def run(self, mapParams, mapTemplate):
+    def run(self, mapParams, mapTemplate, detectorList, visitList, inputCamera, rotationAngle):
         """Convert the model parameters into a Camera object.
 
         Parameters
@@ -243,6 +221,15 @@ class BuildCameraTask(Task):
         mapTemplate : `dict`
             Dictionary describing the format of the astrometric model,
             following the convention in `gbdes`.
+        detectorList : `list` [`int`]
+            List of detector ids.
+        visitList : `list` [`int`]
+            List of ids for visits that were used to train the input model.
+        camera : `lsst.afw.cameraGeom.Camera`
+            Camera object from which to take pupil function, name, and other
+            properties.
+        rotationAngle : `float`
+            Value in radians of the average rotation angle of the input visits.
 
         Returns
         -------
@@ -251,27 +238,29 @@ class BuildCameraTask(Task):
         """
 
         # Normalize the model.
-        newParams, newIntX, newIntY = self._normalizeModel(mapParams, mapTemplate)
+        newParams, newTPx, newTPy = self._normalize_model(mapParams, mapTemplate, detectorList, visitList)
 
         if self.config.modelSplitting == "basic":
             # Put all of the camera distortion into the pixels->focal plane
             # part of the distortion model, with the focal plane->tangent plane
             # part only used for scaling between the focal plane and sky.
-            pixToFocalPlane, focalPlaneToTangentPlane = self._basicModel(newParams)
+            pixToFocalPlane, focalPlaneToTangentPlane = self._basic_model(newParams, detectorList)
 
         else:
             # Fit two polynomials, such that the first describes the pixel->
             # focal plane part of the model, and the second describes the focal
             # plane->tangent plane part of the model, with the goal of
             # generating a more physically-motivated distortion model.
-            pixToFocalPlane, focalPlaneToTangentPlane = self._splitModel(newIntX, newIntY)
+            pixToFocalPlane, focalPlaneToTangentPlane = self._split_model(newTPx, newTPy, detectorList)
 
         # Turn the mappings into a Camera object.
-        camera = self._translateToAfw(pixToFocalPlane, focalPlaneToTangentPlane)
+        camera = self._translate_to_afw(
+            pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle
+        )
 
         return camera
 
-    def _normalizeModel(self, mapParams, mapTemplate):
+    def _normalize_model(self, mapParams, mapTemplate, detectorList, visitList):
         """Normalize the camera mappings, such that they correspond to the
         average visit.
 
@@ -291,13 +280,17 @@ class BuildCameraTask(Task):
         mapTemplate : `dict`
             Dictionary describing the format of the astrometric model,
             following the convention in `gbdes`.
+        detectorList : `list` [`int`]
+            List of detector ids.
+        visitList : `list` [`int`]
+            List of ids for visits that were used to train the input model.
 
         Returns
         -------
         newDeviceArray : `np.ndarray`
             Array of NxM, where N is the number of detectors, and M is the
             number of coefficients for each per-detector mapping.
-        newIntX, newIntY : `np.ndarray`
+        newTPx, newTPy : `np.ndarray`
             Projection of `self.x` and `self.y` onto the tangent plane, given
             the normalized mapping.
         """
@@ -306,7 +299,7 @@ class BuildCameraTask(Task):
         deviceParams = []
         visitParams = []
         for element in mapTemplate["BAND/DEVICE"]["Elements"]:
-            for detector in self.detectorList:
+            for detector in detectorList:
                 detectorTemplate = element.replace("DEVICE", str(detector))
                 detectorTemplate = detectorTemplate.replace("BAND", ".+")
                 for k, params in mapParams.items():
@@ -315,7 +308,7 @@ class BuildCameraTask(Task):
         deviceArray = np.vstack(deviceParams)
 
         for element in mapTemplate["EXPOSURE"]["Elements"]:
-            for visit in self.visitList:
+            for visit in visitList:
                 visitTemplate = element.replace("EXPOSURE", str(visit))
                 for k, params in mapParams.items():
                     if re.fullmatch(visitTemplate, k):
@@ -326,6 +319,8 @@ class BuildCameraTask(Task):
 
         expoMean = expoArray.mean(axis=0)
 
+        # Shift the per-device part of the model to correspond with the mean
+        # per-visit behavior.
         newDeviceArray = np.zeros(deviceArray.shape)
         nCoeffsDev = deviceArray.shape[1] // 2
         newDeviceArray[:, :nCoeffsDev] = (
@@ -337,24 +332,24 @@ class BuildCameraTask(Task):
         newDeviceArray[:, 0] += expoMean[0]
         newDeviceArray[:, nCoeffsDev] += expoMean[3]
 
-        # Then get the interim positions from the new device model:
-        newIntX = []
-        newIntY = []
+        # Then get the tangent plane positions from the new device model:
+        newTPx = []
+        newTPy = []
         for deviceMap in newDeviceArray:
             nCoeffsDev = len(deviceMap) // 2
-            deviceDegree = _degreeFromNCoeffs(nCoeffsDev)
+            deviceDegree = int(-1.5 + 0.5 * (1 + 8 * nCoeffsDev) ** 0.5)
 
             intX = _z_function(deviceMap[:nCoeffsDev], self.x, self.y, order=deviceDegree)
             intY = _z_function(deviceMap[nCoeffsDev:], self.x, self.y, order=deviceDegree)
-            newIntX.append(intX)
-            newIntY.append(intY)
+            newTPx.append(intX)
+            newTPy.append(intY)
 
-        newIntX = np.array(newIntX).ravel()
-        newIntY = np.array(newIntY).ravel()
+        newTPx = np.array(newTPx).ravel()
+        newTPy = np.array(newTPy).ravel()
 
-        return newDeviceArray, newIntX, newIntY
+        return newDeviceArray, newTPx, newTPy
 
-    def _basicModel(self, modelParameters):
+    def _basic_model(self, modelParameters, detectorList):
         """This will just convert the pix->fp parameters into the right format,
         and return an identity mapping for the fp->tp part.
 
@@ -363,6 +358,8 @@ class BuildCameraTask(Task):
         modelParameters : `np.ndarray`
             Array of NxM, where N is the number of detectors, and M is the
             number of coefficients for each per-detector mapping.
+        detectorList : `list` [`int`]
+            List of detector ids.
 
         Returns
         -------
@@ -374,17 +371,17 @@ class BuildCameraTask(Task):
             Dictionary giving the focal plane to tangent plane mapping.
         """
 
-        nCoeffsFP = modelParameters.shape[1] // 2
+        nCoeffsFp = modelParameters.shape[1] // 2
         pixelsToFocalPlane = defaultdict(dict)
-        for d, det in enumerate(self.detectorList):
-            pixelsToFocalPlane[det]["x"] = modelParameters[d][:nCoeffsFP]
-            pixelsToFocalPlane[det]["y"] = modelParameters[d][nCoeffsFP:]
+        for d, det in enumerate(detectorList):
+            pixelsToFocalPlane[det]["x"] = modelParameters[d][:nCoeffsFp]
+            pixelsToFocalPlane[det]["y"] = modelParameters[d][nCoeffsFp:]
 
         focalPlaneToTangentPlane = {"x": [0, 1, 0], "y": [0, 0, 1]}
 
         return pixelsToFocalPlane, focalPlaneToTangentPlane
 
-    def _splitModel(self, targetX, targetY, pixToFPGuess=None, fpToTpGuess=None):
+    def _split_model(self, targetX, targetY, detectorList, pixToFpGuess=None, fpToTpGuess=None):
         """Fit a two-step model, with one polynomial per detector fitting the
         pixels to focal plane part, followed by a polynomial fitting the focal
         plane to tangent plane part.
@@ -396,7 +393,9 @@ class BuildCameraTask(Task):
         ----------
         targetX, targetY : `np.ndarray`
             Target x and y values in the tangent plane.
-        pixToFPGuess : `dict` [`int`, [`string`, `float`]]
+        detectorList : `list` [`int`]
+            List of detector ids.
+        pixToFpGuess : `dict` [`int`, [`string`, `float`]]
             Initial guess for the pixels to focal plane mapping to use in the
             model fit, in the form of a dictionary giving the per-detector
             pixel to focal plane mapping, with keys for each detector giving
@@ -419,17 +418,17 @@ class BuildCameraTask(Task):
         tpDegree = self.config.tangentPlaneDegree
         fpDegree = self.config.focalPlaneDegree
 
-        nCoeffsFP = _nCoeffsFromDegree(fpDegree)
-        nCoeffsFP_tot = len(self.detectorList) * nCoeffsFP * 2
+        nCoeffsFP = int((fpDegree + 2) * (fpDegree + 1) / 2)
+        nCoeffsFPTot = len(detectorList) * nCoeffsFP * 2
 
-        nCoeffsTP = _nCoeffsFromDegree(tpDegree)
+        nCoeffsTP = int((tpDegree + 2) * (tpDegree + 1) / 2)
         # The constant and linear terms will be fixed to remove degeneracy with
         # the pix->fp part of the model
         nCoeffsFixed = 3
         nCoeffsFree = nCoeffsTP - nCoeffsFixed
-        fx_params = np.zeros(nCoeffsTP * 2)
-        fx_params[1] = 1
-        fx_params[nCoeffsTP + 2] = 1
+        fixedParams = np.zeros(nCoeffsTP * 2)
+        fixedParams[1] = 1
+        fixedParams[nCoeffsTP + 2] = 1
 
         nX = len(self.x)
         # We need an array of the form [1, x, y, x^2, xy, y^2, ...] to use when
@@ -445,26 +444,26 @@ class BuildCameraTask(Task):
 
         def two_part_function(params):
             # The function giving the split model.
-            intX_tot = []
-            intY_tot = []
-            for i in range(len(self.detectorList)):
-                intX = _z_function(
+            fpXAll = []
+            fpYAll = []
+            for i in range(len(detectorList)):
+                fpX = _z_function(
                     params[2 * nCoeffsFP * i : (2 * i + 1) * nCoeffsFP], self.x, self.y, order=fpDegree
                 )
-                intY = _z_function(
+                fpY = _z_function(
                     params[(2 * i + 1) * nCoeffsFP : 2 * nCoeffsFP * (1 + i)], self.x, self.y, order=fpDegree
                 )
-                intX_tot.append(intX)
-                intY_tot.append(intY)
-            intX_tot = np.array(intX_tot).ravel()
-            intY_tot = np.array(intY_tot).ravel()
+                fpXAll.append(fpX)
+                fpYAll.append(fpY)
+            fpXAll = np.array(fpXAll).ravel()
+            fpYAll = np.array(fpYAll).ravel()
 
-            tpParams = fx_params.copy()
-            tpParams[nCoeffsFixed:nCoeffsTP] = params[nCoeffsFP_tot : nCoeffsFP_tot + nCoeffsFree]
-            tpParams[nCoeffsFixed + nCoeffsTP :] = params[nCoeffsFP_tot + nCoeffsFree :]
+            tpParams = fixedParams.copy()
+            tpParams[nCoeffsFixed:nCoeffsTP] = params[nCoeffsFPTot : nCoeffsFPTot + nCoeffsFree]
+            tpParams[nCoeffsFixed + nCoeffsTP :] = params[nCoeffsFPTot + nCoeffsFree :]
 
-            tpX = _z_function(tpParams[:nCoeffsTP], intX_tot, intY_tot, order=tpDegree)
-            tpY = _z_function(tpParams[nCoeffsTP:], intX_tot, intY_tot, order=tpDegree)
+            tpX = _z_function(tpParams[:nCoeffsTP], fpXAll, fpYAll, order=tpDegree)
+            tpY = _z_function(tpParams[nCoeffsTP:], fpXAll, fpYAll, order=tpDegree)
             return tpX, tpY
 
         def min_function(params):
@@ -480,141 +479,141 @@ class BuildCameraTask(Task):
             dX = -2 * (targetX - tpX)
             dY = -2 * (targetY - tpY)
             jacobian = np.zeros(len(params))
-            fp_params = params[:nCoeffsFP_tot]
-            tp_params = fx_params.copy()
-            tp_params[nCoeffsFixed:nCoeffsTP] = params[nCoeffsFP_tot : nCoeffsFP_tot + nCoeffsFree]
-            tp_params[nCoeffsFixed + nCoeffsTP :] = params[nCoeffsFP_tot + nCoeffsFree :]
-            intX_tot = []
-            intY_tot = []
+            fpParams = params[:nCoeffsFPTot]
+            tpParams = fixedParams.copy()
+            tpParams[nCoeffsFixed:nCoeffsTP] = params[nCoeffsFPTot : nCoeffsFPTot + nCoeffsFree]
+            tpParams[nCoeffsFixed + nCoeffsTP :] = params[nCoeffsFPTot + nCoeffsFree :]
+            fpXAll = []
+            fpYAll = []
             # Fill in the derivatives for the pix->fp terms.
-            for i in range(len(self.detectorList)):
+            for i in range(len(detectorList)):
                 dX_i = dX[nX * i : nX * (i + 1)]
                 dY_i = dY[nX * i : nX * (i + 1)]
-                intX = _z_function(
-                    fp_params[2 * nCoeffsFP * i : (2 * i + 1) * nCoeffsFP], self.x, self.y, order=fpDegree
+                fpX = _z_function(
+                    fpParams[2 * nCoeffsFP * i : (2 * i + 1) * nCoeffsFP], self.x, self.y, order=fpDegree
                 )
-                intY = _z_function(
-                    fp_params[(2 * i + 1) * nCoeffsFP : 2 * nCoeffsFP * (1 + i)],
+                fpY = _z_function(
+                    fpParams[(2 * i + 1) * nCoeffsFP : 2 * nCoeffsFP * (1 + i)],
                     self.x,
                     self.y,
                     order=fpDegree,
                 )
-                intX_tot.append(intX)
-                intY_tot.append(intY)
+                fpXAll.append(fpX)
+                fpYAll.append(fpY)
 
-                dTpX_dfpX = _z_function_dx(tp_params[:nCoeffsTP], intX, intY, order=tpDegree)
-                dTpX_dfpY = _z_function_dy(tp_params[:nCoeffsTP], intX, intY, order=tpDegree)
-                dTpY_dfpX = _z_function_dx(tp_params[nCoeffsTP:], intX, intY, order=tpDegree)
-                dTpY_dfpY = _z_function_dy(tp_params[nCoeffsTP:], intX, intY, order=tpDegree)
+                dTpX_dFpX = _z_function_dx(tpParams[:nCoeffsTP], fpX, fpY, order=tpDegree)
+                dTpX_dFpY = _z_function_dy(tpParams[:nCoeffsTP], fpX, fpY, order=tpDegree)
+                dTpY_dFpX = _z_function_dx(tpParams[nCoeffsTP:], fpX, fpY, order=tpDegree)
+                dTpY_dFpY = _z_function_dy(tpParams[nCoeffsTP:], fpX, fpY, order=tpDegree)
 
-                dTpX_part = np.concatenate([xyArray * dTpX_dfpX, xyArray * dTpX_dfpY])
-                dTpY_part = np.concatenate([xyArray * dTpY_dfpX, xyArray * dTpY_dfpY])
+                dTpX_part = np.concatenate([xyArray * dTpX_dFpX, xyArray * dTpX_dFpY])
+                dTpY_part = np.concatenate([xyArray * dTpY_dFpX, xyArray * dTpY_dFpY])
                 jacobian_i = (dX_i * dTpX_part + dY_i * dTpY_part).sum(axis=1)
                 jacobian[2 * nCoeffsFP * i : 2 * nCoeffsFP * (i + 1)] = jacobian_i
 
-            intX_tot = np.array(intX_tot).ravel()
-            intY_tot = np.array(intY_tot).ravel()
+            fpXAll = np.array(fpXAll).ravel()
+            fpYAll = np.array(fpYAll).ravel()
 
             # Fill in the derivatives for the fp->tp terms.
             for j in range(nCoeffsFree):
                 tParams = np.zeros(nCoeffsTP)
                 tParams[nCoeffsFixed + j] = 1
-                tmpZ = _z_function(tParams, intX_tot, intY_tot, order=tpDegree)
-                jacobian[nCoeffsFP_tot + j] = (dX * tmpZ).sum()
-                jacobian[nCoeffsFP_tot + nCoeffsFree + j] = (dY * tmpZ).sum()
+                tmpZ = _z_function(tParams, fpXAll, fpYAll, order=tpDegree)
+                jacobian[nCoeffsFPTot + j] = (dX * tmpZ).sum()
+                jacobian[nCoeffsFPTot + nCoeffsFree + j] = (dY * tmpZ).sum()
             return jacobian
 
         def hessian(params):
             # The Hessian of min_function, which is needed for the minimizer.
             hessian = np.zeros((len(params), len(params)))
 
-            fp_params = params[:nCoeffsFP_tot]
-            tp_params = fx_params.copy()
-            tp_params[nCoeffsFixed:nCoeffsTP] = params[nCoeffsFP_tot : nCoeffsFP_tot + nCoeffsFree]
-            tp_params[nCoeffsFixed + nCoeffsTP :] = params[nCoeffsFP_tot + nCoeffsFree :]
-            intX_tot = []
-            intY_tot = []
+            fpParams = params[:nCoeffsFPTot]
+            tpParams = fixedParams.copy()
+            tpParams[nCoeffsFixed:nCoeffsTP] = params[nCoeffsFPTot : nCoeffsFPTot + nCoeffsFree]
+            tpParams[nCoeffsFixed + nCoeffsTP :] = params[nCoeffsFPTot + nCoeffsFree :]
+            fpXAll = []
+            fpYAll = []
 
             # Loop over the detectors to fill in the d(pix->fp)**2 and
             # d(pix->fp)d(fp->tp) cross terms.
-            for i in range(len(self.detectorList)):
-                intX = _z_function(
-                    fp_params[2 * nCoeffsFP * i : (2 * i + 1) * nCoeffsFP], self.x, self.y, order=fpDegree
+            for i in range(len(detectorList)):
+                fpX = _z_function(
+                    fpParams[2 * nCoeffsFP * i : (2 * i + 1) * nCoeffsFP], self.x, self.y, order=fpDegree
                 )
-                intY = _z_function(
-                    fp_params[(2 * i + 1) * nCoeffsFP : 2 * nCoeffsFP * (1 + i)],
+                fpY = _z_function(
+                    fpParams[(2 * i + 1) * nCoeffsFP : 2 * nCoeffsFP * (1 + i)],
                     self.x,
                     self.y,
                     order=fpDegree,
                 )
-                intX_tot.append(intX)
-                intY_tot.append(intY)
-                dTpX_dfpX = _z_function_dx(tp_params[:nCoeffsTP], intX, intY, order=tpDegree)
-                dTpX_dfpY = _z_function_dy(tp_params[:nCoeffsTP], intX, intY, order=tpDegree)
-                dTpY_dfpX = _z_function_dx(tp_params[nCoeffsTP:], intX, intY, order=tpDegree)
-                dTpY_dfpY = _z_function_dy(tp_params[nCoeffsTP:], intX, intY, order=tpDegree)
+                fpXAll.append(fpX)
+                fpYAll.append(fpY)
+                dTpX_dFpX = _z_function_dx(tpParams[:nCoeffsTP], fpX, fpY, order=tpDegree)
+                dTpX_dFpY = _z_function_dy(tpParams[:nCoeffsTP], fpX, fpY, order=tpDegree)
+                dTpY_dFpX = _z_function_dx(tpParams[nCoeffsTP:], fpX, fpY, order=tpDegree)
+                dTpY_dFpY = _z_function_dy(tpParams[nCoeffsTP:], fpX, fpY, order=tpDegree)
 
-                dTpX_part = np.concatenate([xyArray * dTpX_dfpX, xyArray * dTpX_dfpY])
-                dTpY_part = np.concatenate([xyArray * dTpY_dfpX, xyArray * dTpY_dfpY])
+                dTpX_part = np.concatenate([xyArray * dTpX_dFpX, xyArray * dTpX_dFpY])
+                dTpY_part = np.concatenate([xyArray * dTpY_dFpX, xyArray * dTpY_dFpY])
 
-                for l in range(2 * nCoeffsFP):
+                for k in range(2 * nCoeffsFP):
                     for m in range(2 * nCoeffsFP):
-                        hessian[2 * nCoeffsFP * i + l, 2 * nCoeffsFP * i + m] = (
-                            2 * (dTpX_part[l] * dTpX_part[m] + dTpY_part[l] * dTpY_part[m]).sum()
+                        hessian[2 * nCoeffsFP * i + k, 2 * nCoeffsFP * i + m] = (
+                            2 * (dTpX_part[k] * dTpX_part[m] + dTpY_part[k] * dTpY_part[m]).sum()
                         )
 
                     for j in range(nCoeffsFree):
-                        tParams = np.zeros(nCoeffsTP)
-                        tParams[nCoeffsFixed + j] = 1
-                        tmpZ = _z_function(tParams, intX, intY, order=tpDegree)
+                        tmpParams = np.zeros(nCoeffsTP)
+                        tmpParams[nCoeffsFixed + j] = 1
+                        tmpZ = _z_function(tmpParams, fpX, fpY, order=tpDegree)
 
-                        hessX = 2 * (dTpX_part[l] * tmpZ).sum()
-                        hessY = 2 * (dTpY_part[l] * tmpZ).sum()
+                        hessX = 2 * (dTpX_part[k] * tmpZ).sum()
+                        hessY = 2 * (dTpY_part[k] * tmpZ).sum()
                         # dTP_x part
-                        hessian[2 * nCoeffsFP * i + l, nCoeffsFP_tot + j] = hessX
-                        hessian[nCoeffsFP_tot + j, 2 * nCoeffsFP * i + l] = hessX
+                        hessian[2 * nCoeffsFP * i + k, nCoeffsFPTot + j] = hessX
+                        hessian[nCoeffsFPTot + j, 2 * nCoeffsFP * i + k] = hessX
                         # dTP_y part
-                        hessian[2 * nCoeffsFP * i + l, nCoeffsFP_tot + nCoeffsFree + j] = hessY
-                        hessian[nCoeffsFP_tot + nCoeffsFree + j, 2 * nCoeffsFP * i + l] = hessY
+                        hessian[2 * nCoeffsFP * i + k, nCoeffsFPTot + nCoeffsFree + j] = hessY
+                        hessian[nCoeffsFPTot + nCoeffsFree + j, 2 * nCoeffsFP * i + k] = hessY
 
-            intX_tot = np.array(intX_tot).ravel()
-            intY_tot = np.array(intY_tot).ravel()
-            tmpZ_array = np.zeros((nCoeffsFree, nX * len(self.detectorList)))
+            fpXAll = np.array(fpXAll).ravel()
+            fpYAll = np.array(fpYAll).ravel()
+            tmpZArray = np.zeros((nCoeffsFree, nX * len(detectorList)))
             # Finally, get the d(fp->tp)**2 terms
             for j in range(nCoeffsFree):
                 tParams = np.zeros(nCoeffsTP)
                 tParams[nCoeffsFixed + j] = 1
-                tmpZ_array[j] = _z_function(tParams, intX_tot, intY_tot, order=tpDegree)
+                tmpZArray[j] = _z_function(tParams, fpXAll, fpYAll, order=tpDegree)
             for j in range(nCoeffsFree):
                 for m in range(nCoeffsFree):
                     # X-Y cross terms are zero
-                    hess = 2 * (tmpZ_array[j] * tmpZ_array[m]).sum()
-                    hessian[nCoeffsFP_tot + j, nCoeffsFP_tot + m] = hess
-                    hessian[nCoeffsFP_tot + nCoeffsFree + j, nCoeffsFP_tot + nCoeffsFree + m] = hess
+                    hess = 2 * (tmpZArray[j] * tmpZArray[m]).sum()
+                    hessian[nCoeffsFPTot + j, nCoeffsFPTot + m] = hess
+                    hessian[nCoeffsFPTot + nCoeffsFree + j, nCoeffsFPTot + nCoeffsFree + m] = hess
             return hessian
 
-        global Nfeval
-        Nfeval = 0
+        global nFunctionEval
+        nFunctionEval = 0
 
         def callbackMF(params):
-            global Nfeval
-            self.log.info(f"Iteration {Nfeval}, function value {min_function(params)}")
-            Nfeval += 1
+            global nFunctionEval
+            self.log.info(f"Iteration {nFunctionEval}, function value {min_function(params)}")
+            nFunctionEval += 1
 
-        initGuess = np.zeros(nCoeffsFP_tot + 2 * nCoeffsFree)
-        if pixToFPGuess:
-            useVar = min(nCoeffsFP, len(pixToFPGuess[0]["x"]))
-            for i, det in enumerate(self.detectorList):
-                initGuess[2 * nCoeffsFP * i : 2 * nCoeffsFP * i + useVar] = pixToFPGuess[det]["x"][:useVar]
-                initGuess[(2 * i + 1) * nCoeffsFP : (2 * i + 1) * nCoeffsFP + useVar] = pixToFPGuess[det][
+        initGuess = np.zeros(nCoeffsFPTot + 2 * nCoeffsFree)
+        if pixToFpGuess:
+            useVar = min(nCoeffsFP, len(pixToFpGuess[0]["x"]))
+            for i, det in enumerate(detectorList):
+                initGuess[2 * nCoeffsFP * i : 2 * nCoeffsFP * i + useVar] = pixToFpGuess[det]["x"][:useVar]
+                initGuess[(2 * i + 1) * nCoeffsFP : (2 * i + 1) * nCoeffsFP + useVar] = pixToFpGuess[det][
                     "y"
                 ][:useVar]
         if fpToTpGuess:
             useVar = min(nCoeffsTP, len(fpToTpGuess["x"]))
-            initGuess[nCoeffsFP_tot : nCoeffsFP_tot + useVar - nCoeffsFixed] = fpToTpGuess["x"][
+            initGuess[nCoeffsFPTot : nCoeffsFPTot + useVar - nCoeffsFixed] = fpToTpGuess["x"][
                 nCoeffsFixed:useVar
             ]
-            initGuess[nCoeffsFP_tot + nCoeffsFree : nCoeffsFP_tot + nCoeffsFree + useVar - nCoeffsFixed] = (
+            initGuess[nCoeffsFPTot + nCoeffsFree : nCoeffsFPTot + nCoeffsFree + useVar - nCoeffsFixed] = (
                 fpToTpGuess["y"][nCoeffsFixed:useVar]
             )
 
@@ -631,21 +630,21 @@ class BuildCameraTask(Task):
 
         # Convert parameters to a dictionary.
         pixToFP = {}
-        for i, det in enumerate(self.detectorList):
+        for i, det in enumerate(detectorList):
             pixToFP[det] = {
                 "x": res.x[2 * nCoeffsFP * i : (2 * i + 1) * nCoeffsFP],
                 "y": res.x[(2 * i + 1) * nCoeffsFP : 2 * nCoeffsFP * (1 + i)],
             }
 
-        fpToTpAll = fx_params.copy()
-        fpToTpAll[nCoeffsFixed:nCoeffsTP] = res.x[nCoeffsFP_tot : nCoeffsFP_tot + nCoeffsFree]
-        fpToTpAll[nCoeffsFixed + nCoeffsTP :] = res.x[nCoeffsFP_tot + nCoeffsFree :]
+        fpToTpAll = fixedParams.copy()
+        fpToTpAll[nCoeffsFixed:nCoeffsTP] = res.x[nCoeffsFPTot : nCoeffsFPTot + nCoeffsFree]
+        fpToTpAll[nCoeffsFixed + nCoeffsTP :] = res.x[nCoeffsFPTot + nCoeffsFree :]
         fpToTp = {"x": fpToTpAll[:nCoeffsTP], "y": fpToTpAll[nCoeffsTP:]}
 
         return pixToFP, fpToTp
 
-    def makeAstPolyMapCoeffs(self, order, xCoeffs, yCoeffs):
-        """Convert polynomial coefficients in gbdes format to AST PolyMap
+    def make_ast_polymap_coeffs(self, order, xCoeffs, yCoeffs):
+        """Convert polynomial coefficients in gbdes format to AST PolyMap input
         format.
 
         Paramaters
@@ -659,8 +658,8 @@ class BuildCameraTask(Task):
             where N is the polynomial order.
         Returns
         -------
-        focalPlaneToPupil: `lsst.afw.geom.TransformPoint2ToPoint2`
-            Transform from focal plane to field angle coordinates
+        polyArray : `np.ndarray`
+            Array formatted for AST PolyMap input.
         """
         N = len(xCoeffs)
 
@@ -676,7 +675,9 @@ class BuildCameraTask(Task):
 
         return polyArray
 
-    def _translateToAfw(self, pixToFocalPlane, focalPlaneToTangentPlane):
+    def _translate_to_afw(
+        self, pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle
+    ):
         """Convert the model parameters to a Camera object.
 
         Parameters
@@ -687,6 +688,8 @@ class BuildCameraTask(Task):
             polynomials.
         focalPlaneToTangentPlane : `dict` [`string`, `float`]
             Dictionary giving the focal plane to tangent plane mapping.
+        rotationAngle : `float`
+            Value in radians of the average rotation angle of the input visits.
 
         Returns
         -------
@@ -695,21 +698,25 @@ class BuildCameraTask(Task):
         """
         if self.config.modelSplitting == "basic":
             tpDegree = 1
-            fpDegree = _degreeFromNCoeffs(len(pixToFocalPlane[self.detectorList[0]]["x"]))
+            nCoeffsFP = len(pixToFocalPlane[detectorList[0]]["x"])
+            fpDegree = int(-1.5 + 0.5 * (1 + 8 * nCoeffsFP) ** 0.5)
         else:
             tpDegree = self.config.tangentPlaneDegree
             fpDegree = self.config.focalPlaneDegree
 
         scaleConvert = (1 * degrees).asArcseconds() / self.config.plateScale
 
-        cameraBuilder = Camera.Builder(self.camera.getName())
-        cameraBuilder.setPupilFactoryName(self.camera.getPupilFactoryName())
+        cameraBuilder = Camera.Builder(inputCamera.getName())
+        cameraBuilder.setPupilFactoryName(inputCamera.getPupilFactoryName())
 
         # Convert fp->tp to AST format:
-        forwardCoeffs = self.makeAstPolyMapCoeffs(
+        forwardCoeffs = self.make_ast_polymap_coeffs(
             tpDegree, focalPlaneToTangentPlane["x"], focalPlaneToTangentPlane["y"]
         )
-        rotateAndFlipCoeffs = self.makeAstPolyMapCoeffs(1, [0, 0, -1], [0, -1, 0])
+        # Reverse rotation from input visits and flip x-axis.
+        cosRot = np.cos(-rotationAngle)
+        sinRot = np.sin(-rotationAngle)
+        rotateAndFlipCoeffs = self.make_ast_polymap_coeffs(1, [0, cosRot, -sinRot], [0, -sinRot, cosRot])
 
         ccdZoom = ast.ZoomMap(2, 1 / scaleConvert)
         ccdToSky = ast.PolyMap(
@@ -731,18 +738,20 @@ class BuildCameraTask(Task):
         cameraBuilder.setTransformFromFocalPlaneTo(FIELD_ANGLE, focalPlaneToTPMapping)
 
         # Convert pix->fp to AST format:
-        for detector in self.camera:
+        for detector in inputCamera:
             d = detector.getId()
             if d not in pixToFocalPlane:
-                # TODO: just grab detector map from the obs_ package.
+                # This camera will not include detectors that were not used in
+                # astrometric fit.
                 continue
 
             detectorBuilder = cameraBuilder.add(detector.getName(), detector.getId())
-            # TODO: Add all the detector details like pixel size, etc.
+            detectorBuilder.setBBox(detector.getBBox())
+            detectorBuilder.setPixelSize(detector.getPixelSize())
             for amp in detector.getAmplifiers():
                 detectorBuilder.append(amp.rebuild())
 
-            normCoeffs = self.makeAstPolyMapCoeffs(
+            normCoeffs = self.make_ast_polymap_coeffs(
                 1, [-1.0, 2 / detector.getBBox().getWidth(), 0], [-1.0, 0, 2 / detector.getBBox().getHeight()]
             )
             normMap = ast.PolyMap(
@@ -751,7 +760,7 @@ class BuildCameraTask(Task):
                 "IterInverse=1, TolInverse=%s, NIterInverse=%s"
                 % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
             )
-            forwardDetCoeffs = self.makeAstPolyMapCoeffs(
+            forwardDetCoeffs = self.make_ast_polymap_coeffs(
                 fpDegree, pixToFocalPlane[d]["x"], pixToFocalPlane[d]["y"]
             )
             ccdToFP = ast.PolyMap(
@@ -765,6 +774,6 @@ class BuildCameraTask(Task):
             ccdToFPMapping = TransformPoint2ToPoint2(fullDetMap)
             detectorBuilder.setTransformFromPixelsTo(FOCAL_PLANE, ccdToFPMapping)
 
-        output_camera = cameraBuilder.finish()
+        outputCamera = cameraBuilder.finish()
 
-        return output_camera
+        return outputCamera

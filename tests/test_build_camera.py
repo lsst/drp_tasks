@@ -23,20 +23,25 @@ import re
 import unittest
 
 import astropy.units as u
+import numpy as np
+import yaml
+from scipy.optimize import minimize
+
 import lsst.drp.tasks
 import lsst.drp.tasks.gbdesAstrometricFit
 import lsst.utils
-import numpy as np
-import yaml
 from lsst.afw.cameraGeom.testUtils import FIELD_ANGLE, PIXELS, CameraWrapper
 from lsst.afw.table import ExposureCatalog
-from lsst.drp.tasks.build_camera import BuildCameraConfig, BuildCameraTask, _z_function
-from scipy.optimize import minimize
+from lsst.drp.tasks.build_camera import (
+    BuildCameraFromAstrometryConfig,
+    BuildCameraFromAstrometryTask,
+    _z_function,
+)
 
 TESTDIR = os.path.abspath(os.path.dirname(__file__))
 
 
-class TestBuildCamera(lsst.utils.tests.TestCase):
+class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
 
     def setUp(self):
 
@@ -44,7 +49,8 @@ class TestBuildCamera(lsst.utils.tests.TestCase):
         self.camera = CameraWrapper(isLsstLike=False).camera
         self.detectorList = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
         self.visitList = np.arange(10)
-        self.task = BuildCameraTask(self.camera, self.detectorList, self.visitList)
+        self.rotationAngle = (270 * u.degree).to(u.radian).value
+        self.task = BuildCameraFromAstrometryTask()
 
         datadir = os.path.join(TESTDIR, "data")
         with open(os.path.join(datadir, "sample_wcs.yaml"), "r") as f:
@@ -59,11 +65,13 @@ class TestBuildCamera(lsst.utils.tests.TestCase):
                 )
                 self.mapParams[key] = polyCoefficients
 
-        visitSummary = ExposureCatalog.readFits(os.path.join(datadir, f"visitSummary_1176.fits"))
+        visitSummary = ExposureCatalog.readFits(os.path.join(datadir, "visitSummary_1176.fits"))
         gbdesTask = lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask()
         _, self.mapTemplate = gbdesTask.make_yaml(visitSummary)
 
-        _, tangentPlaneX, tangentPlaneY = self.task._normalizeModel(self.mapParams, self.mapTemplate)
+        _, tangentPlaneX, tangentPlaneY = self.task._normalize_model(
+            self.mapParams, self.mapTemplate, self.detectorList, self.visitList
+        )
         # There is a rotation and flip between the gbdes camera model and the
         # afw camera model, which is applied by-hand here.
         self.originalFieldAngleX = (-tangentPlaneY * u.degree).to(u.radian).value
@@ -73,7 +81,7 @@ class TestBuildCamera(lsst.utils.tests.TestCase):
         self.xPix = (self.task.x + 1) * bbox.endX / 2
         self.yPix = (self.task.y + 1) * bbox.endY / 2
 
-    def test_normalizeModel(self):
+    def test_normalize_model(self):
 
         deviceParams = []
         for element in self.mapTemplate["BAND/DEVICE"]["Elements"]:
@@ -96,43 +104,45 @@ class TestBuildCamera(lsst.utils.tests.TestCase):
         visitParams.append(identityVisitParams)
         expoArray = np.vstack(visitParams)
 
-        # Get the interim positions from the original device maps:
-        origIntX = []
-        origIntY = []
+        # Get the tangent plane positions from the original device maps:
+        origTpX = []
+        origTpY = []
         for deviceMap in deviceArray:
             nCoeffsDev = len(deviceMap) // 2
             deviceDegree = lsst.drp.tasks.gbdesAstrometricFit._degreeFromNCoeffs(nCoeffsDev)
             intX = _z_function(deviceMap[:nCoeffsDev], self.task.x, self.task.y, order=deviceDegree)
             intY = _z_function(deviceMap[nCoeffsDev:], self.task.x, self.task.y, order=deviceDegree)
-            origIntX.append(intX)
-            origIntY.append(intY)
+            origTpX.append(intX)
+            origTpY.append(intY)
 
-        origIntX = np.array(origIntX).ravel()
-        origIntY = np.array(origIntY).ravel()
+        origTpX = np.array(origTpX).ravel()
+        origTpY = np.array(origTpY).ravel()
 
         # Get the interim positions with the new device maps:
-        newDeviceParams, newIntX, newIntY = self.task._normalizeModel(self.mapParams, self.mapTemplate)
+        _, newIntX, newIntY = self.task._normalize_model(
+            self.mapParams, self.mapTemplate, self.detectorList, self.visitList
+        )
 
         # Now fit the per-visit parameters with the constraint that the new
         # tangent plane positions match the old tangent plane positions, and
         # then check they are sufficiently close to the old values.
         newExpoArrayEmp = np.zeros(expoArray.shape)
         for e, expo in enumerate(expoArray):
-            origMapX = expo[0] + origIntX * expo[1] + origIntY * expo[2]
-            origMapY = expo[3] + origIntX * expo[4] + origIntY * expo[5]
+            origMapX = expo[0] + origTpX * expo[1] + origTpY * expo[2]
+            origMapY = expo[3] + origTpX * expo[4] + origTpY * expo[5]
 
             def min_function(params):
-                tp_x = params[0] + params[1] * newIntX + params[2] * newIntY
-                tp_y = params[3] + params[4] * newIntX + params[5] * newIntY
+                tpX = params[0] + params[1] * newIntX + params[2] * newIntY
+                tpY = params[3] + params[4] * newIntX + params[5] * newIntY
 
-                diff = ((origMapX - tp_x)) ** 2 + ((origMapY - tp_y)) ** 2
+                diff = ((origMapX - tpX)) ** 2 + ((origMapY - tpY)) ** 2
                 return diff.sum()
 
             def jac(params):
-                tp_x = params[0] + params[1] * newIntX + params[2] * newIntY
-                tp_y = params[3] + params[4] * newIntX + params[5] * newIntY
-                dX = 2 * (origMapX - tp_x)
-                dY = 2 * (origMapY - tp_y)
+                tpX = params[0] + params[1] * newIntX + params[2] * newIntY
+                tpY = params[3] + params[4] * newIntX + params[5] * newIntY
+                dX = 2 * (origMapX - tpX)
+                dY = 2 * (origMapY - tpY)
                 jacobian = [
                     -dX.sum(),
                     -(dX * newIntX).sum(),
@@ -158,11 +168,18 @@ class TestBuildCamera(lsst.utils.tests.TestCase):
 
     def test_run_with_basic_model(self):
 
-        config = BuildCameraConfig()
+        config = BuildCameraFromAstrometryConfig()
         config.modelSplitting = "basic"
-        task = BuildCameraTask(self.camera, self.detectorList, self.visitList, config=config)
+        task = BuildCameraFromAstrometryTask(config=config)
 
-        camera = task.run(self.mapParams, self.mapTemplate)
+        camera = task.run(
+            self.mapParams,
+            self.mapTemplate,
+            self.detectorList,
+            self.visitList,
+            self.camera,
+            self.rotationAngle,
+        )
         testX, testY = [], []
         for dev in camera:
             faX, faY = (
@@ -180,11 +197,18 @@ class TestBuildCamera(lsst.utils.tests.TestCase):
 
     def test_run_with_splitModel(self):
 
-        config = BuildCameraConfig()
+        config = BuildCameraFromAstrometryConfig()
         config.modelSplitting = "physical"
         config.modelSplittingTolerance = 1e-6
-        task = BuildCameraTask(self.camera, self.detectorList, self.visitList, config=config)
-        camera = task.run(self.mapParams, self.mapTemplate)
+        task = BuildCameraFromAstrometryTask(config=config)
+        camera = task.run(
+            self.mapParams,
+            self.mapTemplate,
+            self.detectorList,
+            self.visitList,
+            self.camera,
+            self.rotationAngle,
+        )
 
         testX, testY = [], []
         for dev in camera:
@@ -198,7 +222,8 @@ class TestBuildCamera(lsst.utils.tests.TestCase):
         testX = np.concatenate(testX)
         testY = np.concatenate(testY)
 
-        # This does not reconstruct the input field angles perfectly.
+        # The "physical" model splitting is not expected to
+        # reconstruct the input field angles perfectly.
         self.assertFloatsAlmostEqual(self.originalFieldAngleX, testX, atol=1e-4)
         self.assertFloatsAlmostEqual(self.originalFieldAngleY, testY, atol=1e-4)
 

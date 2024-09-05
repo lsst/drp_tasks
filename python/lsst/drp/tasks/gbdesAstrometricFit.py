@@ -44,6 +44,8 @@ from lsst.meas.algorithms import (
 )
 from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
 
+from .build_camera import BuildCameraFromAstrometryTask
+
 __all__ = [
     "calculate_apparent_motion",
     "GbdesAstrometricFitConnections",
@@ -349,6 +351,13 @@ class GbdesAstrometricFitConnections(
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "physical_filter"),
     )
+    inputCamera = pipeBase.connectionTypes.PrerequisiteInput(
+        doc="Input camera to use when constructing camera from astrometric model.",
+        name="camera",
+        storageClass="Camera",
+        dimensions=("instrument",),
+        isCalibration=True,
+    )
     outputWcs = pipeBase.connectionTypes.Output(
         doc=(
             "Per-tract, per-visit world coordinate systems derived from the fitted model."
@@ -388,7 +397,13 @@ class GbdesAstrometricFitConnections(
         doc="Camera parameters to use for 'device' part of model",
         name="gbdesAstrometricFit_cameraModel",
         storageClass="ArrowNumpyDict",
-        dimensions=("instrument", "physical_filter"),
+        dimensions=("instrument", "skymap", "tract", "physical_filter"),
+    )
+    camera = pipeBase.connectionTypes.Output(
+        doc="Camera object constructed using the per-detector part of the astrometric model",
+        name="gbdesAstrometricFitCamera",
+        storageClass="Camera",
+        dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     dcrCoefficients = pipeBase.connectionTypes.Output(
         doc="Per-visit coefficients for DCR correction.",
@@ -412,6 +427,9 @@ class GbdesAstrometricFitConnections(
             self.prerequisiteInputs.remove("inputCameraModel")
         if not self.config.saveCameraModel:
             self.outputs.remove("outputCameraModel")
+        if not self.config.saveCameraObject:
+            self.prerequisiteInputs.remove("inputCamera")
+            self.outputs.remove("camera")
 
 
 class GbdesAstrometricFitConfig(
@@ -541,6 +559,14 @@ class GbdesAstrometricFitConfig(
         doc="Save the 'device' part of the model to be used as input in future runs.",
         default=False,
     )
+    buildCamera = pexConfig.ConfigurableField(
+        target=BuildCameraFromAstrometryTask, doc="Subtask to build camera from astrometric model."
+    )
+    saveCameraObject = pexConfig.Field(
+        dtype=bool,
+        doc="Build and output an lsst.afw.cameraGeom.Camera object using the fit per-detector model.",
+        default=False,
+    )
 
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
@@ -600,6 +626,13 @@ class GbdesAstrometricFitConfig(
                 "saveCameraModel and useInputCameraModel cannot both be true.",
             )
 
+        if self.saveCameraObject and (self.exposurePolyOrder != 1):
+            raise pexConfig.FieldValidationError(
+                GbdesAstrometricFitConfig.saveCameraObject,
+                self,
+                "If saveCameraObject is True, exposurePolyOrder must be set to 1.",
+            )
+
 
 class GbdesAstrometricFitTask(pipeBase.PipelineTask):
     """Calibrate the WCS across multiple visits of the same field using the
@@ -613,6 +646,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         super().__init__(**kwargs)
         self.makeSubtask("sourceSelector")
         self.makeSubtask("referenceSelector")
+        if self.config.saveCameraObject:
+            self.makeSubtask("buildCamera")
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # We override runQuantum to set up the refObjLoaders
@@ -661,6 +696,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             butlerQC.put(output.modelParams, outputRefs.modelParams)
         if self.config.saveCameraModel:
             butlerQC.put(output.cameraModelParams, outputRefs.outputCameraModel)
+        if self.config.saveCameraObject:
+            butlerQC.put(output.camera, outputRefs.camera)
         if self.config.useColor:
             butlerQC.put(output.colorParams, outputRefs.dcrCoefficients)
 
@@ -673,6 +710,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         refObjectLoader=None,
         inputCameraModel=None,
         colorCatalog=None,
+        inputCamera=None,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -694,6 +732,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             Parameters to use for the device part of the model.
         colorCatalog : `lsst.afw.table.SimpleCatalog`
             Catalog containing object coordinates and magnitudes.
+        inputCamera : `lsst.afw.cameraGeom.Camera`, optional
+            Camera to be used as template when constructing new camera.
 
         Returns
         -------
@@ -714,6 +754,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 needed as input for future runs.
             ``colorParams`` : `dict` [`int`, `np.ndarray`]
                 DCR parameters fit in RA and Dec directions for each visit.
+            ``camera`` : `lsst.afw.cameraGeom.Camera`
+                Camera object constructed from the per-detector model.
         """
         self.log.info("Gather instrument, exposure, and field info")
 
@@ -811,12 +853,13 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWcss, cameraParams, colorParams = self._make_outputs(
+        outputWcss, cameraParams, colorParams, camera = self._make_outputs(
             wcsf,
             inputVisitSummaries,
             exposureInfo,
             mapTemplate,
             inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
+            inputCamera=(inputCamera if self.config.buildCamera else None),
         )
         outputCatalog = wcsf.getOutputCatalog()
         starCatalog = wcsf.getStarCatalog()
@@ -830,6 +873,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             modelParams=modelParams,
             cameraModelParams=cameraParams,
             colorParams=colorParams,
+            camera=camera,
         )
 
     def _prep_sky(self, inputVisitSummaries, epoch, fieldName="Field"):
@@ -1753,7 +1797,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         outWCS = afwgeom.SkyWcs(frameDict)
         return outWCS
 
-    def _make_outputs(self, wcsf, visitSummaryTables, exposureInfo, mapTemplate, inputCameraModel=None):
+    def _make_outputs(
+        self, wcsf, visitSummaryTables, exposureInfo, mapTemplate, inputCameraModel=None, inputCamera=None
+    ):
         """Make a WCS object out of the WCS models.
 
         Parameters
@@ -1793,6 +1839,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             when used as input for future runs.
         colorFits : `dict` [`int`, `np.ndarray`], optional
             DCR parameters fit in RA and Dec directions for each visit.
+        camera : `lsst.afw.cameraGeom.Camera`, optional
+            Camera object constructed from the per-detector model.
         """
         # Get the parameters of the fit models
         mapParams = wcsf.mapCollection.getParamDict()
@@ -1805,6 +1853,26 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                     for k, params in mapParams.items():
                         if re.fullmatch(detectorTemplate, k):
                             cameraParams[k] = params
+        if self.config.saveCameraObject:
+            # Get the average rotation angle of the input visits.
+            rotations = [
+                visTable[0].visitInfo.boresightRotAngle.asRadians() for visTable in visitSummaryTables
+            ]
+            rotationAngle = np.mean(rotations)
+            if inputCamera is None:
+                raise RuntimeError(
+                    "inputCamera must be provided to _make_outputs in order to build output camera."
+                )
+            camera = self.buildCamera.run(
+                mapParams,
+                mapTemplate,
+                exposureInfo.detectors,
+                exposureInfo.visits,
+                inputCamera,
+                rotationAngle,
+            )
+        else:
+            camera = None
         if self.config.useInputCameraModel:
             if inputCameraModel is None:
                 raise RuntimeError(
@@ -1906,7 +1974,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             colorDec = np.array([colorFits[vis][1] for vis in colorVisits])
             colorFits = {"visit": colorVisits, "raCoefficient": colorRA, "decCoefficient": colorDec}
 
-        return catalogs, cameraParams, colorFits
+        return catalogs, cameraParams, colorFits, camera
 
     def _compute_model_params(self, wcsf):
         """Get the WCS model parameters and covariance and convert to a
@@ -2049,6 +2117,13 @@ class GbdesGlobalAstrometricFitConnections(
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "physical_filter"),
     )
+    inputCamera = pipeBase.connectionTypes.PrerequisiteInput(
+        doc="Input camera to use when constructing camera from astrometric model.",
+        name="camera",
+        storageClass="Camera",
+        dimensions=("instrument",),
+        isCalibration=True,
+    )
     outputWcs = pipeBase.connectionTypes.Output(
         doc=(
             "Per-visit world coordinate systems derived from the fitted model. These catalogs only contain "
@@ -2094,6 +2169,11 @@ class GbdesGlobalAstrometricFitConnections(
         doc="Per-visit coefficients for DCR correction.",
         name="gbdesGlobalAstrometricFit_dcrCoefficients",
         storageClass="ArrowNumpyDict",
+    )
+    camera = pipeBase.connectionTypes.Output(
+        doc="Camera object constructed using the per-detector part of the astrometric model",
+        name="gbdesGlobalAstrometricFitCamera",
+        storageClass="Camera",
         dimensions=("instrument", "physical_filter"),
     )
 
@@ -2112,6 +2192,9 @@ class GbdesGlobalAstrometricFitConnections(
             self.prerequisiteInputs.remove("inputCameraModel")
         if not self.config.saveCameraModel:
             self.outputs.remove("outputCameraModel")
+        if not self.config.saveCameraObject:
+            self.prerequisiteInputs.remove("inputCamera")
+            self.outputs.remove("camera")
 
 
 class GbdesGlobalAstrometricFitConfig(
@@ -2201,6 +2284,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             butlerQC.put(output.modelParams, outputRefs.modelParams)
         if self.config.saveCameraModel:
             butlerQC.put(output.cameraModelParams, outputRefs.outputCameraModel)
+        if self.config.saveCameraObject:
+            butlerQC.put(output.camera, outputRefs.camera)
         if self.config.useColor:
             butlerQC.put(output.colorParams, outputRefs.dcrCoefficients)
 
@@ -2214,6 +2299,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         refObjectLoader=None,
         inputCameraModel=None,
         colorCatalog=None,
+        inputCamera=None,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -2237,6 +2323,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             Parameters to use for the device part of the model.
         colorCatalog : `lsst.afw.table.SimpleCatalog`
             Catalog containing object coordinates and magnitudes.
+        inputCamera : `lsst.afw.cameraGeom.Camera`, optional
+            Camera to be used as template when constructing new camera.
 
         Returns
         -------
@@ -2257,6 +2345,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                 needed as input for future runs.
             ``colorParams`` : `dict` [`int`, `np.ndarray`]
                 DCR parameters fit in RA and Dec directions for each visit.
+            ``camera`` : `lsst.afw.cameraGeom.Camera`
+                Camera object constructed from the per-detector model.
         """
         self.log.info("Gather instrument, exposure, and field info")
 
@@ -2335,12 +2425,13 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWcss, cameraParams, colorParams = self._make_outputs(
+        outputWcss, cameraParams, colorParams, camera = self._make_outputs(
             wcsf,
             inputVisitSummaries,
             exposureInfo,
             mapTemplate,
             inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
+            inputCamera=(inputCamera if self.config.buildCamera else None),
         )
         outputCatalog = wcsf.getOutputCatalog()
         starCatalog = wcsf.getStarCatalog()
@@ -2354,6 +2445,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             modelParams=modelParams,
             cameraModelParams=cameraParams,
             colorParams=colorParams,
+            camera=camera,
         )
 
     def _prep_sky(self, inputVisitSummaries):
