@@ -44,6 +44,7 @@ from sklearn.cluster import AgglomerativeClustering
 from smatch.matcher import Matcher
 
 __all__ = [
+    "calculate_apparent_motion",
     "GbdesAstrometricFitConnections",
     "GbdesAstrometricFitConfig",
     "GbdesAstrometricFitTask",
@@ -55,6 +56,62 @@ __all__ = [
     "GbdesGlobalAstrometricMultibandFitConnections",
     "GbdesGlobalAstrometricMultibandFitTask",
 ]
+
+
+def calculate_apparent_motion(catalog, refEpoch):
+    """Calculate shift from reference epoch to the apparent observed position
+    at another date.
+
+    This function calculates the shift due to proper motion combined with the
+    apparent motion due to parallax. This is not used in the
+    `GbdesAstrometricFitTask` or related child tasks, but is useful for
+    assessing results.
+
+    Parameters
+    ----------
+    catalog : `astropy.table.Table`
+        Table containing position, proper motion, parallax, and epoch for each
+        source, labeled by columns 'ra', 'dec', 'pmRA', 'pmDec', 'parallax',
+        and 'MJD'.
+    refEpoch : `astropy.time.Time`
+        Epoch of the reference position.
+
+    Returns
+    -------
+    apparentMotionRA : `np.ndarray` [`astropy.units.Quantity`]
+        RA shift in degrees.
+    apparentMotionDec : `np.ndarray` [`astropy.units.Quantity`]
+        Dec shift in degrees.
+    """
+    ra_rad = catalog["ra"].to(u.rad)
+    dec_rad = catalog["dec"].to(u.rad)
+
+    dt = (catalog["MJD"] - refEpoch).to(u.yr)
+    properMotionRA = catalog["pmRA"].to(u.deg / u.yr) * dt
+    properMotionDec = catalog["pmDec"].to(u.deg / u.yr) * dt
+
+    sun = astropy.coordinates.get_body("sun", time=catalog["MJD"])
+    frame = astropy.coordinates.GeocentricTrueEcliptic(equinox=catalog["MJD"])
+    sunLongitudes = sun.transform_to(frame).lon.radian
+
+    # These equations for parallax come from Equations 5.2 in Van de Kamp's
+    # book Stellar Paths. They differ from the parallax calculated in gbdes by
+    # ~0.01 mas, which is acceptable for QA and plotting purposes.
+    parallaxFactorRA = np.cos(wcsfit.EclipticInclination) * np.cos(ra_rad) * np.sin(sunLongitudes) - np.sin(
+        ra_rad
+    ) * np.cos(sunLongitudes)
+    parallaxFactorDec = (
+        np.sin(wcsfit.EclipticInclination) * np.cos(dec_rad)
+        - np.cos(wcsfit.EclipticInclination) * np.sin(ra_rad) * np.sin(dec_rad)
+    ) * np.sin(sunLongitudes) - np.cos(ra_rad) * np.sin(dec_rad) * np.cos(sunLongitudes)
+    parallaxDegrees = catalog["parallax"].to(u.degree)
+    parallaxCorrectionRA = parallaxDegrees * parallaxFactorRA
+    parallaxCorrectionDec = parallaxDegrees * parallaxFactorDec
+
+    apparentMotionRA = properMotionRA + parallaxCorrectionRA
+    apparentMotionDec = properMotionDec + parallaxCorrectionDec
+
+    return apparentMotionRA, apparentMotionDec
 
 
 def _make_ref_covariance_matrix(
