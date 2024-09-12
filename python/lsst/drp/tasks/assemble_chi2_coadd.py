@@ -22,13 +22,14 @@
 
 import logging
 
+import numpy as np
+
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 import lsst.pipe.base.connectionTypes as cT
-import numpy as np
 from lsst.afw.detection import Psf
 from lsst.meas.algorithms import SourceDetectionTask
 from lsst.meas.base import SkyMapIdGeneratorConfig

@@ -26,10 +26,11 @@ __all__ = (
 )
 
 
+import numpy as np
+
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
 import lsst.geom as geom
-import numpy as np
 from lsst.cell_coadds import (
     CellIdentifiers,
     CoaddUnits,

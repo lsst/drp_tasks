@@ -25,10 +25,11 @@ from __future__ import annotations
 import unittest
 from typing import TYPE_CHECKING, Iterable
 
-import lsst.pipe.base as pipeBase
-import lsst.utils.tests
 import numpy as np
 from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
+
+import lsst.pipe.base as pipeBase
+import lsst.utils.tests
 from lsst.drp.tasks.assemble_cell_coadd import AssembleCellCoaddConfig, AssembleCellCoaddTask
 
 if TYPE_CHECKING:

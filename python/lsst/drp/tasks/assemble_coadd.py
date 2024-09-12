@@ -33,6 +33,10 @@ import copy
 import logging
 import warnings
 
+import lsstDebug
+import numpy
+from deprecated.sphinx import deprecated
+
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
@@ -44,9 +48,6 @@ import lsst.pex.config as pexConfig
 import lsst.pex.exceptions as pexExceptions
 import lsst.pipe.base as pipeBase
 import lsst.utils as utils
-import lsstDebug
-import numpy
-from deprecated.sphinx import deprecated
 from lsst.meas.algorithms import AccumulatorMeanStack, MaskStreaksTask, ScaleVarianceTask, SourceDetectionTask
 from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
 from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask

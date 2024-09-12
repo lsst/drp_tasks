@@ -25,15 +25,16 @@ and its derived classes.
 This is not intended to test accessing data with the Butler and instead uses
 mock Butler data references to pass in the simulated data.
 """
-import lsst.afw.geom as afwGeom
-import lsst.afw.image as afwImage
-import lsst.geom as geom
-import lsst.pipe.base as pipeBase
 import numpy as np
 from astro_metadata_translator import makeObservationInfo
 from astropy import units as u
 from astropy.coordinates import Angle, EarthLocation, SkyCoord
 from astropy.time import Time
+
+import lsst.afw.geom as afwGeom
+import lsst.afw.image as afwImage
+import lsst.geom as geom
+import lsst.pipe.base as pipeBase
 from lsst.afw.cameraGeom.testUtils import DetectorWrapper
 from lsst.cell_coadds.test_utils import generate_data_id
 from lsst.geom import arcseconds, degrees

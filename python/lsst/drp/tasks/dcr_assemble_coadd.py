@@ -23,6 +23,9 @@ __all__ = ["DcrAssembleCoaddConnections", "DcrAssembleCoaddTask", "DcrAssembleCo
 
 from math import ceil
 
+import numpy as np
+from scipy import ndimage
+
 import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
 import lsst.coadd.utils as coaddUtils
@@ -31,13 +34,11 @@ import lsst.meas.algorithms as measAlg
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 import lsst.utils as utils
-import numpy as np
 from lsst.ip.diffim.dcrModel import DcrModel, applyDcr, calculateDcr
 from lsst.meas.base import SingleFrameMeasurementTask
 from lsst.pipe.tasks.coaddBase import makeSkyInfo, subBBoxIter
 from lsst.pipe.tasks.measurePsf import MeasurePsfTask
 from lsst.utils.timer import timeMethod
-from scipy import ndimage
 
 from .assemble_coadd import (
     AssembleCoaddConnections,
