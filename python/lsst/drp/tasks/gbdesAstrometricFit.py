@@ -25,23 +25,24 @@ import astropy.coordinates
 import astropy.time
 import astropy.units as u
 import astshim
+import numpy as np
+import wcsfit
+import yaml
+from sklearn.cluster import AgglomerativeClustering
+from smatch.matcher import Matcher
+
 import lsst.afw.geom as afwgeom
 import lsst.afw.table
 import lsst.geom
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 import lsst.sphgeom
-import numpy as np
-import wcsfit
-import yaml
 from lsst.meas.algorithms import (
     LoadReferenceObjectsConfig,
     ReferenceObjectLoader,
     ReferenceSourceSelectorTask,
 )
 from lsst.meas.algorithms.sourceSelector import sourceSelectorRegistry
-from sklearn.cluster import AgglomerativeClustering
-from smatch.matcher import Matcher
 
 __all__ = [
     "calculate_apparent_motion",

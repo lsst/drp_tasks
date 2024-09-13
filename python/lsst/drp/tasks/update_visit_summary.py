@@ -36,6 +36,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 import astropy.table
+
 import lsst.pipe.base.connectionTypes as cT
 from lsst.afw.geom import SkyWcs
 from lsst.afw.image import ExposureSummaryStats

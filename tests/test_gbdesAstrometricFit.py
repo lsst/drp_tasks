@@ -26,15 +26,17 @@ from copy import copy
 import astropy.table
 import astropy.time
 import astropy.units as u
-import lsst.afw.geom as afwgeom
-import lsst.afw.table as afwTable
-import lsst.geom
-import lsst.utils
 import numpy as np
 import pandas as pd
 import wcsfit
 import yaml
 from astropy.coordinates import Distance, SkyCoord
+from smatch.matcher import Matcher
+
+import lsst.afw.geom as afwgeom
+import lsst.afw.table as afwTable
+import lsst.geom
+import lsst.utils
 from lsst import sphgeom
 from lsst.daf.base import PropertyList
 from lsst.drp.tasks.gbdesAstrometricFit import (
@@ -47,7 +49,6 @@ from lsst.drp.tasks.gbdesAstrometricFit import (
 from lsst.meas.algorithms import ReferenceObjectLoader
 from lsst.meas.algorithms.testUtils import MockRefcatDataId
 from lsst.pipe.base import InMemoryDatasetHandle
-from smatch.matcher import Matcher
 
 TESTDIR = os.path.abspath(os.path.dirname(__file__))
 

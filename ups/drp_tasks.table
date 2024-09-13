@@ -14,6 +14,8 @@ setupRequired(geom)
 setupRequired(pipe_base)
 setupRequired(utils)
 setupRequired(meas_algorithms)
+setupRequired(meas_extensions_photometryKron)
+setupRequired(meas_extensions_shapeHSM)
 setupRequired(pipe_tasks)
 
 # The following is boilerplate for all packages.

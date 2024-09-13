@@ -23,10 +23,11 @@
 """
 import unittest
 
-import lsst.pipe.base as pipeBase
-import lsst.utils.tests
 import numpy as np
 from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
+
+import lsst.pipe.base as pipeBase
+import lsst.utils.tests
 from lsst.drp.tasks.assemble_coadd import (
     AssembleCoaddConfig,
     AssembleCoaddTask,

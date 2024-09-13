@@ -1,6 +1,7 @@
 [tool.isort]
 profile = "black"
 line_length = 110
+known_first_party = ["lsst"]
 
 [tool.black]
 line_length = 110
