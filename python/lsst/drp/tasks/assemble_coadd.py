@@ -35,7 +35,6 @@ import warnings
 
 import lsstDebug
 import numpy
-from deprecated.sphinx import deprecated
 
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
@@ -510,14 +509,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             for the corresponding dataset type.
         """
         return pipeBase.Struct()
-
-    @deprecated(
-        reason="makeSupplementaryDataGen3 is deprecated in favor of _makeSupplementaryData",
-        version="v25.0",
-        category=FutureWarning,
-    )
-    def makeSupplementaryDataGen3(self, butlerQC, inputRefs, outputRefs):
-        return self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
 
     def prepareInputs(self, refList, coadd_bbox, psfMatchedWarpRefList=None):
         """Prepare the input warps for coaddition by measuring the weight for
