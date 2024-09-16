@@ -74,6 +74,15 @@ class AssembleCellCoaddConnections(
         multiple=True,
     )
 
+    maskfracWarps = Input(
+        doc="Mask fraction warps",
+        name="{inputWarpName}Coadd_maskfrac",
+        storageClass="ImageF",
+        dimensions=("tract", "patch", "skymap", "visit", "instrument"),
+        deferLoad=True,
+        multiple=True,
+    )
+
     artifactMasks = Input(
         doc="Artifact masks to be applied to the input warps",
         name="compare_warp_artifact_mask",
@@ -117,6 +126,19 @@ class AssembleCellCoaddConnections(
 
         if not config.do_use_artifact_mask:
             del self.artifactMasks
+
+        # Dynamically set input connections for noise images, depending on the
+        # number of noise realizations specified in the config.
+        for n in range(config.num_noise_realizations):
+            noise_warps = Input(
+                doc="Input noise warps",
+                name=f"{config.connections.coaddType}calexp_noise{n}_descwarp",
+                storageClass="MaskedImageF",
+                dimensions=("tract", "patch", "skymap", "visit", "instrument"),
+                deferLoad=True,
+                multiple=True,
+            )
+            setattr(self, f"noise{n}_warps", noise_warps)
 
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
@@ -183,6 +205,15 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         max=1.0,
         inclusiveMin=True,
         inclusiveMax=False,
+    )
+    num_noise_realizations = Field[int](
+        default=0,
+        doc=(
+            "Number of noise planes to include in the coadd. "
+            "This should not exceed the corresponding config parameter "
+            "specified in `MakeDirectWarpConfig`. "
+        ),
+        check=lambda x: x >= 0,
     )
     psf_warper = ConfigField(
         doc="Configuration for the warper that warps the PSFs. It must have the same configuration used to "
