@@ -441,19 +441,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             log.warning("doMaskBrightObjects is set to True, but brightObjectMask not loaded")
         self.processResults(retStruct.coaddExposure, inputData["brightObjectMask"], outputDataId)
 
-        if self.config.doWriteArtifactMasks and supplementaryData:  # branch to see if running CompareWarp.
-            dataIds = [ref.dataId for ref in inputs.warpRefList]
-            psfMatchedDataIds = [ref.dataId for ref in supplementaryData.warpRefList]
-
-            if dataIds != psfMatchedDataIds:
-                supplementaryData.warpRefList = reorderAndPadList(
-                    supplementaryData.warpRefList, psfMatchedDataIds, dataIds
-                )
-            for warpRef, altMask, outputRef in zip(
-                inputs.warpRefList, retStruct.altMaskList, outputRefs.artifactMasks
-            ):
-                if warpRef is None:
-                    continue
+        if self.config.doWriteArtifactMasks and isinstance(self, CompareWarpAssembleCoaddTask):
+            artifactMasksRefList = reorderAndPadList(
+                outputRefs.artifactMasks,
+                [ref.dataId for ref in outputRefs.artifactMasks],
+                [ref.dataId for ref in inputs.warpRefList],
+            )
+            for altMask, outputRef in zip(retStruct.altMaskList, artifactMasksRefList, strict=True):
                 mask = afwImage.Mask(retStruct.coaddExposure.getBBox())
                 self.applyAltMaskPlanes(mask, altMask)
                 butlerQC.put(mask, outputRef)
