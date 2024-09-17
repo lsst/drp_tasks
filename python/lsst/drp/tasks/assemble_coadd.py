@@ -206,7 +206,7 @@ class AssembleCoaddConfig(
         default=True,
     )
     doWriteArtifactMasks = pexConfig.Field(
-        doc="Persist artifact masks?",
+        doc="Persist artifact masks? Should be True for CompareWarp only.",
         dtype=bool,
         default=False,
     )
@@ -309,6 +309,15 @@ class AssembleCoaddConfig(
                 self.__class__.statistic,
                 self,
                 f"statistic {self.statistic} is not allowed. Please choose one of {stackableStats}.",
+            )
+
+        # Admittedly, it's odd for a parent class to condition on a child class
+        # but such is the case until the CompareWarp refactor in DM-38630.
+        if self.doWriteArtifactMasks and not isinstance(self, CompareWarpAssembleCoaddConfig):
+            raise pexConfig.FieldValidationError(
+                self.__class__.doWriteArtifactMasks,
+                self,
+                "doWriteArtifactMasks is only valid for CompareWarpAssembleCoaddConfig.",
             )
 
 
@@ -445,7 +454,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             log.warning("doMaskBrightObjects is set to True, but brightObjectMask not loaded")
         self.processResults(retStruct.coaddExposure, inputData["brightObjectMask"], outputDataId)
 
-        if self.config.doWriteArtifactMasks and isinstance(self, CompareWarpAssembleCoaddTask):
+        if self.config.doWriteArtifactMasks:
             artifactMasksRefList = reorderAndPadList(
                 outputRefs.artifactMasks,
                 [ref.dataId for ref in outputRefs.artifactMasks],
