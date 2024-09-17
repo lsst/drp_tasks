@@ -862,6 +862,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             inputCamera=(inputCamera if self.config.buildCamera else None),
         )
         outputCatalog = wcsf.getOutputCatalog()
+        outputCatalog["exposureName"] = np.array(outputCatalog["exposureName"])
+        outputCatalog["deviceName"] = np.array(outputCatalog["deviceName"])
+
         starCatalog = wcsf.getStarCatalog()
         modelParams = self._compute_model_params(wcsf) if self.config.saveModelParams else None
 
@@ -2434,6 +2437,9 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             inputCamera=(inputCamera if self.config.buildCamera else None),
         )
         outputCatalog = wcsf.getOutputCatalog()
+        outputCatalog["exposureName"] = np.array(outputCatalog["exposureName"])
+        outputCatalog["deviceName"] = np.array(outputCatalog["deviceName"])
+
         starCatalog = wcsf.getStarCatalog()
         modelParams = self._compute_model_params(wcsf) if self.config.saveModelParams else None
 
