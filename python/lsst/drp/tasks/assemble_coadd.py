@@ -293,9 +293,11 @@ class AssembleCoaddConfig(
     def validate(self):
         super().validate()
         if self.doInterp and self.statistic not in ["MEAN", "MEDIAN", "MEANCLIP", "VARIANCE", "VARIANCECLIP"]:
-            raise ValueError(
-                "Must set doInterp=False for statistic=%s, which does not "
-                "compute and set a non-zero coadd variance estimate." % (self.statistic)
+            raise pexConfig.FieldValidationError(
+                self.__class__.doInterp,
+                self,
+                f"Must set doInterp=False for statistic={self.statistic}, which does not "
+                "compute and set a non-zero coadd variance estimate.",
             )
 
         unstackableStats = ["NOTHING", "ERROR", "ORMASK"]
@@ -303,8 +305,10 @@ class AssembleCoaddConfig(
             stackableStats = [
                 str(k) for k in afwMath.Property.__members__.keys() if str(k) not in unstackableStats
             ]
-            raise ValueError(
-                "statistic %s is not allowed. Please choose one of %s." % (self.statistic, stackableStats)
+            raise pexConfig.FieldValidationError(
+                self.__class__.statistic,
+                self,
+                f"statistic {self.statistic} is not allowed. Please choose one of {stackableStats}.",
             )
 
 
