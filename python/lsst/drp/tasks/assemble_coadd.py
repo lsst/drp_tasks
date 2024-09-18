@@ -206,7 +206,7 @@ class AssembleCoaddConfig(
         default=True,
     )
     doWriteArtifactMasks = pexConfig.Field(
-        doc="Persist artifact masks?",
+        doc="Persist artifact masks? Should be True for CompareWarp only.",
         dtype=bool,
         default=False,
     )
@@ -293,9 +293,11 @@ class AssembleCoaddConfig(
     def validate(self):
         super().validate()
         if self.doInterp and self.statistic not in ["MEAN", "MEDIAN", "MEANCLIP", "VARIANCE", "VARIANCECLIP"]:
-            raise ValueError(
-                "Must set doInterp=False for statistic=%s, which does not "
-                "compute and set a non-zero coadd variance estimate." % (self.statistic)
+            raise pexConfig.FieldValidationError(
+                self.__class__.doInterp,
+                self,
+                f"Must set doInterp=False for statistic={self.statistic}, which does not "
+                "compute and set a non-zero coadd variance estimate.",
             )
 
         unstackableStats = ["NOTHING", "ERROR", "ORMASK"]
@@ -303,8 +305,19 @@ class AssembleCoaddConfig(
             stackableStats = [
                 str(k) for k in afwMath.Property.__members__.keys() if str(k) not in unstackableStats
             ]
-            raise ValueError(
-                "statistic %s is not allowed. Please choose one of %s." % (self.statistic, stackableStats)
+            raise pexConfig.FieldValidationError(
+                self.__class__.statistic,
+                self,
+                f"statistic {self.statistic} is not allowed. Please choose one of {stackableStats}.",
+            )
+
+        # Admittedly, it's odd for a parent class to condition on a child class
+        # but such is the case until the CompareWarp refactor in DM-38630.
+        if self.doWriteArtifactMasks and not isinstance(self, CompareWarpAssembleCoaddConfig):
+            raise pexConfig.FieldValidationError(
+                self.__class__.doWriteArtifactMasks,
+                self,
+                "doWriteArtifactMasks is only valid for CompareWarpAssembleCoaddConfig.",
             )
 
 
@@ -441,19 +454,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             log.warning("doMaskBrightObjects is set to True, but brightObjectMask not loaded")
         self.processResults(retStruct.coaddExposure, inputData["brightObjectMask"], outputDataId)
 
-        if self.config.doWriteArtifactMasks and supplementaryData:  # branch to see if running CompareWarp.
-            dataIds = [ref.dataId for ref in inputs.warpRefList]
-            psfMatchedDataIds = [ref.dataId for ref in supplementaryData.warpRefList]
-
-            if dataIds != psfMatchedDataIds:
-                supplementaryData.warpRefList = reorderAndPadList(
-                    supplementaryData.warpRefList, psfMatchedDataIds, dataIds
-                )
-            for warpRef, altMask, outputRef in zip(
-                inputs.warpRefList, retStruct.altMaskList, outputRefs.artifactMasks
-            ):
-                if warpRef is None:
-                    continue
+        if self.config.doWriteArtifactMasks:
+            artifactMasksRefList = reorderAndPadList(
+                outputRefs.artifactMasks,
+                [ref.dataId for ref in outputRefs.artifactMasks],
+                [ref.dataId for ref in inputs.warpRefList],
+            )
+            for altMask, outputRef in zip(retStruct.altMaskList, artifactMasksRefList, strict=True):
                 mask = afwImage.Mask(retStruct.coaddExposure.getBBox())
                 self.applyAltMaskPlanes(mask, altMask)
                 butlerQC.put(mask, outputRef)
