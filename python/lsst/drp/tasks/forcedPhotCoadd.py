@@ -159,14 +159,15 @@ class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=For
             "SENSOR_EDGE",
             "REJECTED",
             "INEXACT_PSF",
-            "STREAK",
+            # TODO DM-44658 and DM-45980: don't have STREAK propagated yet.
+            # "STREAK",
         ]
         self.measurement.plugins["base_PixelFlags"].masksFpCenter = [
             "CLIPPED",
             "SENSOR_EDGE",
             "REJECTED",
             "INEXACT_PSF",
-            "STREAK",
+            # "STREAK",
         ]
 
 
