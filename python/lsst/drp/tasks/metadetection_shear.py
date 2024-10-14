@@ -20,8 +20,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
-import numpy as np
 
+import numpy as np
 from lsst.daf.butler import DataCoordinate, DatasetRef
 from lsst.pipe.base.connectionTypes import BaseInput, Output
 
@@ -30,27 +30,24 @@ __all__ = ()
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any, ClassVar
 
+import lsst.pipe.base.connectionTypes as cT
 import pyarrow as pa
-
+from lsst.afw.image import ExposureF, FilterLabel, ImageF, MaskedImageF
+from lsst.afw.math import FixedKernel
+from lsst.afw.table import SimpleCatalog
+from lsst.cell_coadds import MultipleCellCoadd, SingleCellCoadd
+from lsst.meas.algorithms import KernelPsf, LoadReferenceObjectsConfig, ReferenceObjectLoader
 from lsst.pex.config import ConfigField, ListField
 from lsst.pipe.base import (
     InputQuantizedConnection,
     NoWorkFound,
     OutputQuantizedConnection,
-    QuantumContext,
     PipelineTask,
     PipelineTaskConfig,
     PipelineTaskConnections,
+    QuantumContext,
     Struct,
 )
-from lsst.meas.algorithms import LoadReferenceObjectsConfig, ReferenceObjectLoader
-import lsst.pipe.base.connectionTypes as cT
-from lsst.cell_coadds import MultipleCellCoadd, SingleCellCoadd
-
-from lsst.afw.image import ImageF, MaskedImageF, ExposureF, FilterLabel
-from lsst.afw.math import FixedKernel
-from lsst.afw.table import SimpleCatalog
-from lsst.meas.algorithms import KernelPsf
 from metadetect.lsst.util import extract_multiband_coadd_data
 
 
@@ -121,18 +118,14 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
                 adjusted_input_coadds.append(ref)
                 bands_missing.remove(ref.dataId["band"])
         if bands_missing:
-            raise NoWorkFound(
-                f"Required bands {bands_missing} not present for {label}@{data_id})."
-            )
+            raise NoWorkFound(f"Required bands {bands_missing} not present for {label}@{data_id}).")
         adjusted_inputs = {"input_coadds": (connection, adjusted_input_coadds)}
         inputs.update(adjusted_inputs)
         super().adjustQuantum(inputs, outputs, label, data_id)
         return adjusted_inputs, {}
 
 
-class MetadetectionShearConfig(
-    PipelineTaskConfig, pipelineConnections=MetadetectionShearConnections
-):
+class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=MetadetectionShearConnections):
     """Configuration definition for MetadetectionShearTask."""
 
     from lsst.meas.base import SkyMapIdGeneratorConfig
@@ -561,9 +554,7 @@ class MetadetectionShearTask(PipelineTask):
         )
         ref_cat = ref_loader.loadRegion(qc.quantum.dataId.region, filterName="lsst_r")
 
-        coadds_by_band = {
-            ref.dataId["band"]: qc.get(ref) for ref in inputRefs.input_coadds
-        }
+        coadds_by_band = {ref.dataId["band"]: qc.get(ref) for ref in inputRefs.input_coadds}
         outputs = self.run(
             [coadds_by_band[b] for b in self.config.required_bands],
             seed,
@@ -605,9 +596,7 @@ class MetadetectionShearTask(PipelineTask):
         idstart = 0
 
         single_cell_tables: list[pa.Table] = []
-        for cell_coadds in zip(
-            *[patch_coadd.cells.values() for patch_coadd in patch_coadds], strict=True
-        ):
+        for cell_coadds in zip(*[patch_coadd.cells.values() for patch_coadd in patch_coadds], strict=True):
             self._log_ids(cell_coadds[0])
 
             res = self.process_cell(cell_coadds, simulate=False)
@@ -620,7 +609,7 @@ class MetadetectionShearTask(PipelineTask):
 
                 single_cell_tables.append(table)
                 idstart += len(res)
-            break
+            # break
 
         # TODO: if we need to do any cell-overlap-region deduplication here
         # (instead of purely in science analysis code), this is where'd it'd
@@ -652,12 +641,9 @@ class MetadetectionShearTask(PipelineTask):
             Output object catalog for the cell, with schema equal to
             `object_schema`.
         """
-        from metadetect.lsst.metadetect import run_metadetect
+        from metadetect.lsst.masking import apply_apodized_bright_masks_mbexp, apply_apodized_edge_masks_mbexp
         from metadetect.lsst.metadetect import get_config as get_mdet_config
-        from metadetect.lsst.masking import (
-            apply_apodized_edge_masks_mbexp,
-            apply_apodized_bright_masks_mbexp,
-        )
+        from metadetect.lsst.metadetect import run_metadetect
 
         if simulate:
             coadd_data, bright_info = _simulate_coadd(self.rng)
@@ -711,9 +697,7 @@ class MetadetectionShearTask(PipelineTask):
         for cell_coadd in cell_coadds:
             coadd_data = {}
             coadd_data["coadd_exp"] = self._make_main_exposure(cell_coadd)
-            coadd_data["coadd_noise_exp"] = self._make_noise_exposure(
-                cell_coadd, index=0
-            )
+            coadd_data["coadd_noise_exp"] = self._make_noise_exposure(cell_coadd, index=0)
             coadd_data["coadd_mfrac_exp"] = self._make_mfrac_exposure(cell_coadd)
             coadd_data_list.append(coadd_data)
 
@@ -725,9 +709,7 @@ class MetadetectionShearTask(PipelineTask):
             cell_coadd,
         )
 
-    def _make_noise_exposure(
-        self, cell_coadd: SingleCellCoadd, index: int
-    ) -> ExposureF:
+    def _make_noise_exposure(self, cell_coadd: SingleCellCoadd, index: int) -> ExposureF:
         # TODO: cell coadds will have real noise realization
         fake_noise_image = ImageF(cell_coadd.outer.image, True)
         noise = np.median(cell_coadd.outer.variance.array[:, :])
@@ -920,8 +902,8 @@ def _get_mask_frac(mfrac_mbexp, trim_pixels=0):
         mfrac = mfrac_exp.image.array
         dim = mfrac.shape[0]
         mfrac = mfrac[
-            trim_pixels: dim - trim_pixels - 1,
-            trim_pixels: dim - trim_pixels - 1,
+            trim_pixels : dim - trim_pixels - 1,
+            trim_pixels : dim - trim_pixels - 1,
         ]
         mask_fracs.append(mfrac.mean())
 
@@ -935,18 +917,13 @@ def _simulate_coadd(rng):
     We can't use the usual star catalog because it is not available
     to the science pipelines
     """
-    from descwl_shear_sims.sim import (
-        make_sim,
-        get_sim_config,
-        get_se_dim,
-    )
-    from descwl_shear_sims.galaxies import make_galaxy_catalog
-    from descwl_shear_sims.psfs import make_fixed_psf, make_ps_psf, make_rand_psf
-
     # from descwl_shear_sims.stars import make_star_catalog
     from descwl_coadd.coadd_nowarp import make_coadd_nowarp
-    from metadetect.masking import get_ap_range
+    from descwl_shear_sims.galaxies import make_galaxy_catalog
+    from descwl_shear_sims.psfs import make_fixed_psf, make_ps_psf, make_rand_psf
+    from descwl_shear_sims.sim import get_se_dim, get_sim_config, make_sim
     from metadetect.lsst.masking import AP_RAD
+    from metadetect.masking import get_ap_range
 
     g1, g2 = 0.02, 0.00
 
