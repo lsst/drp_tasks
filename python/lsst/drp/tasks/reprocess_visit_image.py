@@ -131,7 +131,7 @@ class ReprocessVisitImageConfig(
 
     do_use_sky_corr = pexConfig.Field(
         dtype=bool,
-        default=True,
+        default=False,
         doc="Include the skyCorr input for background subtraction?",
     )
     remove_initial_photo_calib = pexConfig.Field(
