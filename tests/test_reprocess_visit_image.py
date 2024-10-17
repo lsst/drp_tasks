@@ -37,20 +37,21 @@ import lsst.utils.tests
 from lsst.drp.tasks.reprocess_visit_image import ReprocessVisitImageTask
 
 
-def make_visit_summary(wcs=None, photo_calib=None, detector=42):
+def make_visit_summary(summary=None, psf=None, wcs=None, photo_calib=None, detector=42):
     """Return a visit summary table with an entry for the given detector."""
-    schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
-    lsst.afw.image.ExposureSummaryStats.update_schema(schema)
-    summary = lsst.afw.table.ExposureCatalog(schema)
+    if summary is None:
+        schema = lsst.afw.table.ExposureTable.makeMinimalSchema()
+        lsst.afw.image.ExposureSummaryStats.update_schema(schema)
+        summary = lsst.afw.table.ExposureCatalog(schema)
+    if summary.find(detector) is not None:
+        raise RuntimeError(f"Detector {detector} already exists in visit summary table, can't re-add it.")
 
     record = summary.addNew()
     record.setId(detector)
     record.setApCorrMap(lsst.afw.image.ApCorrMap()),
 
-    if photo_calib is not None:
-        record.setPhotoCalib(photo_calib)
-    else:
-        record.setPhotoCalib(lsst.afw.image.PhotoCalib(10, 0.5))
+    record.setPsf(psf)
+    record.setPhotoCalib(photo_calib)
 
     if wcs is not None:
         record.setWcs(wcs)
@@ -130,7 +131,9 @@ class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
         task = lsst.meas.algorithms.SubtractBackgroundTask(config=config)
         self.background = task.run(self.truth_exposure).background
         self.visit_summary = make_visit_summary(
-            wcs=self.truth_exposure.wcs, photo_calib=self.truth_exposure.photoCalib
+            psf=self.truth_exposure.psf,
+            wcs=self.truth_exposure.wcs,
+            photo_calib=self.truth_exposure.photoCalib,
         )
 
         # A catalog that looks like the output of finalizeCharacterization,
@@ -239,6 +242,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         # dataIds for fake data
         butlerTests.addDataIdValue(self.repo, "detector", detector)
         butlerTests.addDataIdValue(self.repo, "detector", detector + 1)
+        butlerTests.addDataIdValue(self.repo, "detector", detector + 2)
         butlerTests.addDataIdValue(self.repo, "exposure", exposure0)
         butlerTests.addDataIdValue(self.repo, "exposure", exposure1)
         butlerTests.addDataIdValue(self.repo, "visit", visit)
@@ -286,6 +290,11 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         self.visit1_id = self.repo.registry.expandDataId(
             {"instrument": instrument, "visit": visit, "detector": detector + 1}
         )
+        # Third id for testing on a detector that is in visitSummary but
+        # has missing calibs.
+        self.visit2_id = self.repo.registry.expandDataId(
+            {"instrument": instrument, "visit": visit, "detector": detector + 2}
+        )
         self.visit_only_id = self.repo.registry.expandDataId({"instrument": instrument, "visit": visit})
 
         # put empty data
@@ -296,12 +305,26 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         background = lsst.afw.math.makeBackground(lsst.afw.image.ImageF(100, 100), control)
         self.butler.put(lsst.afw.image.PhotoCalib(10), "initial_photoCalib_detector", self.visit_id)
         self.butler.put(lsst.afw.image.PhotoCalib(10), "initial_photoCalib_detector", self.visit1_id)
+        self.butler.put(lsst.afw.image.PhotoCalib(10), "initial_photoCalib_detector", self.visit2_id)
         self.butler.put(lsst.afw.math.BackgroundList(background), "initial_pvi_background", self.visit_id)
         self.butler.put(lsst.afw.math.BackgroundList(background), "initial_pvi_background", self.visit1_id)
+        self.butler.put(lsst.afw.math.BackgroundList(background), "initial_pvi_background", self.visit2_id)
         self.butler.put(lsst.afw.math.BackgroundList(background), "skyCorr", self.visit_id)
         self.butler.put(lsst.afw.math.BackgroundList(background), "skyCorr", self.visit1_id)
+        self.butler.put(lsst.afw.math.BackgroundList(background), "skyCorr", self.visit2_id)
         self.butler.put(lsst.afw.table.SourceCatalog().asAstropy(), "finalized_src_table", self.visit_only_id)
-        self.butler.put(make_visit_summary(detector=detector), "finalVisitSummary", self.visit_only_id)
+        # Make a simple single gaussian psf so that psf is not None in
+        # finalVisitSummary table which would result in
+        # UpstreamFailureNoWorkFound being raised in ReprocessVisitImageTask,
+        # which will be independently tested with self.visit2_id.
+        simple_psf = lsst.meas.algorithms.SingleGaussianPsf(11, 11, 2.0)
+        photo_calib = lsst.afw.image.PhotoCalib(10, 0.5)
+        visit_summary = make_visit_summary(psf=simple_psf, photo_calib=photo_calib, detector=detector)
+        # Add a detector with an entry, but some required calibs set to None.
+        visit_summary = make_visit_summary(
+            summary=visit_summary, psf=None, photo_calib=None, detector=detector + 2
+        )
+        self.butler.put(visit_summary, "finalVisitSummary", self.visit_only_id)
 
     def tearDown(self):
         self.repo_path.cleanup()
@@ -376,7 +399,45 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "background": self.visit1_id,
             },
         )
-        with self.assertRaisesRegex(lsst.pipe.base.NoWorkFound, "Detector 43 not found"):
+        msg = "  > no entry for the detector was found in the visit summary table"
+        with self.assertRaisesRegex(
+            lsst.pipe.base.UpstreamFailureNoWorkFound, f"Skipping reprocessing of detector 43 because:\n{msg}"
+        ):
+            lsst.pipe.base.testUtils.runTestQuantum(task, self.butler, quantum)
+
+    def test_runQuantum_missing_calibs_for_detector_in_visit_summary(self):
+        """Test how the task handles the detector not being in the input visit
+        summary.
+        """
+        task = ReprocessVisitImageTask()
+        lsst.pipe.base.testUtils.assertValidInitOutput(task)
+
+        quantum = lsst.pipe.base.testUtils.makeQuantum(
+            task,
+            self.butler,
+            self.visit2_id,
+            {
+                "exposures": [self.exposure0_id],
+                "visit_summary": self.visit_only_id,
+                "initial_photo_calib": self.visit2_id,
+                "background_1": self.visit2_id,
+                "background_2": self.visit2_id,
+                "calib_sources": self.visit_only_id,
+                # outputs
+                "exposure": self.visit2_id,
+                "sources": self.visit2_id,
+                "sources_footprints": self.visit2_id,
+                "background": self.visit2_id,
+            },
+        )
+        lines = [
+            "  > the PSF model for the detector is None",
+            "  > the photometric calibration model for the detector is None",
+        ]
+        msg = "\n".join(lines)
+        with self.assertRaisesRegex(
+            lsst.pipe.base.UpstreamFailureNoWorkFound, f"Skipping reprocessing of detector 44 because:\n{msg}"
+        ):
             lsst.pipe.base.testUtils.runTestQuantum(task, self.butler, quantum)
 
     def test_runQuantum_no_sky_corr(self):
