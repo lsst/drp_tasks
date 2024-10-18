@@ -326,9 +326,24 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         assert not inputs, "runQuantum got more inputs than expected"
 
         detector_summary = visit_summary.find(detector)
+        lines = []
         if detector_summary is None:
-            msg = f"Detector {detector} not found in visit summary table; not reprocessing this exposure."
-            raise pipeBase.NoWorkFound(msg)
+            lines.append("  > no entry for the detector was found in the visit summary table")
+        else:
+            if detector_summary.psf is None:
+                lines.append("  > the PSF model for the detector is None")
+            if detector_summary.wcs is None:
+                lines.append("  > the WCS model for the detector is None")
+            if detector_summary.apCorrMap is None:
+                lines.append("  > the aperture correction model map for the detector is None")
+            if detector_summary.photoCalib is None:
+                lines.append("  > the photometric calibration model for the detector is None")
+
+        if lines:
+            msg = "\n".join(lines)
+            raise pipeBase.UpstreamFailureNoWorkFound(
+                f"Skipping reprocessing of detector {detector} because:\n{msg}"
+            )
 
         # Specify the fields that `annotate` needs below, to ensure they
         # exist, even as None.
