@@ -105,7 +105,12 @@ class ReprocessVisitImageConnections(
         dimensions=["instrument", "visit", "detector"],
     )
     background = connectionTypes.Output(
-        doc="Total background model including new detections in this task.",
+        doc=(
+            "Total background model including new detections in this task. "
+            "Note that the background model has units of ADU, while the corresponding "
+            "image has units of nJy - the image must be 'uncalibrated' before the background "
+            "can be restored."
+        ),
         name="pvi_background",
         dimensions=("instrument", "visit", "detector"),
         storageClass="Background",
@@ -285,6 +290,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         )
         self.psf_fields = ("calib_psf_candidate", "calib_psf_used", "calib_psf_reserved")
 
+        # TODO (DM-46971):
         # These fields are only here to satisfy the SDM schema, and will
         # be removed from there as they are misleading (because we don't
         # propagate this information from gbdes/fgcmcal).
@@ -469,20 +475,23 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         result.exposure.setPsf(psf)
         result.exposure.setApCorrMap(ap_corr)
         result.exposure.setWcs(wcs)
-        # Note: we don't set photoCalib here, because we have to use it below
-        # to calibrate the image and catalog, and thus the image will have a
-        # photoCalib of exactly 1.
+        result.exposure.setPhotoCalib(photo_calib)
 
         result.sources_footprints = self._find_sources(
             result.exposure, background, calib_sources, id_generator
         )
         result.background = background
-        self._apply_photo_calib(result.exposure, result.sources_footprints, photo_calib)
-
+        # TODO (DM-46971):
+        # Now that we're running them before we apply the PhotoCalib to the
+        # image pixels, there's no need for post_calibrations to exist as
+        # a separate measurement instance from the main one (which is invoked
+        # in _find_sources), but it's better to save removal (which may need
+        # to involve a deprecation) until after we've got everything running.
         self.post_calculations.run(result.sources_footprints, result.exposure)
         result.exposure.info.setSummaryStats(
             self.compute_summary_stats.run(result.exposure, result.sources_footprints, background)
         )
+        self._apply_photo_calib(result.exposure, result.sources_footprints, photo_calib)
         result.sources = result.sources_footprints.asAstropy()
 
         return result
@@ -584,12 +593,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
             supplied PhotoCalib.
         """
         sources_footprints = photo_calib.calibrateCatalog(sources_footprints)
-        # This is temporary, until we can do the measurements on the
-        # calibrated image; for now, we have to calibrate to apply the
-        # background, and then undo it, which is most simply done by taking
-        # out the mean and redoing it here.
-        exposure.maskedImage *= photo_calib.getCalibrationMean()
-        # exposure.maskedImage = photo_calib.calibrateImage(exposure.maskedImage)  # noqa
+        exposure.maskedImage = photo_calib.calibrateImage(exposure.maskedImage)
         identity = afwImage.PhotoCalib(1.0, photo_calib.getCalibrationErr(), bbox=exposure.getBBox())
         exposure.setPhotoCalib(identity)
         return sources_footprints
