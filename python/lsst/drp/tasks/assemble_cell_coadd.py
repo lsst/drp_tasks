@@ -328,7 +328,7 @@ class AssembleCellCoaddTask(PipelineTask):
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
         for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
-            warp = warpRef.get()
+            warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
