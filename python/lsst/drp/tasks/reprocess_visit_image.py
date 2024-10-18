@@ -77,7 +77,7 @@ class ReprocessVisitImageConnections(
         storageClass="ArrowAstropy",
         dimensions=["instrument", "visit"],
     )
-    # TODO DM-45980: pull in the STREAK mask from the diffim.
+    # TODO DM-46947: pull in the STREAK mask from CompareWarp.
 
     # outputs
     sources_schema = connectionTypes.InitOutput(
