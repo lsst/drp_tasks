@@ -126,7 +126,7 @@ class ReprocessVisitImageConfig(
 
     do_use_sky_corr = pexConfig.Field(
         dtype=bool,
-        default=True,
+        default=False,
         doc="Include the skyCorr input for background subtraction?",
     )
     snap_combine = pexConfig.ConfigurableField(
