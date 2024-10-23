@@ -2092,7 +2092,7 @@ class GbdesGlobalAstrometricFitConnections(
     )
     isolatedStarSources = pipeBase.connectionTypes.Input(
         doc="Catalog of matched sources.",
-        name="isolated_star_sources",
+        name="isolated_star_presources",
         storageClass="DataFrame",
         dimensions=(
             "instrument",
@@ -2104,7 +2104,7 @@ class GbdesGlobalAstrometricFitConnections(
     )
     isolatedStarCatalogs = pipeBase.connectionTypes.Input(
         doc="Catalog of objects corresponding to the isolatedStarSources.",
-        name="isolated_star_cat",
+        name="isolated_star_presource_associations",
         storageClass="DataFrame",
         dimensions=(
             "instrument",
