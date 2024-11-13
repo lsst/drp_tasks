@@ -29,8 +29,8 @@ import lsst.utils.tests
 
 import lsst.afw.image
 
-from lsst.pipe.tasks.make_direct_warp import MakeDirectWarpTask, WarpDetectorInputs
-from lsst.pipe.tasks.make_psf_matched_warp import MakePsfMatchedWarpTask
+from lsst.drp.tasks.make_direct_warp import MakeDirectWarpTask, WarpDetectorInputs
+from lsst.drp.tasks.make_psf_matched_warp import MakePsfMatchedWarpTask
 import lsst.afw.cameraGeom.testUtils
 
 from test_make_direct_warp import MakeWarpTestCase

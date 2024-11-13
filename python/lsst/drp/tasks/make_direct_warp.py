@@ -54,7 +54,7 @@ from lsst.pipe.tasks.coaddBase import makeSkyInfo
 from lsst.pipe.tasks.selectImages import PsfWcsSelectImagesTask
 from lsst.skymap import BaseSkyMap
 
-from .coaddInputRecorder import CoaddInputRecorderTask
+from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderTask
 
 if TYPE_CHECKING:
     from lsst.afw.image import MaskedImage

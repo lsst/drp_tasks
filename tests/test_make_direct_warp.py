@@ -33,7 +33,8 @@ import lsst.afw.image
 import lsst.afw.math as afwMath
 from lsst.daf.butler import DataCoordinate, DimensionUniverse
 from lsst.pipe.base import InMemoryDatasetHandle
-from lsst.pipe.tasks.make_direct_warp import (MakeDirectWarpConfig, MakeDirectWarpTask, WarpDetectorInputs)
+from lsst.drp.tasks.make_direct_warp import (MakeDirectWarpConfig, MakeDirectWarpTask, WarpDetectorInputs)
+from lsst.pipe.tasks.makeWarp import MakeWarpTask
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
 import lsst.skymap as skyMap
 from lsst.afw.detection import GaussianPsf
@@ -228,18 +229,20 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         self.assertTrue(np.nanmin(mfrac.array) >= 0)
 
     def test_compare_warps(self):
-        """Test that the warp from MakeWarpTask and MakeDirectWarpTask agree.
+        """Test that the warp from MakeWarpTask and MakeDirectWarpTask agree
+        when makePsfMatched is True in MakeWarpConfig.
         """
-        dataIdList = [{'visit_id': self.visit, 'detector_id': self.detector, "band": "i"}]
-        dataRefs = [
-            InMemoryDatasetHandle(self.exposure, dataId=self.generate_data_id(**dataId))
-            for dataId in dataIdList
+        dataIdList = [
+            {
+                "visit": self.visit,
+                "detector": self.detector,
+            }
         ]
-        for dataId in dataIdList:
-            dataId["detector"] = dataId.pop("detector_id")
-            dataId["visit"] = dataId.pop("visit_id")
-        self.config.makePsfMatched = True
-        makeWarp = MakeWarpTask(config=self.config)
+
+        config = MakeWarpTask.ConfigClass()
+        config.makePsfMatched = True
+        config.makeDirect = True
+        makeWarp = MakeWarpTask(config=config)
         result0 = makeWarp.run(
             calExpList=[self.exposure],
             ccdIdList=[self.detector],
@@ -247,18 +250,20 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
             visitId=self.visit,
             dataIdList=dataIdList,
         )
-        config = MakeDirectWarpTask.ConfigClass()
-        config.doPreWarpInterpolation = False
-        config.doSelectPreWarp = False
-        config.useVisitSummaryPsf = False
-        task = MakeDirectWarpTask(config=config)
+        self.assertIsNotNone(result0.exposures["direct"])
+        self.assertIsNotNone(result0.exposures["psfMatched"])
+
+        self.config.doPreWarpInterpolation = False
+        self.config.doSelectPreWarp = False
+        self.config.useVisitSummaryPsf = False
+        task = MakeDirectWarpTask(config=self.config)
         warp_detector_inputs = {
-            dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.exposure,
-                data_id=dataRef.dataId,
+            self.dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=self.dataRef,
+                data_id=self.dataRef.dataId,
             )
-            for dataRef in dataRefs
         }
+
         result1 = task.run(
             warp_detector_inputs,
             sky_info=self.skyInfo,
@@ -417,6 +422,9 @@ class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
         self.assertIsNone(result.warp)
         self.assertIsNone(result.masked_fraction_warp)
         self.assertIsNone(result.noise_warp0)
+
+    def test_compare_warps(self):
+        """This test is not applicable when there are no good pixels."""
 
 
 def setup_module(module):
