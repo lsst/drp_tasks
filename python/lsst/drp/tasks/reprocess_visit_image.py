@@ -491,7 +491,11 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         result.exposure.info.setSummaryStats(
             self.compute_summary_stats.run(result.exposure, result.sources_footprints, background)
         )
-        self._apply_photo_calib(result.exposure, result.sources_footprints, photo_calib)
+        result.sources_footprints = self._apply_photo_calib(
+            result.exposure,
+            result.sources_footprints,
+            photo_calib,
+        )
         result.sources = result.sources_footprints.asAstropy()
 
         return result
@@ -592,11 +596,11 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
             Star catalog with flux/magnitude columns computed from the
             supplied PhotoCalib.
         """
-        sources_footprints = photo_calib.calibrateCatalog(sources_footprints)
+        calibrated_sources_footprints = photo_calib.calibrateCatalog(sources_footprints)
         exposure.maskedImage = photo_calib.calibrateImage(exposure.maskedImage)
         identity = afwImage.PhotoCalib(1.0, photo_calib.getCalibrationErr(), bbox=exposure.getBBox())
         exposure.setPhotoCalib(identity)
-        return sources_footprints
+        return calibrated_sources_footprints
 
 
 def combine_backgrounds(initial_pvi_background, sky_corr):
