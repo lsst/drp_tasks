@@ -227,6 +227,47 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         self.assertTrue(np.nanmax(mfrac.array) <= 1)
         self.assertTrue(np.nanmin(mfrac.array) >= 0)
 
+    def test_compare_warps(self):
+        """Test that the warp from MakeWarpTask and MakeDirectWarpTask agree.
+        """
+        dataIdList = [{'visit_id': self.visit, 'detector_id': self.detector, "band": "i"}]
+        dataRefs = [
+            InMemoryDatasetHandle(self.exposure, dataId=self.generate_data_id(**dataId))
+            for dataId in dataIdList
+        ]
+        for dataId in dataIdList:
+            dataId["detector"] = dataId.pop("detector_id")
+            dataId["visit"] = dataId.pop("visit_id")
+        self.config.makePsfMatched = True
+        makeWarp = MakeWarpTask(config=self.config)
+        result0 = makeWarp.run(
+            calExpList=[self.exposure],
+            ccdIdList=[self.detector],
+            skyInfo=self.skyInfo,
+            visitId=self.visit,
+            dataIdList=dataIdList,
+        )
+        config = MakeDirectWarpTask.ConfigClass()
+        config.doPreWarpInterpolation = False
+        config.doSelectPreWarp = False
+        config.useVisitSummaryPsf = False
+        task = MakeDirectWarpTask(config=config)
+        warp_detector_inputs = {
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=self.exposure,
+                data_id=dataRef.dataId,
+            )
+            for dataRef in dataRefs
+        }
+        result1 = task.run(
+            warp_detector_inputs,
+            sky_info=self.skyInfo,
+            visit_summary=None
+        )
+        warp0 = result0.exposures["direct"]
+        warp1 = result1.warp[warp0.getBBox()]
+        self.assertMaskedImagesAlmostEqual(warp0.maskedImage, warp1.maskedImage, rtol=3e-7, atol=6e-6)
+
     def make_backgroundList(self):
         """Obtain a BackgroundList for the image."""
         bgCtrl = afwMath.BackgroundControl(10, 10)
