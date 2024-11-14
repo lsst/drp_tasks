@@ -21,24 +21,22 @@
 
 from __future__ import annotations
 
-from typing import Self, Type
-
 import unittest
+from typing import Self, Type
 
 import numpy as np
 
-import lsst.utils.tests
-
+import lsst.afw.cameraGeom.testUtils
 import lsst.afw.image
 import lsst.afw.math as afwMath
-from lsst.daf.butler import DataCoordinate, DimensionUniverse
-from lsst.pipe.base import InMemoryDatasetHandle
-from lsst.drp.tasks.make_direct_warp import (MakeDirectWarpConfig, MakeDirectWarpTask, WarpDetectorInputs)
-from lsst.pipe.tasks.makeWarp import MakeWarpTask
-from lsst.pipe.tasks.coaddBase import makeSkyInfo
 import lsst.skymap as skyMap
+import lsst.utils.tests
 from lsst.afw.detection import GaussianPsf
-import lsst.afw.cameraGeom.testUtils
+from lsst.daf.butler import DataCoordinate, DimensionUniverse
+from lsst.drp.tasks.make_direct_warp import MakeDirectWarpConfig, MakeDirectWarpTask, WarpDetectorInputs
+from lsst.pipe.base import InMemoryDatasetHandle
+from lsst.pipe.tasks.coaddBase import makeSkyInfo
+from lsst.pipe.tasks.makeWarp import MakeWarpTask
 
 
 class MakeWarpTestCase(lsst.utils.tests.TestCase):
@@ -59,9 +57,9 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
 
         crpix = lsst.geom.Point2D(0, 0)
         crval = lsst.geom.SpherePoint(0, 45, lsst.geom.degrees)
-        cdMatrix = lsst.afw.geom.makeCdMatrix(scale=1.0*lsst.geom.arcseconds)
+        cdMatrix = lsst.afw.geom.makeCdMatrix(scale=1.0 * lsst.geom.arcseconds)
         self.skyWcs = lsst.afw.geom.makeSkyWcs(crpix, crval, cdMatrix)
-        externalCdMatrix = lsst.afw.geom.makeCdMatrix(scale=0.9*lsst.geom.arcseconds)
+        externalCdMatrix = lsst.afw.geom.makeCdMatrix(scale=0.9 * lsst.geom.arcseconds)
         # An external skyWcs to return
         self.externalSkyWcs = lsst.afw.geom.makeSkyWcs(crpix, crval, externalCdMatrix)
 
@@ -105,7 +103,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         detector_id: int = 9,
         visit_id: int = 1234,
         detector_max: int = 109,
-        visit_max: int = 10000
+        visit_max: int = 10000,
     ) -> DataCoordinate:
         """Generate a DataCoordinate instance to use as data_id.
 
@@ -158,7 +156,9 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
 
         patch_element = universe["patch"]
         patch_record = patch_element.RecordClass(
-            skymap="test_skymap", tract=tract, patch=patch,
+            skymap="test_skymap",
+            tract=tract,
+            patch=patch,
         )
 
         if "day_obs" in universe:
@@ -201,11 +201,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
                 data_id=self.dataRef.dataId,
             )
         }
-        result = makeWarp.run(
-            warp_detector_inputs,
-            sky_info=self.skyInfo,
-            visit_summary=None
-        )
+        result = makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
         warp = result.warp
         mfrac = result.masked_fraction_warp
@@ -264,11 +260,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
             )
         }
 
-        result1 = task.run(
-            warp_detector_inputs,
-            sky_info=self.skyInfo,
-            visit_summary=None
-        )
+        result1 = task.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
         warp0 = result0.exposures["direct"]
         warp1 = result1.warp[warp0.getBBox()]
         self.assertMaskedImagesAlmostEqual(warp0.maskedImage, warp1.maskedImage, rtol=3e-7, atol=6e-6)
@@ -308,7 +300,6 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
                 data_id=self.dataRef.dataId,
                 background_apply=backgroundList if doApplyNewBackground else None,
                 background_revert=backgroundList if doRevertOldBackground else None,
-
             )
         }
 
@@ -317,11 +308,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         self.config.doRevertOldBackground = doRevertOldBackground
 
         makeWarp = MakeDirectWarpTask(config=self.config)
-        makeWarp.run(
-            warp_detector_inputs,
-            sky_info=self.skyInfo,
-            visit_summary=None
-        )
+        makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
     def test_background_errors(self):
         """Test that MakeDirectWarpTask raises errors when backgrounds are not
@@ -339,11 +326,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         }
         makeWarp = MakeDirectWarpTask(config=self.config)
         with self.assertRaises(RuntimeError, msg="doApplyNewBackground is False, but"):
-            makeWarp.run(
-                warp_detector_inputs,
-                sky_info=self.skyInfo,
-                visit_summary=None
-            )
+            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
         warp_detector_inputs = {
             self.dataRef.dataId.detector.id: WarpDetectorInputs(
@@ -355,11 +338,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         self.config.doApplyNewBackground = True
         makeWarp = MakeDirectWarpTask(config=self.config)
         with self.assertRaises(RuntimeError, msg="No background to apply"):
-            makeWarp.run(
-                warp_detector_inputs,
-                sky_info=self.skyInfo,
-                visit_summary=None
-            )
+            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
         warp_detector_inputs = {
             self.dataRef.dataId.detector.id: WarpDetectorInputs(
@@ -371,11 +350,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         }
         makeWarp = MakeDirectWarpTask(config=self.config)
         with self.assertRaises(RuntimeError, msg="doRevertOldBackground is False, but"):
-            makeWarp.run(
-                warp_detector_inputs,
-                sky_info=self.skyInfo,
-                visit_summary=None
-            )
+            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
         warp_detector_inputs = {
             self.dataRef.dataId.detector.id: WarpDetectorInputs(
@@ -388,11 +363,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         self.config.doRevertOldBackground = True
         makeWarp = MakeDirectWarpTask(config=self.config)
         with self.assertRaises(RuntimeError, msg="No background to revert"):
-            makeWarp.run(
-                warp_detector_inputs,
-                sky_info=self.skyInfo,
-                visit_summary=None
-            )
+            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
 
 class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
@@ -412,11 +383,7 @@ class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
                 exposure_or_handle=self.dataRef, data_id=self.dataRef.dataId
             )
         }
-        result = makeWarp.run(
-            warp_detector_inputs,
-            sky_info=self.skyInfo,
-            visit_summary=None
-        )
+        result = makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
         # Ensure we got None
         self.assertIsNone(result.warp)

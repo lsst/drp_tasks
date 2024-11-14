@@ -21,40 +21,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import dataclasses
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Iterable
 
 import numpy as np
+
 from lsst.afw.image import ExposureF, Mask
 from lsst.afw.math import BackgroundList, Warper
 from lsst.coadd.utils import copyGoodPixels
 from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
 from lsst.geom import Box2D
 from lsst.meas.algorithms import CoaddPsf, CoaddPsfConfig
-from lsst.meas.algorithms.cloughTocher2DInterpolator import (
-    CloughTocher2DInterpolateTask,
-)
+from lsst.meas.algorithms.cloughTocher2DInterpolator import CloughTocher2DInterpolateTask
 from lsst.meas.base import DetectorVisitIdGeneratorConfig
-from lsst.pex.config import (
-    ConfigField,
-    ConfigurableField,
-    Field,
-    RangeField,
-)
-from lsst.pipe.base import (
-    NoWorkFound,
-    PipelineTask,
-    PipelineTaskConfig,
-    PipelineTaskConnections,
-    Struct,
-)
+from lsst.pex.config import ConfigField, ConfigurableField, Field, RangeField
+from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
+from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderTask
 from lsst.pipe.tasks.selectImages import PsfWcsSelectImagesTask
 from lsst.skymap import BaseSkyMap
-
-from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderTask
 
 if TYPE_CHECKING:
     from lsst.afw.image import MaskedImage

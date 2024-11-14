@@ -40,8 +40,8 @@ from lsst.cell_coadds.test_utils import generate_data_id
 from lsst.geom import arcseconds, degrees
 from lsst.meas.algorithms.testUtils import plantSources
 from lsst.obs.base import MakeRawVisitInfoViaObsInfo
-from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderConfig, CoaddInputRecorderTask
 from lsst.pipe.tasks.coaddBase import growValidPolygons
+from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderConfig, CoaddInputRecorderTask
 from lsst.skymap import Index2D, PatchInfo
 
 __all__ = ["makeMockSkyInfo", "MockCoaddTestData"]

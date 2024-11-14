@@ -27,25 +27,20 @@ __all__ = (
     "MakePsfMatchedWarpTask",
 )
 
+import warnings
 from typing import TYPE_CHECKING
 
-import lsst.geom as geom
 import numpy as np
-import warnings
 
-from lsst.afw.geom import Polygon, makeWcsPairTransform, SinglePolygonException
+import lsst.geom as geom
+from lsst.afw.geom import Polygon, SinglePolygonException, makeWcsPairTransform
 from lsst.coadd.utils import copyGoodPixels
 from lsst.ip.diffim import ModelPsfMatchTask
 from lsst.meas.algorithms import GaussianPsfFactory, WarpedPsf
 from lsst.pex.config import ConfigurableField
-from lsst.pipe.base import (
-    PipelineTask,
-    PipelineTaskConfig,
-    PipelineTaskConnections,
-    Struct,
-)
+from lsst.pipe.base import PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
-from lsst.pipe.tasks.coaddBase import makeSkyInfo, growValidPolygons
+from lsst.pipe.tasks.coaddBase import growValidPolygons, makeSkyInfo
 from lsst.skymap import BaseSkyMap
 from lsst.utils.timer import timeMethod
 
@@ -61,6 +56,7 @@ class MakePsfMatchedWarpConnections(
     },
 ):
     """Connections for MakePsfMatchedWarpTask"""
+
     sky_map = Input(
         doc="Input definition of geometry/bbox and projection/wcs for warps.",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
@@ -173,18 +169,12 @@ class MakePsfMatchedWarpTask(PipelineTask):
 
             if (src_polygon := row.validPolygon) is None:
                 # Calculate the polygon for this detector.
-                src_polygon = Polygon(
-                    [geom.Point2D(corner) for corner in row.getBBox().getCorners()]
-                )
-                self.log.debug("Polygon for detector=%d is calculated as %s",
-                               row["ccd"],
-                               src_polygon
-                               )
+                src_polygon = Polygon([geom.Point2D(corner) for corner in row.getBBox().getCorners()])
+                self.log.debug("Polygon for detector=%d is calculated as %s", row["ccd"], src_polygon)
             else:
-                self.log.debug("Polygon for detector=%d is read from the input calexp as %s",
-                               row["ccd"],
-                               src_polygon
-                               )
+                self.log.debug(
+                    "Polygon for detector=%d is read from the input calexp as %s", row["ccd"], src_polygon
+                )
 
             try:
                 destination_polygon = src_polygon.transform(transform).intersectionSingle(
@@ -249,7 +239,9 @@ class MakePsfMatchedWarpTask(PipelineTask):
             del temp_psf_matched
 
             self.log.info(
-                "Copied %d pixels from CCD %d to exposure_psf_matched", num_good_pixels, row["ccd"],
+                "Copied %d pixels from CCD %d to exposure_psf_matched",
+                num_good_pixels,
+                row["ccd"],
             )
             total_good_pixels += num_good_pixels
 
@@ -258,7 +250,7 @@ class MakePsfMatchedWarpTask(PipelineTask):
         if total_good_pixels > 0:
             growValidPolygons(
                 exposure_psf_matched.info.getCoaddInputs(),
-                -self.config.psfMatch.kernel.active.kernelSize // 2
+                -self.config.psfMatch.kernel.active.kernelSize // 2,
             )
 
             return Struct(psf_matched_warp=exposure_psf_matched)

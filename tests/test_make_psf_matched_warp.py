@@ -24,16 +24,13 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
+from test_make_direct_warp import MakeWarpTestCase
 
-import lsst.utils.tests
-
+import lsst.afw.cameraGeom.testUtils
 import lsst.afw.image
-
+import lsst.utils.tests
 from lsst.drp.tasks.make_direct_warp import MakeDirectWarpTask, WarpDetectorInputs
 from lsst.drp.tasks.make_psf_matched_warp import MakePsfMatchedWarpTask
-import lsst.afw.cameraGeom.testUtils
-
-from test_make_direct_warp import MakeWarpTestCase
 
 
 class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
@@ -50,11 +47,7 @@ class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
                 exposure_or_handle=self.dataRef, data_id=self.dataRef.dataId
             )
         }
-        result = makeWarp.run(
-            warp_detector_inputs,
-            sky_info=self.skyInfo,
-            visit_summary=None
-        )
+        result = makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
         warp = result.warp
 
