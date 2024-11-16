@@ -39,6 +39,7 @@ import lsst.geom
 import lsst.utils
 from lsst import sphgeom
 from lsst.daf.base import PropertyList
+from lsst.daf.butler.formatters.parquet import pandas_to_astropy
 from lsst.drp.tasks.gbdesAstrometricFit import (
     GbdesAstrometricFitConfig,
     GbdesAstrometricFitTask,
@@ -266,8 +267,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
     @classmethod
     def _make_sourceCat(cls, starIds, starRas, starDecs, trueWCSs, inScienceFraction):
-        """Make a `pd.DataFrame` catalog with the columns needed for the
-        object selector.
+        """Make an `astropy.table.Table` catalog with the columns needed for
+        the object selector.
 
         Parameters
         ----------
@@ -360,10 +361,10 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                 sourceDict["apFlux_12_0_instFluxErr"] = 1e-3 * ones_like
                 sourceDict["detect_isPrimary"] = ones_like.astype(bool)
 
-                sourceCat = pd.DataFrame(sourceDict)
+                sourceCat = astropy.table.Table(sourceDict)
                 sourceCats.append(sourceCat)
 
-            visitSourceTable = pd.concat(sourceCats)
+            visitSourceTable = astropy.table.vstack(sourceCats, join_type="exact")
 
             inputCatalogRef = InMemoryDatasetHandle(
                 visitSourceTable, storageClass="DataFrame", dataId={"visit": visit}
@@ -919,7 +920,7 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
             starIds = allStarIds[i]
             starRAs = allStarRAs[i]
             starDecs = allStarDecs[i]
-            isolatedStarCatalog = pd.DataFrame({"ra": starRAs, "dec": starDecs}, index=starIds)
+            isolatedStarCatalog = astropy.table.Table({"ra": starRAs, "dec": starDecs, "id": starIds})
             isolatedStarCatalogRefs.append(
                 InMemoryDatasetHandle(isolatedStarCatalog, storageClass="DataFrame", dataId={"tract": 0})
             )
@@ -992,7 +993,9 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
             isolatedStarSourceTable = pd.concat(sourceCats, ignore_index=True)
             isolatedStarSourceTable = isolatedStarSourceTable.sort_values(by=["obj_index"])
             isolatedStarSourceRefs.append(
-                InMemoryDatasetHandle(isolatedStarSourceTable, storageClass="DataFrame", dataId={"tract": 0})
+                InMemoryDatasetHandle(
+                    pandas_to_astropy(isolatedStarSourceTable), storageClass="DataFrame", dataId={"tract": 0}
+                )
             )
 
         return isolatedStarCatalogRefs, isolatedStarSourceRefs

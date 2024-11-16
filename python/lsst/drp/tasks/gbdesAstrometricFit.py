@@ -315,7 +315,7 @@ class GbdesAstrometricFitConnections(
     inputCatalogRefs = pipeBase.connectionTypes.Input(
         doc="Source table in parquet format, per visit.",
         name="preSourceTable_visit",
-        storageClass="DataFrame",
+        storageClass="ArrowAstropy",
         dimensions=("instrument", "visit"),
         deferLoad=True,
         multiple=True,
@@ -1628,11 +1628,11 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 # TODO: add correct xyErr if DM-7101 is ever done.
 
                 d = {
-                    "x": sourceCat["x"].to_numpy(),
-                    "y": sourceCat["y"].to_numpy(),
-                    "xCov": xCov.to_numpy(),
-                    "yCov": yCov.to_numpy(),
-                    "xyCov": xyCov.to_numpy(),
+                    "x": sourceCat["x"],
+                    "y": sourceCat["y"],
+                    "xCov": xCov,
+                    "yCov": yCov,
+                    "xyCov": xyCov,
                 }
 
                 wcsf.setObjects(
@@ -2093,7 +2093,7 @@ class GbdesGlobalAstrometricFitConnections(
     isolatedStarSources = pipeBase.connectionTypes.Input(
         doc="Catalog of matched sources.",
         name="isolated_star_presources",
-        storageClass="DataFrame",
+        storageClass="ArrowAstropy",
         dimensions=(
             "instrument",
             "skymap",
@@ -2105,7 +2105,7 @@ class GbdesGlobalAstrometricFitConnections(
     isolatedStarCatalogs = pipeBase.connectionTypes.Input(
         doc="Catalog of objects corresponding to the isolatedStarSources.",
         name="isolated_star_presource_associations",
-        storageClass="DataFrame",
+        storageClass="ArrowAstropy",
         dimensions=(
             "instrument",
             "skymap",
@@ -2614,7 +2614,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                 # Use the same matching technique that is done in
                 # isolatedStarAssociation and fgcmBuildFromIsolatedStars.
                 with Matcher(
-                    isolatedStarCatalog["ra"].to_numpy(), isolatedStarCatalog["dec"].to_numpy()
+                    isolatedStarCatalog["ra"], isolatedStarCatalog["dec"]
                 ) as matcher:
                     idx, idx_isoStarCat, idx_refObjects, d = matcher.query_radius(
                         np.array(regionRefObjects["ra"]),
