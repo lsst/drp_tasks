@@ -61,6 +61,14 @@ Python API reference
    :no-main-docstr:
    :no-inheritance-diagram:
 
+.. automodapi:: lsst.drp.tasks.make_direct_warp
+   :no-main-docstr:
+   :no-inheritance-diagram:
+
+.. automodapi:: lsst.drp.tasks.make_psf_matched_warp
+   :no-main-docstr:
+   :no-inheritance-diagram:
+
 .. automodapi:: lsst.drp.tasks.update_visit_summary
    :no-main-docstr:
    :no-inheritance-diagram:
