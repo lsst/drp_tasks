@@ -330,12 +330,14 @@ class AssembleCellCoaddTask(PipelineTask):
         for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
             warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
+            # TODO: Can we get these mask names from artifactMask?
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
 
             if artifactMaskRef is not None:
                 # Apply the artifact mask to the warp.
                 artifactMask = artifactMaskRef.get()
+                assert not (warp.mask.array & artifactMask.array).any()
                 warp.mask.array |= artifactMask.array
                 del artifactMask
 
@@ -347,15 +349,15 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
 
             # Coadd the warp onto the cells it completely overlaps.
-            edge = afwImage.Mask.getPlaneBitMask("EDGE")
-            reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
+            edge = warp.mask.getPlaneBitMask("SENSOR_EDGE")
+            reject = warp.getPlaneBitMask(["CLIPPED", "REJECTED"])
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 mi = warp[bbox].getMaskedImage()
 
                 if (mi.getMask().array & edge).any():
                     self.log.debug(
-                        "Skipping %s in cell %s because it has an EDGE bit set",
+                        "Skipping %s in cell %s because it has an SENSOR_EDGE bit set",
                         warpRef.dataId,
                         cellInfo.index,
                     )
