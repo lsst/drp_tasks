@@ -26,6 +26,7 @@ import smatch
 
 import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
+import lsst.geom
 import lsst.meas.algorithms
 import lsst.meas.deblender
 import lsst.meas.extensions.photometryKron
@@ -238,32 +239,32 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
     ConfigClass = ReprocessVisitImageConfig
     _DefaultName = "reprocessVisitImage"
 
-    def __init__(self, sources_schema=None, **kwargs):
+    def __init__(self, schema=None, **kwargs):
         super().__init__(**kwargs)
 
-        if sources_schema is None:
-            sources_schema = afwTable.SourceTable.makeMinimalSchema()
+        if schema is None:
+            schema = afwTable.SourceTable.makeMinimalSchema()
 
-        afwTable.CoordKey.addErrorFields(sources_schema)
+        afwTable.CoordKey.addErrorFields(schema)
         self.makeSubtask("snap_combine")
         self.makeSubtask("repair")
-        self.makeSubtask("detection", schema=sources_schema)
-        self.makeSubtask("sky_sources", schema=sources_schema)
-        self.makeSubtask("deblend", schema=sources_schema)
-        self.makeSubtask("measurement", schema=sources_schema)
-        self.makeSubtask("normalized_calibration_flux", schema=sources_schema)
-        self.makeSubtask("apply_aperture_correction", schema=sources_schema)
-        self.makeSubtask("catalog_calculation", schema=sources_schema)
-        self.makeSubtask("set_primary_flags", schema=sources_schema, isSingleFrame=True)
-        self.makeSubtask("post_calculations", schema=sources_schema)
+        self.makeSubtask("detection", schema=schema)
+        self.makeSubtask("sky_sources", schema=schema)
+        self.makeSubtask("deblend", schema=schema)
+        self.makeSubtask("measurement", schema=schema)
+        self.makeSubtask("normalized_calibration_flux", schema=schema)
+        self.makeSubtask("apply_aperture_correction", schema=schema)
+        self.makeSubtask("catalog_calculation", schema=schema)
+        self.makeSubtask("set_primary_flags", schema=schema, isSingleFrame=True)
+        self.makeSubtask("post_calculations", schema=schema)
         self.makeSubtask("compute_summary_stats")
 
-        sources_schema.addField(
+        schema.addField(
             "visit",
             type="I",
             doc="Visit this source appeared on.",
         )
-        sources_schema.addField(
+        schema.addField(
             "detector",
             type="U",
             doc="Detector this source appeared on.",
@@ -272,18 +273,18 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         # These fields will be propagated from finalizeCharacterization.
         # It might be better to get them from the finalized catalog instead
         # (if it output a schema), so the docstrings exactly match.
-        sources_schema.addField(
+        schema.addField(
             "calib_psf_candidate",
             type="Flag",
             doc="Set if the source was a candidate for PSF determination, "
             "as determined from FinalizeCharacterizationTask.",
         )
-        sources_schema.addField(
+        schema.addField(
             "calib_psf_reserved",
             type="Flag",
             doc="set if source was reserved from PSF determination by FinalizeCharacterizationTask.",
         )
-        sources_schema.addField(
+        schema.addField(
             "calib_psf_used",
             type="Flag",
             doc="Set if source was used in the PSF determination by FinalizeCharacterizationTask.",
@@ -294,28 +295,33 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         # These fields are only here to satisfy the SDM schema, and will
         # be removed from there as they are misleading (because we don't
         # propagate this information from gbdes/fgcmcal).
-        sources_schema.addField(
+        schema.addField(
             "calib_photometry_used",
             type="Flag",
             doc="Unused; placeholder for SDM schemas.",
         )
-        sources_schema.addField(
+        schema.addField(
             "calib_photometry_reserved",
             type="Flag",
             doc="Unused; placeholder for SDM schemas.",
         )
-        sources_schema.addField(
+        schema.addField(
             "calib_astrometry_used",
             type="Flag",
             doc="Unused; placeholder for SDM schemas.",
         )
-        sources_schema.addField(
+        schema.addField(
             "calib_astrometry_reserved",
             type="Flag",
             doc="Unused; placeholder for SDM schemas.",
         )
-
-        self.sources_schema = afwTable.SourceCatalog(sources_schema)
+        # This pre-calibration schema is the one that most methods should use.
+        self.schema = schema
+        # The final catalog will have calibrated flux columns, which we add to
+        # the init-output schema by calibrating our zero-length catalog with an
+        # arbitrary dummy PhotoCalib.
+        dummy_photo_calib = afwImage.PhotoCalib(1.0, 0, bbox=lsst.geom.Box2I())
+        self.sources_schema = dummy_photo_calib.calibrateCatalog(afwTable.SourceCatalog(schema))
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         inputs = butlerQC.get(inputRefs)
@@ -520,7 +526,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         sources
             Catalog that was detected and measured on the exposure.
         """
-        table = afwTable.SourceTable.make(self.sources_schema.schema, id_generator.make_table_id_factory())
+        table = afwTable.SourceTable.make(self.schema, id_generator.make_table_id_factory())
 
         self.repair.run(exposure=exposure)
         detections = self.detection.run(table=table, exposure=exposure, background=background)
