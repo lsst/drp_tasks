@@ -71,7 +71,7 @@ def make_visit_summary(summary=None, psf=None, wcs=None, photo_calib=None, detec
     return summary
 
 
-class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
+class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
     def setUp(self):
         # Different x/y dimensions so they're easy to distinguish in a plot,
         # and non-zero minimum, to help catch xy0 errors.
