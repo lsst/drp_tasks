@@ -71,7 +71,7 @@ def make_visit_summary(summary=None, psf=None, wcs=None, photo_calib=None, detec
     return summary
 
 
-class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
+class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
     def setUp(self):
         # Different x/y dimensions so they're easy to distinguish in a plot,
         # and non-zero minimum, to help catch xy0 errors.
@@ -211,6 +211,13 @@ class CalibrateImageTaskTests(lsst.utils.tests.TestCase):
         # Faintest non-sky source should be marked as used.
         flux_sorted = result.sources[result.sources.argsort("slot_CalibFlux_instFlux")]
         self.assertTrue(flux_sorted[~flux_sorted["sky_source"]]["calib_psf_used"][0])
+        # Test that the schema init-output agrees with the catalog output.
+        self.assertEqual(task.sources_schema.schema, result.sources_footprints.schema)
+        # The flux/instFlux ratio should be the LocalPhotoCalib value.
+        for record in result.sources_footprints:
+            self.assertAlmostEqual(
+                record["base_PsfFlux_flux"] / record["base_PsfFlux_instFlux"], record["base_LocalPhotoCalib"]
+            )
 
 
 class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
