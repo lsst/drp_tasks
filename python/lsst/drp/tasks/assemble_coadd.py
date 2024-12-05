@@ -137,7 +137,10 @@ class AssembleCoaddConnections(
             self.outputs.remove("inputMap")
 
         if not self.config.doWriteArtifactMasks:
-            self.outputs.remove("artifactMasks")
+            try:
+                self.outputs.remove("artifactMasks")
+            except KeyError:
+                pass
 
 
 class AssembleCoaddConfig(
