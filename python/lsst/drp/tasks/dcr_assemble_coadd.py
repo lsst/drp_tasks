@@ -351,9 +351,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
 
         # Construct list of input Deferred Datasets
         warpRefList = inputData["inputWarps"]
-        psfMatchedWarpRefList = inputData["psfMatchedWarps"]
 
-        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
+        inputs = self.prepareInputs(warpRefList, inputData["skyInfo"].bbox)
         self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
         if len(inputs.warpRefList) == 0:
             self.log.warning("No coadd temporary exposures found")
@@ -365,7 +364,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             warpRefList=inputs.warpRefList,
             imageScalerList=inputs.imageScalerList,
             weightList=inputs.weightList,
-            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
             supplementaryData=supplementaryData,
         )
 
@@ -508,7 +506,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         warpRefList,
         imageScalerList,
         weightList,
-        psfMatchedWarpRefList=None,
         supplementaryData=None,
         **kwargs
     ):
@@ -546,9 +543,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The image scalars correct for the zero point of the exposures.
         weightList : `list` [`float`]
             The weight to give each input exposure in the coadd.
-        psfMatchedWarpRefList : `list` \
-            [`lsst.daf.butler.DeferredDatasetHandle`], optional
-            The data references to the input PSF-matched warped exposures.
         supplementaryData : `lsst.pipe.base.Struct`
             Result struct returned by ``_makeSupplementaryData`` with
             attributes:
@@ -726,7 +720,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             skyInfo,
             warpRefList,
             weightList,
-            psfMatchedWarpRefList=psfMatchedWarpRefList,
             calibration=self.scaleZeroPoint.getPhotoCalib(),
             coaddInputs=templateCoadd.getInfo().getCoaddInputs(),
             mask=baseMask,
@@ -1126,7 +1119,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         skyInfo,
         warpRefList,
         weightList,
-        psfMatchedWarpRefList=None,
         calibration=None,
         coaddInputs=None,
         mask=None,
@@ -1175,7 +1167,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 coaddExposure,
                 warpRefList,
                 weightList,
-                psfMatchedWarpRefList=psfMatchedWarpRefList,
             )
             # Overwrite the PSF
             coaddExposure.setPsf(dcrModels.psf)
