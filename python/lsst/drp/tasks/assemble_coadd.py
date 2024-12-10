@@ -926,7 +926,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         nImage : `lsst.afw.image.ImageU`, optional
             Keeps track of exposure count for each pixel.
         """
-        self.log.debug("Computing coadd over %s", bbox)
+        self.log.info("Stacking subregion %s", bbox)
 
         coaddExposure.mask.addMaskPlane("REJECTED")
         coaddExposure.mask.addMaskPlane("CLIPPED")
