@@ -278,8 +278,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
     For full details of the mathematics and algorithm, please see
     DMTN-037: DCR-matched template generation (https://dmtn-037.lsst.io).
 
-    This Task produces a DCR-corrected goodSeeingCoadd, as well as a dcrCoadd for
-    each subfilter used in the iterative calculation.
+    This Task produces a DCR-corrected goodSeeingCoadd, as well as a dcrCoadd
+    for each subfilter used in the iterative calculation.
     It begins by dividing the bandpass-defining filter into N equal bandwidth
     "subfilters", and divides the flux in each pixel from an initial coadd
     equally into each as a "dcrModel". Because the airmass and parallactic
