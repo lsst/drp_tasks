@@ -503,7 +503,10 @@ class MakeDirectWarpTask(PipelineTask):
             input_exposure = detector_inputs.exposure
             # Generate noise image(s) in-situ.
             seed = self.get_seed_from_data_id(detector_inputs.data_id)
-            rng = np.random.RandomState(seed + self.config.seedOffset)
+            # Limit to last 32 bits to avoid overflow in numpy.
+            np_seed = (seed + self.config.seedOffset) & 0xFFFFFFFF
+            self.log.debug("Setting numpy random seed to %d for noise realization", np_seed)
+            rng = np.random.RandomState(np_seed)
 
             # Generate noise images in-situ.
             noise_calexps = self.make_noise_exposures(input_exposure, rng)
