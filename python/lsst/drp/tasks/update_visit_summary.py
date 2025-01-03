@@ -43,7 +43,6 @@ from lsst.afw.image import ExposureSummaryStats
 from lsst.afw.math import BackgroundList
 from lsst.afw.table import ExposureCatalog, ExposureRecord, SchemaMapper
 from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
-from lsst.daf.butler.formatters.parquet import pandas_to_astropy
 from lsst.geom import Angle, Box2I, SpherePoint, degrees
 from lsst.pex.config import ChoiceField, ConfigurableField
 from lsst.pipe.base import (
@@ -275,7 +274,7 @@ class UpdateVisitSummaryConnections(
         doc="Per-visit table of PSF reserved- and used-star measurements.",
         name="finalized_src_table",
         dimensions=("instrument", "visit"),
-        storageClass="DataFrame",
+        storageClass="ArrowAstropy",
         deferGraphConstraint=True,
     )
     ap_corr_overrides = cT.Input(
@@ -579,14 +578,6 @@ class UpdateVisitSummaryTask(PipelineTask):
                         "was incorrectly generated with an explicit or implicit (from datasets) tract "
                         "constraint."
                     )
-        # Convert the psf_star_catalog datasets from DataFrame to Astropy so
-        # they can be handled by ComputeExposureSummaryStatsTask (which was
-        # actually written to work with afw.table, but Astropy is similar
-        # enough that it works, too).  Ideally this would be handled by just
-        # using ArrowAstropy as the storage class in the connection, but QG
-        # generation apparently doesn't fully support those yet, as it leads to
-        # problems in ci_hsc.
-        inputs["psf_star_catalog"] = pandas_to_astropy(inputs["psf_star_catalog"])
         # Actually run the task and write the results.
         outputs = self.run(**inputs)
         butlerQC.put(outputs, outputRefs)
