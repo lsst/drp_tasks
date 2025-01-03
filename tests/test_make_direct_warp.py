@@ -365,6 +365,38 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         with self.assertRaises(RuntimeError, msg="No background to revert"):
             makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
+    def test_long_data_ids(self):
+        """Test MakeDirectWarpTask fails gracefully with no good pixels.
+
+        It should return an empty exposure, with no PSF.
+        """
+        warp_detector_inputs = {
+            self.dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=self.dataRef, data_id=self.dataRef.dataId
+            )
+        }
+
+        self.config.border = 0  # Repeated calls will expand it otherwise.
+        makeWarp_original = MakeDirectWarpTask(config=self.config)
+        makeWarp_short = MakeDirectWarpTask(config=self.config)
+        makeWarp_short.get_seed_from_data_id = (
+            lambda data_id: 2**32 - 1 + makeWarp_original.get_seed_from_data_id(data_id)
+        )
+        makeWarp_long = MakeDirectWarpTask(config=self.config)
+        makeWarp_long.get_seed_from_data_id = lambda data_id: 2**32 + makeWarp_original.get_seed_from_data_id(
+            data_id
+        )
+
+        result_long = makeWarp_long.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+        result_short = makeWarp_short.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+        result_original = makeWarp_original.run(
+            warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None
+        )
+
+        self.assertMaskedImagesAlmostEqual(result_long.noise_warp0, result_original.noise_warp0, atol=6e-8)
+        with self.assertRaises(AssertionError):
+            self.assertMaskedImagesEqual(result_short.noise_warp0, result_original.noise_warp0)
+
 
 class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
     def setUp(self):
@@ -391,6 +423,9 @@ class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
         self.assertIsNone(result.noise_warp0)
 
     def test_compare_warps(self):
+        """This test is not applicable when there are no good pixels."""
+
+    def test_long_data_ids(self):
         """This test is not applicable when there are no good pixels."""
 
 
