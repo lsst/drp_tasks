@@ -14,6 +14,7 @@ _build.*
 # Built by sconsUtils
 version.py
 bin/
+python/*.dist-info/
 
 # Pytest
 tests/.tests
