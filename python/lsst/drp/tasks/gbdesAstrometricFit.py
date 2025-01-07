@@ -1226,11 +1226,19 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # Get refcat version from refcat metadata
         refCatMetadata = refObjectLoader.refCats[0].get().getMetadata()
-        refCatVersion = refCatMetadata["REFCAT_FORMAT_VERSION"]
-        if refCatVersion == 2:
+
+        # TO DO: Check why this is not in refCat?
+        # this allow to move forward but not sure why this
+        # is working.
+        if "REFCAT_FORMAT_VERSION" not in refCatMetadata:
+            refCatVersion = 2
             raDecCov = (refCat["coord_ra_coord_dec_Cov"]).to(u.degree**2).to_value().tolist()
         else:
-            raDecCov = np.zeros(len(ra))
+            refCatVersion = refCatMetadata["REFCAT_FORMAT_VERSION"]
+            if refCatVersion == 2:
+                raDecCov = (refCat["coord_ra_coord_dec_Cov"]).to(u.degree**2).to_value().tolist()
+            else:
+                raDecCov = np.zeros(len(ra))
 
         refObjects = {"ra": ra, "dec": dec, "raCov": raCov, "decCov": decCov, "raDecCov": raDecCov}
         refCovariance = []
