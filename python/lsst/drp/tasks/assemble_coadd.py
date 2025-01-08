@@ -953,8 +953,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 subNImage.getArray()[maskedImage.getMask().getArray() & statsCtrl.getAndMask() == 0] += 1
             if self.config.removeMaskPlanes:
                 self.removeMaskPlanes(maskedImage)
-            visit = exposure.getInfo().getCoaddInputs().visits[0].getId()
-            maskedImage.mask.writeFits(f"/sdf/scratch/k/kannawad/warp_mask_{visit}.fits")
             maskedImageList.append(maskedImage)
 
             if self.config.doInputMap:
