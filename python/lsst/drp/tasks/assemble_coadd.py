@@ -462,9 +462,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             )
             for altMask, outputRef in zip(retStruct.altMaskList, artifactMasksRefList, strict=True):
                 mask = afwImage.Mask(retStruct.coaddExposure.getBBox())
-                for maskPlane in self.config.removeMaskPlanes:
-                    altMask.pop(maskPlane, None)
                 self.applyAltMaskPlanes(mask, altMask)
+                # self.applyAltEdgeMask(mask, altMaskList)
                 butlerQC.put(mask, outputRef)
 
         if self.config.doWrite:
