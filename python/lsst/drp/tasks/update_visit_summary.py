@@ -43,7 +43,6 @@ from lsst.afw.image import ExposureSummaryStats
 from lsst.afw.math import BackgroundList
 from lsst.afw.table import ExposureCatalog, ExposureRecord, SchemaMapper
 from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
-from lsst.daf.butler.formatters.parquet import pandas_to_astropy
 from lsst.geom import Angle, Box2I, SpherePoint, degrees
 from lsst.pex.config import ChoiceField, ConfigurableField
 from lsst.pipe.base import (
@@ -275,7 +274,7 @@ class UpdateVisitSummaryConnections(
         doc="Per-visit table of PSF reserved- and used-star measurements.",
         name="finalized_src_table",
         dimensions=("instrument", "visit"),
-        storageClass="DataFrame",
+        storageClass="ArrowAstropy",
         deferGraphConstraint=True,
     )
     ap_corr_overrides = cT.Input(
@@ -579,14 +578,6 @@ class UpdateVisitSummaryTask(PipelineTask):
                         "was incorrectly generated with an explicit or implicit (from datasets) tract "
                         "constraint."
                     )
-        # Convert the psf_star_catalog datasets from DataFrame to Astropy so
-        # they can be handled by ComputeExposureSummaryStatsTask (which was
-        # actually written to work with afw.table, but Astropy is similar
-        # enough that it works, too).  Ideally this would be handled by just
-        # using ArrowAstropy as the storage class in the connection, but QG
-        # generation apparently doesn't fully support those yet, as it leads to
-        # problems in ci_hsc.
-        inputs["psf_star_catalog"] = pandas_to_astropy(inputs["psf_star_catalog"])
         # Actually run the task and write the results.
         outputs = self.run(**inputs)
         butlerQC.put(outputs, outputRefs)
@@ -595,9 +586,9 @@ class UpdateVisitSummaryTask(PipelineTask):
         self,
         input_summary_catalog: ExposureCatalog,
         input_exposures: Mapping[int, DeferredDatasetHandle],
-        psf_overrides: ExposureCatalog | None = None,
-        psf_star_catalog: astropy.table.Table | None = None,
-        ap_corr_overrides: ExposureCatalog | None = None,
+        psf_overrides: ExposureCatalog,
+        psf_star_catalog: astropy.table.Table,
+        ap_corr_overrides: ExposureCatalog,
         photo_calib_overrides: PossiblyMultipleInput | None = None,
         wcs_overrides: PossiblyMultipleInput | None = None,
         background_originals: Mapping[int, DeferredDatasetHandle] | None = None,
@@ -620,13 +611,13 @@ class UpdateVisitSummaryTask(PipelineTask):
             ``input_summary_catalog`` and probably some ``_overrides``
             arguments as well.  This usually corresponds to the ``calexp``
             dataset.
-        psf_overrides : `lsst.afw.table.ExposureCatalog`, optional
+        psf_overrides : `lsst.afw.table.ExposureCatalog`
             Catalog with attached `lsst.afw.detection.Psf` objects that
             supersede the input catalog's PSFs.
-        psf_star_catalog : `astropy.table.Table`, optional
+        psf_star_catalog : `astropy.table.Table`
             Table containing PSF stars for use in computing PSF summary
-            statistics.  Must be provided if ``psf_overrides`` is.
-        ap_corr_overrides : `lsst.afw.table.ExposureCatalog`, optional
+            statistics.
+        ap_corr_overrides : `lsst.afw.table.ExposureCatalog`
             Catalog with attached `lsst.afw.image.ApCorrMap` objects that
             supersede the input catalog's aperture corrections.
         photo_calib_overrides : `PossiblyMultipleInput`, optional
@@ -672,7 +663,10 @@ class UpdateVisitSummaryTask(PipelineTask):
             detector_id = input_record.getId()
             output_record = output_summary_catalog.addNew()
 
-            # Make a new ExposureSummaryStats from the input record.
+            # Make a new ExposureSummaryStats from the input record.  These
+            # might be full of NaNs if the summary stats were not computed
+            # originally because initial astrometry or photometry failed, but
+            # if that's possible there should be a flag for it.
             summary_stats = ExposureSummaryStats.from_record(input_record)
 
             # Also copy the input record values to output record; this copies
@@ -700,41 +694,31 @@ class UpdateVisitSummaryTask(PipelineTask):
             else:
                 wcs = input_record.getWcs()
 
-            if psf_overrides:
-                if (psf_record := psf_overrides.find(detector_id)) is not None:
-                    psf = psf_record.getPsf()
-                else:
-                    psf = None
-                output_record.setPsf(psf)
-                sources = psf_star_catalog[psf_star_catalog["detector"] == detector_id]
-                if len(sources) == 0:
-                    sources = None
-                if not ap_corr_overrides:  # If also overriding apCorr, update all PSF stats below.
-                    self.compute_summary_stats.update_psf_stats(
-                        summary_stats,
-                        psf,
-                        bbox,
-                        sources,
-                        image_mask=exposure.mask,
-                        image_ap_corr_map=exposure.apCorrMap,
-                        sources_is_astropy=True,
-                    )
+            sources = None
 
-            if ap_corr_overrides:
-                if (ap_corr_record := ap_corr_overrides.find(detector_id)) is not None:
-                    ap_corr = ap_corr_record.getApCorrMap()
-                else:
-                    ap_corr = None
-                output_record.setApCorrMap(ap_corr)
-                self.compute_summary_stats.update_psf_stats(
-                    summary_stats,
-                    psf,
-                    bbox,
-                    sources,
-                    image_mask=exposure.mask,
-                    image_ap_corr_map=ap_corr,
-                    sources_is_astropy=True,
-                )
+            if (psf_record := psf_overrides.find(detector_id)) is not None:
+                psf = psf_record.getPsf()
+            else:
+                psf = None
+            output_record.setPsf(psf)
+            sources = psf_star_catalog[psf_star_catalog["detector"] == detector_id]
+            if len(sources) == 0:
+                sources = None
+
+            if (ap_corr_record := ap_corr_overrides.find(detector_id)) is not None:
+                ap_corr = ap_corr_record.getApCorrMap()
+            else:
+                ap_corr = None
+            output_record.setApCorrMap(ap_corr)
+            self.compute_summary_stats.update_psf_stats(
+                summary_stats,
+                psf,
+                bbox,
+                sources,
+                image_mask=exposure.mask,
+                image_ap_corr_map=ap_corr,
+                sources_is_astropy=True,
+            )
 
             if photo_calib_overrides:
                 center = compute_center_for_detector_record(output_record, bbox, wcs)
@@ -768,7 +752,8 @@ class UpdateVisitSummaryTask(PipelineTask):
                         summary_stats, exposure.getMaskedImage()
                     )
 
-            # Update the effective exposure time calculation
+            # Update the estimated depth and effective exposure time.
+            self.compute_summary_stats.update_magnitude_limit_stats(summary_stats, exposure)
             self.compute_summary_stats.update_effective_time_stats(summary_stats, exposure)
 
             summary_stats.update_record(output_record)
