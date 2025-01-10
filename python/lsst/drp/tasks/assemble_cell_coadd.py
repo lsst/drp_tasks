@@ -312,13 +312,13 @@ class AssembleCellCoaddTask(PipelineTask):
             A list of mappings of mask planes of the warped exposures to
             mask planes of the coadd.
         """
-        edge = afwImage.Mask.getPlaneBitMask("EDGE")
-        noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
-        clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
+        edge = afwImage.Mask.addMaskPlane("EDGE")
+        noData = afwImage.Mask.addMaskPlane("NO_DATA")
+        clipped = afwImage.Mask.addMaskPlane("CLIPPED")
         toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
         maskMap = [
-            (toReject, afwImage.Mask.getPlaneBitMask("REJECTED")),
-            (edge, afwImage.Mask.getPlaneBitMask("SENSOR_EDGE")),
+            (toReject, afwImage.Mask.addMaskPlane("REJECTED")),
+            (edge, afwImage.Mask.addMaskPlane("SENSOR_EDGE")),
             (clipped, clipped),
         ]
         return maskMap
