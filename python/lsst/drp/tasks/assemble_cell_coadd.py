@@ -454,8 +454,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 ccd_table = (
                     warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
                 )
-                assert len(ccd_table) > 0, f"No CCD from a warp found within a cell {cellInfo}."
-                assert len(ccd_table) == 1, f"More than one CCD from a warp found within a cell {cellInfo}."
+                if len(ccd_table) == 0:
+                    self.log.warn("No CCD from a warp found within a cell %s.", cellInfo)
+                    continue
+
+                assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
                 ccd_row = ccd_table[0]
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
