@@ -256,7 +256,7 @@ class AssembleCellCoaddTask(PipelineTask):
         grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
         return grid
 
-    def _construct_grid_container(self, skyInfo):
+    def _construct_grid_container(self, skyInfo, maskMap=None):
         """Construct a grid of AccumulatorMeanStack instances.
 
         Parameters
@@ -280,6 +280,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 bit_mask_value=0,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
+                mask_map=maskMap,
             )
             gc[cellInfo.index] = stacker
 
@@ -291,10 +292,42 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl.setNanSafe(True)
         return statsCtrl
 
+    @staticmethod
+    def setRejectedMaskMapping(statsCtrl):
+        """Map certain mask planes of the warps to new planes for the coadd.
+
+        If a pixel is rejected due to a mask value other than EDGE, NO_DATA,
+        or CLIPPED, set it to REJECTED on the coadd.
+        If a pixel is rejected due to EDGE, set the coadd pixel to SENSOR_EDGE.
+        If a pixel is rejected due to CLIPPED, set the coadd pixel to CLIPPED.
+
+        Parameters
+        ----------
+        statsCtrl : `lsst.afw.math.StatisticsControl`
+            Statistics control object for coadd.
+
+        Returns
+        -------
+        maskMap : `list` of `tuple` of `int`
+            A list of mappings of mask planes of the warped exposures to
+            mask planes of the coadd.
+        """
+        edge = afwImage.Mask.getPlaneBitMask("EDGE")
+        noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
+        clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
+        toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
+        maskMap = [
+            (toReject, afwImage.Mask.getPlaneBitMask("REJECTED")),
+            (edge, afwImage.Mask.getPlaneBitMask("SENSOR_EDGE")),
+            (clipped, clipped),
+        ]
+        return maskMap
+
     def run(self, inputWarps, skyInfo, **kwargs):
         statsCtrl = self._construct_stats_control()
+        maskMap = self.setRejectedMaskMapping(statsCtrl)
 
-        gc = self._construct_grid_container(skyInfo)
+        gc = self._construct_grid_container(skyInfo, maskMap)
         psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
         psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
 
@@ -333,6 +366,7 @@ class AssembleCellCoaddTask(PipelineTask):
             # TODO: Can we get these mask names from artifactMask?
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
+            warp.mask.addMaskPlane("SENSOR_EDGE")
 
             if artifactMaskRef is not None:
                 # Apply the artifact mask to the warp.
