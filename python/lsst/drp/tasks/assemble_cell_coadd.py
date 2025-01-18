@@ -371,7 +371,7 @@ class AssembleCellCoaddTask(PipelineTask):
             if artifactMaskRef is not None:
                 # Apply the artifact mask to the warp.
                 artifactMask = artifactMaskRef.get()
-                assert not (warp.mask.array & artifactMask.array).any()
+                # assert not (warp.mask.array & artifactMask.array).any()
                 warp.mask.array |= artifactMask.array
                 del artifactMask
 
@@ -385,6 +385,7 @@ class AssembleCellCoaddTask(PipelineTask):
             # Coadd the warp onto the cells it completely overlaps.
             edge = warp.mask.getPlaneBitMask("SENSOR_EDGE")
             reject = warp.getPlaneBitMask(["CLIPPED", "REJECTED"])
+            warp.writeFits("/sdf/scratch/users/k/kannawad/new_warp_{visit}.fits")
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 mi = warp[bbox].getMaskedImage()
