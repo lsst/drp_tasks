@@ -112,7 +112,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     )
     remove_mask_planes = ListField[str](
         doc="Mask planes to remove before coadding",
-        default=["NOT_DEBLENDED"],
+        default=["NOT_DEBLENDED", "EDGE"],
     )
     calc_error_from_input_variance = Field[bool](
         doc="Calculate coadd variance from input variance by stacking "
