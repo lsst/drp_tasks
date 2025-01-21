@@ -399,6 +399,9 @@ class AssembleCellCoaddTask(PipelineTask):
                 # Apply the artifact mask to the warp.
                 artifactMask = artifactMaskRef.get()
                 # assert not (warp.mask.array & artifactMask.array).any()
+                assert (
+                    warp.mask.getMaskPlaneDict() == artifactMask.getMaskPlaneDict()
+                ), "Hell broke loose. Mask dicts do not agree."
                 warp.mask.array |= artifactMask.array
                 del artifactMask
 
