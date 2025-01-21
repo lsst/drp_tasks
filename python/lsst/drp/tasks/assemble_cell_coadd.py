@@ -45,6 +45,7 @@ from lsst.cell_coadds import (
 )
 from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, Field, ListField, RangeField
+from lsst.pex.exceptions import InvalidParameterError
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
@@ -108,6 +109,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
         default=("BAD", "NO_DATA", "SAT"),
+    )
+    remove_mask_planes = ListField[str](
+        doc="Mask planes to remove before coadding",
+        default=["NOT_DEBLENDED"],
     )
     calc_error_from_input_variance = Field[bool](
         doc="Calculate coadd variance from input variance by stacking "
@@ -323,6 +328,28 @@ class AssembleCellCoaddTask(PipelineTask):
         ]
         return maskMap
 
+    def removeMaskPlanes(self, maskedImage):
+        """Unset the mask of an image for mask planes specified in the config.
+
+        Parameters
+        ----------
+        maskedImage : `lsst.afw.image.MaskedImage`
+            The masked image to be modified.
+
+        Raises
+        ------
+        InvalidParameterError
+            Raised if no mask plane with that name was found.
+        """
+        mask = maskedImage.getMask()
+        for maskPlane in self.config.removeMaskPlanes:
+            try:
+                mask &= ~mask.getPlaneBitMask(maskPlane)
+            except InvalidParameterError:
+                self.log.debug(
+                    "Unable to remove mask plane %s: no mask plane with that name was found.", maskPlane
+                )
+
     def run(self, inputWarps, skyInfo, **kwargs):
         statsCtrl = self._construct_stats_control()
         maskMap = self.setRejectedMaskMapping(statsCtrl)
@@ -367,6 +394,8 @@ class AssembleCellCoaddTask(PipelineTask):
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
             warp.mask.addMaskPlane("SENSOR_EDGE")
+
+            self.removeMaskPlanes(warp.maskedImage)
 
             if artifactMaskRef is not None:
                 # Apply the artifact mask to the warp.
