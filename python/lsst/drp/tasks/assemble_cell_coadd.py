@@ -346,7 +346,7 @@ class AssembleCellCoaddTask(PipelineTask):
             try:
                 mask &= ~mask.getPlaneBitMask(maskPlane)
             except InvalidParameterError:
-                self.log.debug(
+                self.log.warn(
                     "Unable to remove mask plane %s: no mask plane with that name was found.", maskPlane
                 )
 
