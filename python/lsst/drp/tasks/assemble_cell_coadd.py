@@ -342,7 +342,7 @@ class AssembleCellCoaddTask(PipelineTask):
             Raised if no mask plane with that name was found.
         """
         mask = maskedImage.getMask()
-        for maskPlane in self.config.removeMaskPlanes:
+        for maskPlane in self.config.remove_mask_lanes:
             try:
                 mask &= ~mask.getPlaneBitMask(maskPlane)
             except InvalidParameterError:
