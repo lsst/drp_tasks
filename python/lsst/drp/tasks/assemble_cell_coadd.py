@@ -384,7 +384,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
             # Coadd the warp onto the cells it completely overlaps.
             edge = warp.mask.getPlaneBitMask("SENSOR_EDGE")
-            reject = warp.getPlaneBitMask(["CLIPPED", "REJECTED"])
+            reject = warp.mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
             warp.writeFits("/sdf/scratch/users/k/kannawad/new_warp_{visit}.fits")
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
