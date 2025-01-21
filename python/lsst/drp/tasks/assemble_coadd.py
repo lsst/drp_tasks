@@ -463,7 +463,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             for altMask, warpRef, outputRef in zip(
                 retStruct.altMaskList, inputs.warpRefList, artifactMasksRefList, strict=True
             ):
-                mask = warpRef.get(component="Mask", parameters={"bbox": retStruct.coaddExposure.getBBox()})
+                mask = warpRef.get(component="mask", parameters={"bbox": retStruct.coaddExposure.getBBox()})
                 self.applyAltMaskPlanes(mask, altMask)
                 # self.applyAltEdgeMask(mask, altMaskList)
                 butlerQC.put(mask, outputRef)
