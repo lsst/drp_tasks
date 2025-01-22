@@ -402,7 +402,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 assert (
                     warp.mask.getMaskPlaneDict() == artifactMask.getMaskPlaneDict()
                 ), "Hell broke loose. Mask dicts do not agree."
-                warp.mask.array[:, :] = artifactMask.array[:, :]
+                warp.mask.array = artifactMask.array
                 del artifactMask
 
             # Pre-process the warp before coadding.
