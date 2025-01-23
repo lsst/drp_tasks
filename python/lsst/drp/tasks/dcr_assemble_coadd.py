@@ -240,8 +240,8 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections
         self.assembleStaticSkyModel.retarget(CompareWarpAssembleCoaddTask)
         self.doNImage = True
         self.assembleStaticSkyModel.warpType = self.warpType
-        # The goodSeeingCoadd and nImage files will be overwritten by this Task, so
-        # don't write them the first time.
+        # The goodSeeingCoadd and nImage files will be overwritten by this
+        # Task, so don't write them the first time.
         self.assembleStaticSkyModel.doNImage = False
         self.assembleStaticSkyModel.doWrite = False
         self.detectPsfSources.returnOriginalFootprints = False
@@ -605,6 +605,14 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             skyInfo.bbox.getWidth() / subregionSize[0]
         )
         subIter = 0
+
+        # Calculate the initial convergence metric for the whole patch and add
+        # to the metadata.
+        convergenceMetricInitial = self.calculateConvergence(
+            dcrModels, self.exposure, skyInfo.bbox, warpRefList, weightList, stats.ctrl
+        )
+        self.metadata['initialConvergence'] = convergenceMetricInitial
+
         for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
             modelIter = 0
             subIter += 1
@@ -714,6 +722,18 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                     "Final convergence improvement was %.4f%% overall",
                     100 * (convergenceList[0] - convergenceMetric) / convergenceMetric,
                 )
+
+        # Calculate the final convergence metric for the whole patch and add to
+        # the metadata.
+        convergenceMetricFinal = self.calculateConvergence(
+            dcrModels, subExposures, skyInfo.bbox, warpRefList, weightList, stats.ctrl
+        )
+        self.metadata['finalConvergence'] = convergenceMetricFinal
+
+        # Improvement between inital and final convergence metric for the
+        # whole patch and add to the metadata.
+        convergenceMetricImprovement = 100 * (convergenceMetricInitial - convergenceMetricFinal) / convergenceMetricInitial
+        self.metadata['improvedConvergence'] = convergenceMetricImprovement
 
         dcrCoadds = self.fillCoadd(
             dcrModels,
