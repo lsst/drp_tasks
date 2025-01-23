@@ -288,7 +288,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 bit_mask_value=statsCtrl.getAndMask(),
                 mask_threshold_dict=thresholdDict,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
-                compute_n_image=False,
+                compute_n_image=True,
                 mask_map=maskMap,
                 no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
             )
@@ -384,7 +384,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 shape=(self.config.psf_dimensions, self.config.psf_dimensions),
                 bit_mask_value=0,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
-                compute_n_image=False,
+                compute_n_image=True,
             )
 
         artifactMasks = kwargs.get("artifactMasks", [None] * len(inputWarps))
@@ -501,6 +501,14 @@ class AssembleCellCoaddTask(PipelineTask):
             if len(observation_identifiers_gc[cellInfo.index]) == 0:
                 self.log.debug("Skipping cell %s because it has no input warps", cellInfo.index)
                 continue
+
+            if not gc[cellInfo.index].n_image == psf_gc[cellInfo.index].n_image:
+                self.log.warn(
+                    "Image has %d inputs but PSF has %d in cell %s",
+                    gc[cellInfo.index].n_image,
+                    psf_gc[cellInfo.index].n_image,
+                    cellInfo.index,
+                )
 
             stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
