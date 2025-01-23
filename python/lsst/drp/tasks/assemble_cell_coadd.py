@@ -392,6 +392,7 @@ class AssembleCellCoaddTask(PipelineTask):
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
         for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
+            visit = warpRef.dataId["visit"]
             warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
             # TODO: Can we get these mask names from artifactMask?
@@ -422,7 +423,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
             self.removeMaskPlanes(warp.maskedImage)
 
-            warp.writeFits(f"/sdf/scratch/users/k/kannawad/new_warp_{warpRef.dataId['visit']}.fits")
+            warp.writeFits(f"/sdf/scratch/users/k/kannawad/new_warp_{visit}.fits")
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 mi = warp[bbox].getMaskedImage()
@@ -455,7 +456,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
                 )
                 if len(ccd_table) == 0:
-                    self.log.warn("No CCD from a warp found within a cell %s.", cellInfo)
+                    self.log.trace("No CCD from visit %d found within a cell %s.", visit, cellInfo)
                     continue
 
                 assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
@@ -505,13 +506,13 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.log.debug("Skipping cell %s because it has no input warps", cellInfo.index)
                 continue
 
-            if not gc[cellInfo.index].n_image == psf_gc[cellInfo.index].n_image:
+            if gc[cellInfo.index].n_image.std() > 1e-8:
                 self.log.warn(
-                    "Image has %d inputs but PSF has %d in cell %s",
-                    gc[cellInfo.index].n_image,
-                    psf_gc[cellInfo.index].n_image,
+                    "Cell %s has different number of images per pixel",
                     cellInfo.index,
                 )
+
+            self.log.info("PSF images for cell %s has %d inputs", cellInfo.index, psf_stacker.n_image.mean())
 
             stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
