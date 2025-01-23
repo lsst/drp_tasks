@@ -261,7 +261,7 @@ class AssembleCellCoaddTask(PipelineTask):
         grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
         return grid
 
-    def _construct_grid_container(self, skyInfo, maskMap=None):
+    def _construct_grid_container(self, skyInfo, statsCtrl):
         """Construct a grid of AccumulatorMeanStack instances.
 
         Parameters
@@ -276,16 +276,21 @@ class AssembleCellCoaddTask(PipelineTask):
         """
         grid = self._construct_grid(skyInfo)
 
+        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
+
         # Initialize the grid container with AccumulatorMeanStacks
         gc = GridContainer[AccumulatorMeanStack](grid.shape)
         for cellInfo in skyInfo.patchInfo:
             stacker = AccumulatorMeanStack(
                 # The shape is for the numpy arrays, hence transposed.
                 shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
-                bit_mask_value=0,
+                bit_mask_value=statsCtrl.getAndMask(),
+                mask_threshold_dict=thresholdDict,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
                 mask_map=maskMap,
+                no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
             )
             gc[cellInfo.index] = stacker
 
@@ -352,9 +357,8 @@ class AssembleCellCoaddTask(PipelineTask):
 
     def run(self, inputWarps, skyInfo, **kwargs):
         statsCtrl = self._construct_stats_control()
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
 
-        gc = self._construct_grid_container(skyInfo, maskMap)
+        gc = self._construct_grid_container(skyInfo, statsCtrl)
         psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
         psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
 
