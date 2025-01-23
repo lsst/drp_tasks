@@ -433,7 +433,7 @@ class AssembleCellCoaddTask(PipelineTask):
                         warpRef.dataId,
                         cellInfo.index,
                     )
-                    continue
+                    # continue
 
                 if (mi.getMask().array & reject).any():
                     self.log.debug(
@@ -441,7 +441,7 @@ class AssembleCellCoaddTask(PipelineTask):
                         warpRef.dataId,
                         cellInfo.index,
                     )
-                    continue
+                    # continue
 
                 weight = self._compute_weight(mi, statsCtrl)
                 if not np.isfinite(weight):
