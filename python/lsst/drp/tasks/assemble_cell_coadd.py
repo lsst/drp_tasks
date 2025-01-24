@@ -44,7 +44,7 @@ from lsst.cell_coadds import (
     UniformGrid,
 )
 from lsst.meas.algorithms import AccumulatorMeanStack
-from lsst.pex.config import ConfigField, ConfigurableField, Field, ListField, RangeField
+from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
 from lsst.pex.exceptions import InvalidParameterError
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
@@ -118,6 +118,15 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Calculate coadd variance from input variance by stacking "
         "statistic. Passed to AccumulatorMeanStack.",
         default=True,
+    )
+    mask_propagation_thresholds = DictField[str, float](
+        doc=(
+            "Threshold (in fractional weight) of rejection at which we "
+            "propagate a mask plane to the coadd; that is, we set the mask "
+            "bit on the coadd if the fraction the rejected frames "
+            "would have contributed exceeds this value."
+        ),
+        default={"SAT": 0.1},
     )
     max_maskfrac = RangeField[float](
         doc="Maximum fraction of masked pixels in a cell. This is currently "
@@ -301,6 +310,7 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
         statsCtrl.setWeighted(True)
+        statsCtrl.setMaskPropagationThresholds(self.config.mask_propagation_thresholds)
         return statsCtrl
 
     @staticmethod
