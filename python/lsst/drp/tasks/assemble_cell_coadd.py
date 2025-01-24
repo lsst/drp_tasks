@@ -108,7 +108,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
-        default=("BAD", "NO_DATA", "SAT"),
+        default=("BAD", "NO_DATA", "SAT", "CLIPPED"),
     )
     remove_mask_planes = ListField[str](
         doc="Mask planes to remove before coadding",
