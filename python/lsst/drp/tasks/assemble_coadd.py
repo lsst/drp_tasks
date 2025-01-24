@@ -1090,11 +1090,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         """
         edge = afwImage.Mask.getPlaneBitMask("EDGE")
         noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
-        clipped = afwImage.Mask.addMaskPlane("CLIPPED")
+        clipped = 2 ** afwImage.Mask.addMaskPlane("CLIPPED")
         toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
         maskMap = [
-            (toReject, afwImage.Mask.addMaskPlane("REJECTED")),
-            (edge, afwImage.Mask.addMaskPlane("SENSOR_EDGE")),
+            (toReject, 2 ** afwImage.Mask.addMaskPlane("REJECTED")),
+            (edge, 2 ** afwImage.Mask.addMaskPlane("SENSOR_EDGE")),
             (clipped, clipped),
         ]
         return maskMap
