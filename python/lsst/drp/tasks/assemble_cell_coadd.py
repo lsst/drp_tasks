@@ -310,7 +310,9 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
         statsCtrl.setWeighted(True)
-        statsCtrl.setMaskPropagationThresholds(self.config.mask_propagation_thresholds)
+        for plane, threshold in self.config.maskPropagationThresholds.items():
+            bit = afwImage.Mask.getMaskPlane(plane)
+            statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
     @staticmethod
