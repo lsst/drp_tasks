@@ -286,6 +286,7 @@ class AssembleCellCoaddTask(PipelineTask):
         grid = self._construct_grid(skyInfo)
 
         maskMap = self.setRejectedMaskMapping(statsCtrl)
+        self.log.info("maskMap = %s", maskMap)
         thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
 
         # Initialize the grid container with AccumulatorMeanStacks
