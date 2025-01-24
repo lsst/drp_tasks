@@ -300,6 +300,7 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl = afwMath.StatisticsControl()
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
+        statsCtrl.setWeighted(True)
         return statsCtrl
 
     @staticmethod
