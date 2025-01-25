@@ -52,8 +52,8 @@ class DcrAssembleCoaddConnections(
     AssembleCoaddConnections,
     dimensions=("tract", "patch", "band", "skymap"),
     defaultTemplates={
-        "inputWarpName": "deep",
-        "inputCoaddName": "deep",
+        "inputWarpName": "goodSeeing",
+        "inputCoaddName": "goodSeeing",
         "outputCoaddName": "dcr",
         "warpType": "direct",
         "warpTypeSuffix": "",
@@ -240,8 +240,8 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections
         self.assembleStaticSkyModel.retarget(CompareWarpAssembleCoaddTask)
         self.doNImage = True
         self.assembleStaticSkyModel.warpType = self.warpType
-        # The deepCoadd and nImage files will be overwritten by this Task, so
-        # don't write them the first time.
+        # The goodSeeingCoadd and nImage files will be overwritten by this
+        # Task, so don't write them the first time.
         self.assembleStaticSkyModel.doNImage = False
         self.assembleStaticSkyModel.doWrite = False
         self.detectPsfSources.returnOriginalFootprints = False
@@ -278,8 +278,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
     For full details of the mathematics and algorithm, please see
     DMTN-037: DCR-matched template generation (https://dmtn-037.lsst.io).
 
-    This Task produces a DCR-corrected deepCoadd, as well as a dcrCoadd for
-    each subfilter used in the iterative calculation.
+    This Task produces a DCR-corrected goodSeeingCoadd, as well as a dcrCoadd
+    for each subfilter used in the iterative calculation.
     It begins by dividing the bandpass-defining filter into N equal bandwidth
     "subfilters", and divides the flux in each pixel from an initial coadd
     equally into each as a "dcrModel". Because the airmass and parallactic
@@ -351,9 +351,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
 
         # Construct list of input Deferred Datasets
         warpRefList = inputData["inputWarps"]
-        psfMatchedWarpRefList = inputData["psfMatchedWarps"]
 
-        inputs = self.prepareInputs(warpRefList, psfMatchedWarpRefList)
+        inputs = self.prepareInputs(warpRefList, inputData["skyInfo"].bbox)
         self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
         if len(inputs.warpRefList) == 0:
             self.log.warning("No coadd temporary exposures found")
@@ -365,7 +364,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             warpRefList=inputs.warpRefList,
             imageScalerList=inputs.imageScalerList,
             weightList=inputs.weightList,
-            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
             supplementaryData=supplementaryData,
         )
 
@@ -501,17 +499,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         return dcrModels
 
     @timeMethod
-    def run(
-        self,
-        skyInfo,
-        *,
-        warpRefList,
-        imageScalerList,
-        weightList,
-        psfMatchedWarpRefList=None,
-        supplementaryData=None,
-        **kwargs
-    ):
+    def run(self, skyInfo, *, warpRefList, imageScalerList, weightList, supplementaryData=None, **kwargs):
         r"""Assemble the coadd.
 
         Requires additional inputs Struct ``supplementaryData`` to contain a
@@ -546,9 +534,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The image scalars correct for the zero point of the exposures.
         weightList : `list` [`float`]
             The weight to give each input exposure in the coadd.
-        psfMatchedWarpRefList : `list` \
-            [`lsst.daf.butler.DeferredDatasetHandle`], optional
-            The data references to the input PSF-matched warped exposures.
         supplementaryData : `lsst.pipe.base.Struct`
             Result struct returned by ``_makeSupplementaryData`` with
             attributes:
@@ -611,6 +596,14 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             skyInfo.bbox.getWidth() / subregionSize[0]
         )
         subIter = 0
+
+        # Calculate the initial convergence metric for the whole patch and add
+        # to the metadata.
+        convergenceMetricInitial = self.calculateConvergence(
+            dcrModels, self.exposure, skyInfo.bbox, warpRefList, weightList, stats.ctrl
+        )
+        self.metadata["initialConvergence"] = convergenceMetricInitial
+
         for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
             modelIter = 0
             subIter += 1
@@ -721,12 +714,25 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                     100 * (convergenceList[0] - convergenceMetric) / convergenceMetric,
                 )
 
+        # Calculate the final convergence metric for the whole patch and add to
+        # the metadata.
+        convergenceMetricFinal = self.calculateConvergence(
+            dcrModels, subExposures, skyInfo.bbox, warpRefList, weightList, stats.ctrl
+        )
+        self.metadata["finalConvergence"] = convergenceMetricFinal
+
+        # Improvement between inital and final convergence metric for the
+        # whole patch and add to the metadata.
+        convergenceMetricImprovement = (
+            100 * (convergenceMetricInitial - convergenceMetricFinal) / convergenceMetricInitial
+        )
+        self.metadata["improvedConvergence"] = convergenceMetricImprovement
+
         dcrCoadds = self.fillCoadd(
             dcrModels,
             skyInfo,
             warpRefList,
             weightList,
-            psfMatchedWarpRefList=psfMatchedWarpRefList,
             calibration=self.scaleZeroPoint.getPhotoCalib(),
             coaddInputs=templateCoadd.getInfo().getCoaddInputs(),
             mask=baseMask,
@@ -1126,7 +1132,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         skyInfo,
         warpRefList,
         weightList,
-        psfMatchedWarpRefList=None,
         calibration=None,
         coaddInputs=None,
         mask=None,
@@ -1175,7 +1180,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 coaddExposure,
                 warpRefList,
                 weightList,
-                psfMatchedWarpRefList=psfMatchedWarpRefList,
             )
             # Overwrite the PSF
             coaddExposure.setPsf(dcrModels.psf)
