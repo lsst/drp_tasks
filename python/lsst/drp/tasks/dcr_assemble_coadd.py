@@ -278,8 +278,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
     For full details of the mathematics and algorithm, please see
     DMTN-037: DCR-matched template generation (https://dmtn-037.lsst.io).
 
-    This Task produces a DCR-corrected goodSeeingCoadd, as well as a dcrCoadd for
-    each subfilter used in the iterative calculation.
+    This Task produces a DCR-corrected goodSeeingCoadd, as well as a dcrCoadd
+    for each subfilter used in the iterative calculation.
     It begins by dividing the bandpass-defining filter into N equal bandwidth
     "subfilters", and divides the flux in each pixel from an initial coadd
     equally into each as a "dcrModel". Because the airmass and parallactic
@@ -499,16 +499,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         return dcrModels
 
     @timeMethod
-    def run(
-        self,
-        skyInfo,
-        *,
-        warpRefList,
-        imageScalerList,
-        weightList,
-        supplementaryData=None,
-        **kwargs
-    ):
+    def run(self, skyInfo, *, warpRefList, imageScalerList, weightList, supplementaryData=None, **kwargs):
         r"""Assemble the coadd.
 
         Requires additional inputs Struct ``supplementaryData`` to contain a
@@ -611,7 +602,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         convergenceMetricInitial = self.calculateConvergence(
             dcrModels, self.exposure, skyInfo.bbox, warpRefList, weightList, stats.ctrl
         )
-        self.metadata['initialConvergence'] = convergenceMetricInitial
+        self.metadata["initialConvergence"] = convergenceMetricInitial
 
         for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
             modelIter = 0
@@ -728,12 +719,14 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         convergenceMetricFinal = self.calculateConvergence(
             dcrModels, subExposures, skyInfo.bbox, warpRefList, weightList, stats.ctrl
         )
-        self.metadata['finalConvergence'] = convergenceMetricFinal
+        self.metadata["finalConvergence"] = convergenceMetricFinal
 
         # Improvement between inital and final convergence metric for the
         # whole patch and add to the metadata.
-        convergenceMetricImprovement = 100 * (convergenceMetricInitial - convergenceMetricFinal) / convergenceMetricInitial
-        self.metadata['improvedConvergence'] = convergenceMetricImprovement
+        convergenceMetricImprovement = (
+            100 * (convergenceMetricInitial - convergenceMetricFinal) / convergenceMetricInitial
+        )
+        self.metadata["improvedConvergence"] = convergenceMetricImprovement
 
         dcrCoadds = self.fillCoadd(
             dcrModels,
