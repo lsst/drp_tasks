@@ -114,6 +114,11 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Mask planes to remove before coadding",
         default=["NOT_DEBLENDED", "EDGE"],
     )
+    do_calculate_weights_per_cell = Field[bool](
+        doc="Calculate different visits for a warp per cell? If False, "
+        "a visit gets the same weight in all the cells it overlaps completely.",
+        default=False,
+    )
     calc_error_from_input_variance = Field[bool](
         doc="Calculate coadd variance from input variance by stacking "
         "statistic. Passed to AccumulatorMeanStack.",
@@ -451,6 +456,13 @@ class AssembleCellCoaddTask(PipelineTask):
             self.removeMaskPlanes(warp.maskedImage)
 
             warp.writeFits(f"/sdf/scratch/users/k/kannawad/new_warp_{visit}.fits")
+            if not self.config.do_calculate_weights_per_cell:
+                weight = self._compute_weight(warp.maskedImage, statsCtrl)
+
+                if not np.isfinite(weight):
+                    self.log.info("Non-finite weight for %s: skipping for all cells", warpRef.dataId)
+                    continue
+
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 mi = warp[bbox].getMaskedImage()
@@ -471,13 +483,15 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     # continue
 
-                weight = self._compute_weight(mi, statsCtrl)
-                if not np.isfinite(weight):
-                    # Log at the debug level, because this can be quite common.
-                    self.log.debug(
-                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
-                    )
-                    continue
+                if self.config.do_calculate_weights_per_cell:
+                    weight = self._compute_weight(mi, statsCtrl)
+
+                    if not np.isfinite(weight):
+                        # Log at the debug level, because this can be quite common.
+                        self.log.debug(
+                            "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
+                        )
+                        continue
 
                 ccd_table = (
                     warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
