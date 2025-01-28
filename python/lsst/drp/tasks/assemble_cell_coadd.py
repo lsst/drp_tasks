@@ -495,7 +495,7 @@ class AssembleCellCoaddTask(PipelineTask):
                         )
                         continue
 
-                mi[cellInfo.inner_bbox].mask |= afwImage.Mask.getPlaneBitMask("INEXACT_PSF") * (
+                mi[cellInfo.inner_bbox].mask.array |= afwImage.Mask.getPlaneBitMask("INEXACT_PSF") * (
                     mi[cellInfo.inner_bbox].mask.array & missing > 0
                 )
 
