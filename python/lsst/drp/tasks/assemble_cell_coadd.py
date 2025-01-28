@@ -142,9 +142,13 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         inclusiveMin=True,
         inclusiveMax=False,
     )
-    max_missing_pixel_fraction = Field[bool](
+    max_missing_pixel_fraction = RangeField[float](
         doc="Maximum fraction of missing pixels that a warp can have within a cell's (inner) boundary.",
         default=0.15,
+        min=0.0,
+        max=1.0,
+        inclusiveMin=True,
+        inclusiveMax=False,
     )
     psf_warper = ConfigField(
         doc="Configuration for the warper that warps the PSFs. It must have the same configuration used to "
