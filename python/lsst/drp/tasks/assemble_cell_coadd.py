@@ -131,7 +131,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
             "bit on the coadd if the fraction the rejected frames "
             "would have contributed exceeds this value."
         ),
-        default={"SAT": 0.1},
+        default={"SAT": 0.1, "INEXACT_PSF": 0.0},
     )
     max_maskfrac = RangeField[float](
         doc="Maximum fraction of masked pixels in a cell. This is currently "
