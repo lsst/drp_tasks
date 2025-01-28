@@ -475,7 +475,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 mi = warp[bbox].getMaskedImage()
 
                 if (
-                    missing_pixel_fraction := (mi[cellInfo.inner_bbox].mask.array & missing).mean()
+                    missing_pixel_fraction := (mi[cellInfo.inner_bbox].mask.array & missing > 0).mean()
                 ) > self.config.max_missing_pixel_fraction:
                     self.log.debug(
                         "Skipping %s in cell %s because it misses %.2f per cent of pixels",
@@ -494,6 +494,10 @@ class AssembleCellCoaddTask(PipelineTask):
                             "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
                         )
                         continue
+
+                mi[cellInfo.inner_bbox].mask |= afwImage.Mask.getPlaneBitMask("INEXACT_PSF") * (
+                    mi[cellInfo.inner_bbox].mask.array & missing > 0
+                )
 
                 ccd_table = (
                     warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
