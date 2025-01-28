@@ -439,6 +439,7 @@ class AssembleCellCoaddTask(PipelineTask):
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
             warp.mask.addMaskPlane("SENSOR_EDGE")
+            warp.mask.addMaskPlane("INEXACT_PSF")
 
             if artifactMaskRef is not None:
                 # Apply the artifact mask to the warp.
@@ -459,7 +460,6 @@ class AssembleCellCoaddTask(PipelineTask):
 
             # Coadd the warp onto the cells it completely overlaps.
             missing = warp.mask.getPlaneBitMask(["CLIPPED", "NO_DATA", "REJECTED", "SENSOR_EDGE"])
-            afwImage.Mask.addMaskPlane("INEXACT_PSF")
             self.removeMaskPlanes(warp.maskedImage)
 
             warp.writeFits(f"/sdf/scratch/users/k/kannawad/new_warp_{visit}.fits")
