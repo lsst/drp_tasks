@@ -142,6 +142,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         inclusiveMin=True,
         inclusiveMax=False,
     )
+    max_missing_pixel_fraction = Field[bool](
+        doc="Maximum fraction of missing pixels that a warp can have within a cell's (inner) boundary.",
+        default=0.15,
+    )
     psf_warper = ConfigField(
         doc="Configuration for the warper that warps the PSFs. It must have the same configuration used to "
         "warp the images.",
@@ -450,8 +454,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
 
             # Coadd the warp onto the cells it completely overlaps.
-            edge = warp.mask.getPlaneBitMask("SENSOR_EDGE")
-            reject = warp.mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
+            missing = warp.mask.getPlaneBitMask(["CLIPPED", "NO_DATA", "REJECTED", "SENSOR_EDGE"])
 
             self.removeMaskPlanes(warp.maskedImage)
 
@@ -467,21 +470,16 @@ class AssembleCellCoaddTask(PipelineTask):
                 bbox = cellInfo.outer_bbox
                 mi = warp[bbox].getMaskedImage()
 
-                if (mi.getMask().array & edge).any():
+                if (
+                    missing_pixel_fraction := (mi[cellInfo.inner_bbox].mask.array & missing).mean()
+                ) > self.config.max_missing_pixel_fraction:
                     self.log.debug(
-                        "Skipping %s in cell %s because it has an SENSOR_EDGE bit set",
+                        "Skipping %s in cell %s because it misses %.2f per cent of pixels",
                         warpRef.dataId,
                         cellInfo.index,
+                        100 * missing_pixel_fraction,
                     )
-                    # continue
-
-                if (mi.getMask().array & reject).any():
-                    self.log.debug(
-                        "Skipping %s in cell %s because it has a CLIPPED or REJECTED bit set",
-                        warpRef.dataId,
-                        cellInfo.index,
-                    )
-                    # continue
+                    continue
 
                 if self.config.do_calculate_weights_per_cell:
                     weight = self._compute_weight(mi, statsCtrl)
