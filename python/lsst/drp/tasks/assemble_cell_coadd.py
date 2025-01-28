@@ -395,6 +395,8 @@ class AssembleCellCoaddTask(PipelineTask):
     def run(self, inputWarps, skyInfo, **kwargs):
         for mask_plane in self.config.bad_mask_planes:
             afwImage.Mask.addMaskPlane(mask_plane)
+        for mask_plane in self.config.mask_propagation_thresholds:
+            afwImage.Mask.addMaskPlane(mask_plane)
 
         statsCtrl = self._construct_stats_control()
 
