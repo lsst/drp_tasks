@@ -30,6 +30,7 @@ import numpy as np
 
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
+import lsst.coadd.utils as coaddUtils
 import lsst.geom as geom
 from lsst.cell_coadds import (
     CellIdentifiers,
@@ -298,7 +299,7 @@ class AssembleCellCoaddTask(PipelineTask):
         """
         grid = self._construct_grid(skyInfo)
 
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        maskMap = coaddUtils.setRejectedMaskMapping(statsCtrl)
         self.log.info("maskMap = %s", maskMap)
         thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
 
@@ -338,59 +339,6 @@ class AssembleCellCoaddTask(PipelineTask):
             bit = afwImage.Mask.getMaskPlane(plane)
             statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
-
-    @staticmethod
-    def setRejectedMaskMapping(statsCtrl):
-        """Map certain mask planes of the warps to new planes for the coadd.
-
-        If a pixel is rejected due to a mask value other than EDGE, NO_DATA,
-        or CLIPPED, set it to REJECTED on the coadd.
-        If a pixel is rejected due to EDGE, set the coadd pixel to SENSOR_EDGE.
-        If a pixel is rejected due to CLIPPED, set the coadd pixel to CLIPPED.
-
-        Parameters
-        ----------
-        statsCtrl : `lsst.afw.math.StatisticsControl`
-            Statistics control object for coadd.
-
-        Returns
-        -------
-        maskMap : `list` of `tuple` of `int`
-            A list of mappings of mask planes of the warped exposures to
-            mask planes of the coadd.
-        """
-        edge = 2 ** afwImage.Mask.addMaskPlane("EDGE")
-        noData = 2 ** afwImage.Mask.addMaskPlane("NO_DATA")
-        clipped = 2 ** afwImage.Mask.addMaskPlane("CLIPPED")
-        toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
-        maskMap = [
-            (toReject, 2 ** afwImage.Mask.addMaskPlane("REJECTED")),
-            (edge, 2 ** afwImage.Mask.addMaskPlane("SENSOR_EDGE")),
-            (clipped, clipped),
-        ]
-        return maskMap
-
-    def removeMaskPlanes(self, maskedImage):
-        """Unset the mask of an image for mask planes specified in the config.
-
-        Parameters
-        ----------
-        maskedImage : `lsst.afw.image.MaskedImage`
-            The masked image to be modified.
-
-        Raises
-        ------
-        InvalidParameterError
-            Raised if no mask plane with that name was found.
-        """
-        mask = maskedImage.getMask()
-        for maskPlane in self.config.remove_mask_planes:
-            try:
-                mask &= ~mask.getPlaneBitMask(maskPlane)
-            except InvalidParameterError:
-                self.log.warn(
-                    "Unable to remove mask plane %s: no mask plane with that name was found.", maskPlane
-                )
 
     def run(self, inputWarps, skyInfo, **kwargs):
         for mask_plane in self.config.bad_mask_planes:
@@ -462,7 +410,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
             # Coadd the warp onto the cells it completely overlaps.
             missing = warp.mask.getPlaneBitMask(["CLIPPED", "NO_DATA", "REJECTED", "SENSOR_EDGE"])
-            self.removeMaskPlanes(warp.maskedImage)
+            coaddUtils.removeMaskPlanes(warp.mask)
 
             warp.writeFits(f"/sdf/scratch/users/k/kannawad/new_warp_{visit}.fits")
             if not self.config.do_calculate_weights_per_cell:
