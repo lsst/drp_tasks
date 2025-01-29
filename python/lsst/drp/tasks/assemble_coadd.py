@@ -934,7 +934,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure.mask.addMaskPlane("REJECTED")
         coaddExposure.mask.addMaskPlane("CLIPPED")
         coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        maskMap = coaddUtils.setRejectedMaskMapping(statsCtrl)
         clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
         maskedImageList = []
         if nImage is not None:
@@ -954,7 +954,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             if nImage is not None:
                 subNImage.getArray()[maskedImage.getMask().getArray() & statsCtrl.getAndMask() == 0] += 1
             if self.config.removeMaskPlanes:
-                self.removeMaskPlanes(maskedImage)
+                coaddUtils.removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes)
             maskedImageList.append(maskedImage)
 
             if self.config.doInputMap:
@@ -1006,7 +1006,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure.mask.addMaskPlane("REJECTED")
         coaddExposure.mask.addMaskPlane("CLIPPED")
         coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        maskMap = coaddUtils.setRejectedMaskMapping(statsCtrl)
         thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
 
         bbox = coaddExposure.maskedImage.getBBox()
@@ -1031,7 +1031,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 self.applyAltMaskPlanes(mask, altMask)
             imageScaler.scaleMaskedImage(maskedImage)
             if self.config.removeMaskPlanes:
-                self.removeMaskPlanes(maskedImage)
+                coaddUtils.removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes)
 
             visit = exposure.getInfo().getCoaddInputs().visits[0].getId()
             maskedImage.writeFits(f"/sdf/scratch/users/k/kannawad/old_warp_{visit}.fits")
@@ -1045,59 +1045,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         if nImage is not None:
             nImage.array[:, :] = stacker.n_image
-
-    def removeMaskPlanes(self, maskedImage):
-        """Unset the mask of an image for mask planes specified in the config.
-
-        Parameters
-        ----------
-        maskedImage : `lsst.afw.image.MaskedImage`
-            The masked image to be modified.
-
-        Raises
-        ------
-        InvalidParameterError
-            Raised if no mask plane with that name was found.
-        """
-        mask = maskedImage.getMask()
-        for maskPlane in self.config.removeMaskPlanes:
-            try:
-                mask &= ~mask.getPlaneBitMask(maskPlane)
-            except pexExceptions.InvalidParameterError:
-                self.log.debug(
-                    "Unable to remove mask plane %s: no mask plane with that name was found.", maskPlane
-                )
-
-    @staticmethod
-    def setRejectedMaskMapping(statsCtrl):
-        """Map certain mask planes of the warps to new planes for the coadd.
-
-        If a pixel is rejected due to a mask value other than EDGE, NO_DATA,
-        or CLIPPED, set it to REJECTED on the coadd.
-        If a pixel is rejected due to EDGE, set the coadd pixel to SENSOR_EDGE.
-        If a pixel is rejected due to CLIPPED, set the coadd pixel to CLIPPED.
-
-        Parameters
-        ----------
-        statsCtrl : `lsst.afw.math.StatisticsControl`
-            Statistics control object for coadd.
-
-        Returns
-        -------
-        maskMap : `list` of `tuple` of `int`
-            A list of mappings of mask planes of the warped exposures to
-            mask planes of the coadd.
-        """
-        edge = afwImage.Mask.getPlaneBitMask("EDGE")
-        noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
-        clipped = 2 ** afwImage.Mask.addMaskPlane("CLIPPED")
-        toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
-        maskMap = [
-            (toReject, 2 ** afwImage.Mask.addMaskPlane("REJECTED")),
-            (edge, 2 ** afwImage.Mask.addMaskPlane("SENSOR_EDGE")),
-            (clipped, clipped),
-        ]
-        return maskMap
 
     def applyAltMaskPlanes(self, mask, altMaskSpans):
         """Apply in place alt mask formatted as SpanSets to a mask.
