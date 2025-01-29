@@ -1034,6 +1034,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
             visit = exposure.getInfo().getCoaddInputs().visits[0].getId()
             maskedImage.writeFits(f"/sdf/home/k/kannawad/DM-46961/old_warp_{visit}.fits")
+            self.log.info("Computed weight for %s: %.4f", warpRef.dataId, weight)
             stacker.add_masked_image(maskedImage, weight=weight)
 
             if self.config.doInputMap:

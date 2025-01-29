@@ -415,6 +415,7 @@ class AssembleCellCoaddTask(PipelineTask):
             warp.writeFits(f"/sdf/home/k/kannawad/DM-46961/new_warp_{visit}.fits")
             if not self.config.do_calculate_weights_per_cell:
                 weight = self._compute_weight(warp.maskedImage, statsCtrl)
+                self.log.info("Computed weight for %s: %.4f", warpRef.dataId, weight)
 
                 if not np.isfinite(weight):
                     self.log.info("Non-finite weight for %s: skipping for all cells", warpRef.dataId)
