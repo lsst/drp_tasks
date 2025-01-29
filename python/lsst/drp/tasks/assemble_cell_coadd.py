@@ -410,7 +410,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
             # Coadd the warp onto the cells it completely overlaps.
             missing = warp.mask.getPlaneBitMask(["CLIPPED", "NO_DATA", "REJECTED", "SENSOR_EDGE"])
-            coaddUtils.removeMaskPlanes(warp.mask)
+            coaddUtils.removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
 
             warp.writeFits(f"/sdf/home/k/kannawad/DM-46961/new_warp_{visit}.fits")
             if not self.config.do_calculate_weights_per_cell:
