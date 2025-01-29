@@ -1033,7 +1033,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 coaddUtils.removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes)
 
             visit = exposure.getInfo().getCoaddInputs().visits[0].getId()
-            maskedImage.writeFits(f"/sdf/scratch/users/k/kannawad/old_warp_{visit}.fits")
+            maskedImage.writeFits(f"/sdf/home/k/kannawad/DM-46961/old_warp_{visit}.fits")
             stacker.add_masked_image(maskedImage, weight=weight)
 
             if self.config.doInputMap:

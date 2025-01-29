@@ -412,7 +412,7 @@ class AssembleCellCoaddTask(PipelineTask):
             missing = warp.mask.getPlaneBitMask(["CLIPPED", "NO_DATA", "REJECTED", "SENSOR_EDGE"])
             coaddUtils.removeMaskPlanes(warp.mask)
 
-            warp.writeFits(f"/sdf/scratch/users/k/kannawad/new_warp_{visit}.fits")
+            warp.writeFits(f"/sdf/home/k/kannawad/DM-46961/new_warp_{visit}.fits")
             if not self.config.do_calculate_weights_per_cell:
                 weight = self._compute_weight(warp.maskedImage, statsCtrl)
 
