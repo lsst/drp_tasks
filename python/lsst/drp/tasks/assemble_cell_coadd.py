@@ -333,7 +333,7 @@ class AssembleCellCoaddTask(PipelineTask):
             A control object for StatisticsStack.
         """
         statsCtrl = afwMath.StatisticsControl()
-        statsCtrl.setNumIter(2.0)
+        statsCtrl.setNumIter(2)
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
         for plane, threshold in self.config.mask_propagation_thresholds.items():
