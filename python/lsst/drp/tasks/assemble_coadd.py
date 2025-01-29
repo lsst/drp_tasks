@@ -48,7 +48,14 @@ import lsst.pex.exceptions as pexExceptions
 import lsst.pipe.base as pipeBase
 import lsst.utils as utils
 from lsst.meas.algorithms import AccumulatorMeanStack, MaskStreaksTask, ScaleVarianceTask, SourceDetectionTask
-from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
+from lsst.pipe.tasks.coaddBase import (
+    CoaddBaseTask,
+    makeSkyInfo,
+    removeMaskPlanes,
+    reorderAndPadList,
+    setRejectedMaskMapping,
+    subBBoxIter,
+)
 from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
@@ -931,7 +938,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure.mask.addMaskPlane("REJECTED")
         coaddExposure.mask.addMaskPlane("CLIPPED")
         coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        maskMap = setRejectedMaskMapping(statsCtrl)
         clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
         maskedImageList = []
         if nImage is not None:
@@ -951,7 +958,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             if nImage is not None:
                 subNImage.getArray()[maskedImage.getMask().getArray() & statsCtrl.getAndMask() == 0] += 1
             if self.config.removeMaskPlanes:
-                self.removeMaskPlanes(maskedImage)
+                removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes, logger=self.log)
             maskedImageList.append(maskedImage)
 
             if self.config.doInputMap:
@@ -1003,7 +1010,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure.mask.addMaskPlane("REJECTED")
         coaddExposure.mask.addMaskPlane("CLIPPED")
         coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        maskMap = setRejectedMaskMapping(statsCtrl)
         thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
 
         bbox = coaddExposure.maskedImage.getBBox()
@@ -1028,7 +1035,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 self.applyAltMaskPlanes(mask, altMask)
             imageScaler.scaleMaskedImage(maskedImage)
             if self.config.removeMaskPlanes:
-                self.removeMaskPlanes(maskedImage)
+                removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes, logger=self.log)
 
             stacker.add_masked_image(maskedImage, weight=weight)
 
@@ -1085,11 +1092,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         """
         edge = afwImage.Mask.getPlaneBitMask("EDGE")
         noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
-        clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
+        clipped = 2 ** afwImage.Mask.addMaskPlane("CLIPPED")
         toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
         maskMap = [
-            (toReject, afwImage.Mask.getPlaneBitMask("REJECTED")),
-            (edge, afwImage.Mask.getPlaneBitMask("SENSOR_EDGE")),
+            (toReject, 2 ** afwImage.Mask.addMaskPlane("REJECTED")),
+            (edge, 2 ** afwImage.Mask.addMaskPlane("SENSOR_EDGE")),
             (clipped, clipped),
         ]
         return maskMap
