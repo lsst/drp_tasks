@@ -417,9 +417,11 @@ class AssembleCellCoaddTask(PipelineTask):
 
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
-                mi = warp[bbox].getMaskedImage()
+                mi = warp[bbox].maskedImage
 
-                if (mi.getMask().array & edge).any():
+                # TODO: Condition based only on the bounding box that appears
+                # in the stitched version of the coadd.
+                if (mi.mask.array & edge).any():
                     self.log.debug(
                         "Skipping %s in cell %s because it has an EDGE bit set",
                         warpRef.dataId,
@@ -427,7 +429,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                if (mi.getMask().array & reject).any():
+                if (mi.mask.array & reject).any():
                     self.log.debug(
                         "Skipping %s in cell %s because it has a CLIPPED or REJECTED bit set",
                         warpRef.dataId,
