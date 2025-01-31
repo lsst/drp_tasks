@@ -427,7 +427,7 @@ class AssembleCellCoaddTask(PipelineTask):
                         warpRef.dataId,
                         cellInfo.index,
                     )
-                    continue
+                    # continue
 
                 if (mi.mask.array & reject).any():
                     self.log.debug(
@@ -435,7 +435,7 @@ class AssembleCellCoaddTask(PipelineTask):
                         warpRef.dataId,
                         cellInfo.index,
                     )
-                    continue
+                    # continue
 
                 # TODO: Make this per-detector instead of per-cell in DM-48649.
                 weight = self._compute_weight(mi, statsCtrl)
