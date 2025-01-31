@@ -115,11 +115,6 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Mask planes to remove before coadding",
         default=["NOT_DEBLENDED", "EDGE"],
     )
-    do_calculate_weights_per_cell = Field[bool](
-        doc="Calculate different visits for a warp per cell? If False, "
-        "a visit gets the same weight in all the cells it overlaps completely.",
-        default=False,
-    )
     calc_error_from_input_variance = Field[bool](
         doc="Calculate coadd variance from input variance by stacking "
         "statistic. Passed to AccumulatorMeanStack.",
@@ -413,14 +408,10 @@ class AssembleCellCoaddTask(PipelineTask):
             missing = warp.mask.getPlaneBitMask(["CLIPPED", "NO_DATA", "REJECTED", "SENSOR_EDGE"])
             coaddUtils.removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
 
-            warp.writeFits(f"/sdf/home/k/kannawad/DM-46961/new_warp_{visit}.fits")
-            if not self.config.do_calculate_weights_per_cell:
-                weight = self._compute_weight(warp.maskedImage, statsCtrl)
-                self.log.info("Computed weight for %s: %.4f", warpRef.dataId, weight)
+            warp.writeFits(
+                f"/sdf/home/k/kannawad/DM-46961/new_warp_{visit}.fits"
+            )  # HACK: REMOVE BEFORE MERGE
 
-                if not np.isfinite(weight):
-                    self.log.info("Non-finite weight for %s: skipping for all cells", warpRef.dataId)
-                    continue
 
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
@@ -437,15 +428,15 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                if self.config.do_calculate_weights_per_cell:
-                    weight = self._compute_weight(mi, statsCtrl)
+                # TODO: Make this per-detector instead of per-cell in DM-48649.
+                weight = self._compute_weight(mi, statsCtrl)
 
-                    if not np.isfinite(weight):
-                        # Log at the debug level, because this can be quite common.
-                        self.log.debug(
-                            "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
-                        )
-                        continue
+                if not np.isfinite(weight):
+                    # Log at the debug level, because this can be quite common.
+                    self.log.debug(
+                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
+                    )
+                    continue
 
                 mi[cellInfo.inner_bbox].mask.array |= afwImage.Mask.getPlaneBitMask("INEXACT_PSF") * (
                     mi[cellInfo.inner_bbox].mask.array & missing > 0
