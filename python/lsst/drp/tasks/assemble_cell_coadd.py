@@ -412,19 +412,26 @@ class AssembleCellCoaddTask(PipelineTask):
                 f"/sdf/home/k/kannawad/DM-46961/new_warp_{visit}.fits"
             )  # HACK: REMOVE BEFORE MERGE
 
+            edge = warp.getPlaneBitMask("NO_DATA")
+            reject = warp.getPlaneBitMask(["CLIPPED", "REJECTED"])
 
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 mi = warp[bbox].getMaskedImage()
 
-                if (
-                    missing_pixel_fraction := (mi[cellInfo.inner_bbox].mask.array & missing > 0).mean()
-                ) > self.config.max_missing_pixel_fraction:
+                if (mi.getMask().array & edge).any():
                     self.log.debug(
-                        "Skipping %s in cell %s because it misses %.2f per cent of pixels",
+                        "Skipping %s in cell %s because it has an EDGE bit set",
                         warpRef.dataId,
                         cellInfo.index,
-                        100 * missing_pixel_fraction,
+                    )
+                    continue
+
+                if (mi.getMask().array & reject).any():
+                    self.log.debug(
+                        "Skipping %s in cell %s because it has a CLIPPED or REJECTED bit set",
+                        warpRef.dataId,
+                        cellInfo.index,
                     )
                     continue
 
