@@ -1955,6 +1955,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             )
             effMaxNumEpochsLowN = self.config.maxFractionEpochsLow * numpy.mean(totalN)
             effectiveMaxNumEpochs = int(min(effMaxNumEpochsLowN, effMaxNumEpochsHighN))
+            self.log.info(f'nImages: {numpy.mean(totalN)}, outlierN: {numpy.mean(outlierN)}, effective maximum number of epochs: {effectiveMaxNumEpochs}')
             nPixelsBelowThreshold = numpy.count_nonzero((outlierN > 0) & (outlierN <= effectiveMaxNumEpochs))
             percentBelowThreshold = nPixelsBelowThreshold / len(outlierN)
             if percentBelowThreshold > self.config.spatialThreshold:
