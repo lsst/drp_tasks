@@ -35,6 +35,7 @@ import warnings
 
 import lsstDebug
 import numpy
+from deprecated.sphinx import deprecated
 
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
@@ -1048,6 +1049,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         if nImage is not None:
             nImage.array[:, :] = stacker.n_image
 
+    # TODO: Remove this deprecated method in DM-48771.
+    @deprecated(
+        reason="This method is converted to a utility function with the same "
+        "name in lsst.pipe.tasks.coaddBase and will be removed after v29.",
+        version="v29.0",
+        category=FutureWarning,
+    )
     def removeMaskPlanes(self, maskedImage):
         """Unset the mask of an image for mask planes specified in the config.
 
@@ -1062,15 +1070,16 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             Raised if no mask plane with that name was found.
         """
         mask = maskedImage.getMask()
-        for maskPlane in self.config.removeMaskPlanes:
-            try:
-                mask &= ~mask.getPlaneBitMask(maskPlane)
-            except pexExceptions.InvalidParameterError:
-                self.log.debug(
-                    "Unable to remove mask plane %s: no mask plane with that name was found.", maskPlane
-                )
+        removeMaskPlanes(mask, self.config.removeMaskPlanes, logger=self.log)
 
+    # TODO: Remove this deprecated method in DM-48771.
     @staticmethod
+    @deprecated(
+        reason="This method is converted to a utility function with the same "
+        "name in lsst.pipe.tasks.coaddBase and will be removed after v29.",
+        version="v29.0",
+        category=FutureWarning,
+    )
     def setRejectedMaskMapping(statsCtrl):
         """Map certain mask planes of the warps to new planes for the coadd.
 
@@ -1090,15 +1099,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             A list of mappings of mask planes of the warped exposures to
             mask planes of the coadd.
         """
-        edge = afwImage.Mask.getPlaneBitMask("EDGE")
-        noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
-        clipped = 2 ** afwImage.Mask.addMaskPlane("CLIPPED")
-        toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
-        maskMap = [
-            (toReject, 2 ** afwImage.Mask.addMaskPlane("REJECTED")),
-            (edge, 2 ** afwImage.Mask.addMaskPlane("SENSOR_EDGE")),
-            (clipped, clipped),
-        ]
+        maskMap = setRejectedMaskMapping(statsCtrl)
         return maskMap
 
     def applyAltMaskPlanes(self, mask, altMaskSpans):
