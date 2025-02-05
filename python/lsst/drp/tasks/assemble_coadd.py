@@ -1781,6 +1781,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         else:
             templateFootprints = None
 
+        templateCoadd.writeFits(f'templateCoadd{self.config.detectTemplate.thresholdValue}_{self.config.detectTemplate.nSigmaToGrow}.fits')
+
         for warpRef, imageScaler in zip(warpRefList, imageScalerList):
             warpDiffExp = self._readAndComputeWarpDiff(warpRef, imageScaler, templateCoadd)
 
@@ -1955,17 +1957,20 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             )
             effMaxNumEpochsLowN = self.config.maxFractionEpochsLow * numpy.mean(totalN)
             effectiveMaxNumEpochs = int(min(effMaxNumEpochsLowN, effMaxNumEpochsHighN))
-            self.log.info(f'nImages: {numpy.mean(totalN)}, outlierN: {numpy.mean(outlierN)}, effective maximum number of epochs: {effectiveMaxNumEpochs}')
+            xCen = numpy.mean(x)
+            yCen = numpy.mean(y)
             nPixelsBelowThreshold = numpy.count_nonzero((outlierN > 0) & (outlierN <= effectiveMaxNumEpochs))
             percentBelowThreshold = nPixelsBelowThreshold / len(outlierN)
+            self.log.info(f'x: {xCen:.1f}, y: {yCen:.1f}, nImages: {numpy.mean(totalN):.1f}, outlierN: {numpy.mean(outlierN):.1f}, effective max num of epochs: {effectiveMaxNumEpochs}, percentBelowThreshold: {percentBelowThreshold} ')
             if percentBelowThreshold > self.config.spatialThreshold:
                 maskSpanSetList.append(span)
+                self.log.info(f'{i} potentially clipped')
 
         if self.config.doPreserveContainedBySource and footprintsToExclude is not None:
             # If a candidate is contained by a footprint on the template coadd,
             # do not clip.
             filteredMaskSpanSetList = []
-            for span in maskSpanSetList:
+            for i, span in enumerate(maskSpanSetList):
                 doKeep = True
                 for footprint in footprintsToExclude.positive.getFootprints():
                     if footprint.spans.contains(span):
@@ -1973,6 +1978,8 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
                         break
                 if doKeep:
                     filteredMaskSpanSetList.append(span)
+                    self.log.info(f'{i} is clipped')
+
             maskSpanSetList = filteredMaskSpanSetList
 
         return maskSpanSetList
