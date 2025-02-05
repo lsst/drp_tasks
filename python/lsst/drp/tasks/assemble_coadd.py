@@ -35,6 +35,7 @@ import warnings
 
 import lsstDebug
 import numpy
+from deprecated.sphinx import deprecated
 
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
@@ -48,7 +49,14 @@ import lsst.pex.exceptions as pexExceptions
 import lsst.pipe.base as pipeBase
 import lsst.utils as utils
 from lsst.meas.algorithms import AccumulatorMeanStack, MaskStreaksTask, ScaleVarianceTask, SourceDetectionTask
-from lsst.pipe.tasks.coaddBase import CoaddBaseTask, makeSkyInfo, reorderAndPadList, subBBoxIter
+from lsst.pipe.tasks.coaddBase import (
+    CoaddBaseTask,
+    makeSkyInfo,
+    removeMaskPlanes,
+    reorderAndPadList,
+    setRejectedMaskMapping,
+    subBBoxIter,
+)
 from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
@@ -931,7 +939,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure.mask.addMaskPlane("REJECTED")
         coaddExposure.mask.addMaskPlane("CLIPPED")
         coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        maskMap = setRejectedMaskMapping(statsCtrl)
         clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
         maskedImageList = []
         if nImage is not None:
@@ -951,7 +959,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             if nImage is not None:
                 subNImage.getArray()[maskedImage.getMask().getArray() & statsCtrl.getAndMask() == 0] += 1
             if self.config.removeMaskPlanes:
-                self.removeMaskPlanes(maskedImage)
+                removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes, logger=self.log)
             maskedImageList.append(maskedImage)
 
             if self.config.doInputMap:
@@ -1003,7 +1011,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddExposure.mask.addMaskPlane("REJECTED")
         coaddExposure.mask.addMaskPlane("CLIPPED")
         coaddExposure.mask.addMaskPlane("SENSOR_EDGE")
-        maskMap = self.setRejectedMaskMapping(statsCtrl)
+        maskMap = setRejectedMaskMapping(statsCtrl)
         thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
 
         bbox = coaddExposure.maskedImage.getBBox()
@@ -1028,7 +1036,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 self.applyAltMaskPlanes(mask, altMask)
             imageScaler.scaleMaskedImage(maskedImage)
             if self.config.removeMaskPlanes:
-                self.removeMaskPlanes(maskedImage)
+                removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes, logger=self.log)
 
             stacker.add_masked_image(maskedImage, weight=weight)
 
@@ -1041,6 +1049,13 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         if nImage is not None:
             nImage.array[:, :] = stacker.n_image
 
+    # TODO: Remove this deprecated method in DM-48771.
+    @deprecated(
+        reason="This method is converted to a utility function with the same "
+        "name in lsst.pipe.tasks.coaddBase and will be removed after v29.",
+        version="v29.0",
+        category=FutureWarning,
+    )
     def removeMaskPlanes(self, maskedImage):
         """Unset the mask of an image for mask planes specified in the config.
 
@@ -1055,15 +1070,16 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             Raised if no mask plane with that name was found.
         """
         mask = maskedImage.getMask()
-        for maskPlane in self.config.removeMaskPlanes:
-            try:
-                mask &= ~mask.getPlaneBitMask(maskPlane)
-            except pexExceptions.InvalidParameterError:
-                self.log.debug(
-                    "Unable to remove mask plane %s: no mask plane with that name was found.", maskPlane
-                )
+        removeMaskPlanes(mask, self.config.removeMaskPlanes, logger=self.log)
 
+    # TODO: Remove this deprecated method in DM-48771.
     @staticmethod
+    @deprecated(
+        reason="This method is converted to a utility function with the same "
+        "name in lsst.pipe.tasks.coaddBase and will be removed after v29.",
+        version="v29.0",
+        category=FutureWarning,
+    )
     def setRejectedMaskMapping(statsCtrl):
         """Map certain mask planes of the warps to new planes for the coadd.
 
@@ -1083,15 +1099,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             A list of mappings of mask planes of the warped exposures to
             mask planes of the coadd.
         """
-        edge = afwImage.Mask.getPlaneBitMask("EDGE")
-        noData = afwImage.Mask.getPlaneBitMask("NO_DATA")
-        clipped = afwImage.Mask.getPlaneBitMask("CLIPPED")
-        toReject = statsCtrl.getAndMask() & (~noData) & (~edge) & (~clipped)
-        maskMap = [
-            (toReject, afwImage.Mask.getPlaneBitMask("REJECTED")),
-            (edge, afwImage.Mask.getPlaneBitMask("SENSOR_EDGE")),
-            (clipped, clipped),
-        ]
+        maskMap = setRejectedMaskMapping(statsCtrl)
         return maskMap
 
     def applyAltMaskPlanes(self, mask, altMaskSpans):

@@ -19,8 +19,7 @@
 # the GNU General Public License along with this program.  If not,
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
-"""Test AssembleCoaddTask and its variants.
-"""
+"""Test AssembleCoaddTask and its variants."""
 import unittest
 
 import numpy as np
