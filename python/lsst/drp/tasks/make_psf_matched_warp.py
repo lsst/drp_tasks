@@ -169,7 +169,7 @@ class MakePsfMatchedWarpTask(PipelineTask):
 
             if (src_polygon := row.validPolygon) is None:
                 # Calculate the polygon for this detector.
-                src_polygon = Polygon([geom.Point2D(corner) for corner in row.getBBox().getCorners()])
+                src_polygon = Polygon(geom.Box2D(row.getBBox()))
                 self.log.debug("Polygon for detector=%d is calculated as %s", row["ccd"], src_polygon)
             else:
                 self.log.debug(
@@ -225,7 +225,7 @@ class MakePsfMatchedWarpTask(PipelineTask):
             del temp_warp
 
             # Set pixels outside the intersection polygon to NO_DATA.
-            temp_psf_matched.maskedImage[bbox].mask.array |= (~ccd_mask_array) * bit_mask
+            temp_psf_matched.mask[bbox].array |= (~ccd_mask_array) * bit_mask
 
             # Clip the bbox to the PSF-matched warp bounding box.
             bbox.clip(exposure_psf_matched.getBBox())
