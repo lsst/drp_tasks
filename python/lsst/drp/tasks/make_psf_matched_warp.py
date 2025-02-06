@@ -153,14 +153,15 @@ class MakePsfMatchedWarpTask(PipelineTask):
         """
         modelPsf = self.config.modelPsf.apply()
 
+        bit_mask = direct_warp.mask.getPlaneBitMask("NO_DATA")
         # Prepare the output exposure. We clone the input image to keep the
-        # metadata, but reset the image and variance plans.
+        # metadata, but reset the image, mask and variance planes.
         exposure_psf_matched = direct_warp[bbox].clone()
         exposure_psf_matched.image.array[:, :] = np.nan
+        exposure_psf_matched.mask.array[:, :] = bit_mask
         exposure_psf_matched.variance.array[:, :] = np.inf
         exposure_psf_matched.setPsf(modelPsf)
 
-        bit_mask = direct_warp.mask.getPlaneBitMask("NO_DATA")
         total_good_pixels = 0  # Total number of pixels copied to output.
 
         for row in direct_warp.info.getCoaddInputs().ccds:
@@ -169,7 +170,7 @@ class MakePsfMatchedWarpTask(PipelineTask):
 
             if (src_polygon := row.validPolygon) is None:
                 # Calculate the polygon for this detector.
-                src_polygon = Polygon([geom.Point2D(corner) for corner in row.getBBox().getCorners()])
+                src_polygon = Polygon(geom.Box2D(row.getBBox()))
                 self.log.debug("Polygon for detector=%d is calculated as %s", row["ccd"], src_polygon)
             else:
                 self.log.debug(
@@ -225,7 +226,7 @@ class MakePsfMatchedWarpTask(PipelineTask):
             del temp_warp
 
             # Set pixels outside the intersection polygon to NO_DATA.
-            temp_psf_matched.maskedImage[bbox].mask.array |= (~ccd_mask_array) * bit_mask
+            temp_psf_matched.mask[bbox].array |= (~ccd_mask_array) * bit_mask
 
             # Clip the bbox to the PSF-matched warp bounding box.
             bbox.clip(exposure_psf_matched.getBBox())
