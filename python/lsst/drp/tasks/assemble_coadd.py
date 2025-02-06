@@ -1487,6 +1487,9 @@ class CompareWarpAssembleCoaddConfig(
         # The default nSigmaToGrow for SourceDetectionTask is already 2.4,
         # Explicitly restating because ratio with detect.nSigmaToGrow matters
         self.detectTemplate.nSigmaToGrow = 2.4
+        # Higher thresholds make smaller and fewer protected zones around
+        # bright stars. Sources with snr < 50 tend to subtract OK empirically
+        self.detectTemplate.thresholdValue = 50
         self.detectTemplate.doTempLocalBackground = False
         self.detectTemplate.reEstimateBackground = False
         self.detectTemplate.returnOriginalFootprints = False
