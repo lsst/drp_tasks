@@ -1484,9 +1484,12 @@ class CompareWarpAssembleCoaddConfig(
         self.detect.isotropicGrow = True
         self.detect.thresholdType = "pixel_stdev"
         self.detect.nSigmaToGrow = 0.4
+
         # The default nSigmaToGrow for SourceDetectionTask is already 2.4,
         # Explicitly restating because ratio with detect.nSigmaToGrow matters
         self.detectTemplate.nSigmaToGrow = 2.4
+        # Controls protected zone around bright stars
+        self.detectTemplate.thresholdValue = 50
         self.detectTemplate.doTempLocalBackground = False
         self.detectTemplate.reEstimateBackground = False
         self.detectTemplate.returnOriginalFootprints = False
