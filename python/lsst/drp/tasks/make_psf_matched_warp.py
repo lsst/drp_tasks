@@ -153,14 +153,15 @@ class MakePsfMatchedWarpTask(PipelineTask):
         """
         modelPsf = self.config.modelPsf.apply()
 
+        bit_mask = direct_warp.mask.getPlaneBitMask("NO_DATA")
         # Prepare the output exposure. We clone the input image to keep the
-        # metadata, but reset the image and variance plans.
+        # metadata, but reset the image, mask and variance planes.
         exposure_psf_matched = direct_warp[bbox].clone()
         exposure_psf_matched.image.array[:, :] = np.nan
+        exposure_psf_matched.mask.array[:, :] = bit_mask
         exposure_psf_matched.variance.array[:, :] = np.inf
         exposure_psf_matched.setPsf(modelPsf)
 
-        bit_mask = direct_warp.mask.getPlaneBitMask("NO_DATA")
         total_good_pixels = 0  # Total number of pixels copied to output.
 
         for row in direct_warp.info.getCoaddInputs().ccds:
