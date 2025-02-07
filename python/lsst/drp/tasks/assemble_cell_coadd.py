@@ -44,7 +44,7 @@ from lsst.cell_coadds import (
     UniformGrid,
 )
 from lsst.meas.algorithms import AccumulatorMeanStack
-from lsst.pex.config import ConfigField, ConfigurableField, Field, ListField, RangeField
+from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
@@ -113,6 +113,15 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Calculate coadd variance from input variance by stacking "
         "statistic. Passed to AccumulatorMeanStack.",
         default=True,
+    )
+    mask_propagation_thresholds = DictField[str, float](
+        doc=(
+            "Threshold (in fractional weight) of rejection at which we "
+            "propagate a mask plane to the coadd; that is, we set the mask "
+            "bit on the coadd if the fraction the rejected frames "
+            "would have contributed exceeds this value."
+        ),
+        default={"SAT": 0.1},
     )
     max_maskfrac = RangeField[float](
         doc="Maximum fraction of masked pixels in a cell. This is currently "
@@ -271,6 +280,8 @@ class AssembleCellCoaddTask(PipelineTask):
         """
         grid = self._construct_grid(skyInfo)
 
+        thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
+
         # Initialize the grid container with AccumulatorMeanStacks
         gc = GridContainer[AccumulatorMeanStack](grid.shape)
         for cellInfo in skyInfo.patchInfo:
@@ -278,6 +289,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 # The shape is for the numpy arrays, hence transposed.
                 shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
                 bit_mask_value=0,
+                mask_threshold_dict=thresholdDict,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
             )
@@ -289,10 +301,15 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl = afwMath.StatisticsControl()
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
+        for plane, threshold in self.config.mask_propagation_thresholds.items():
+            bit = afwImage.Mask.getMaskPlane(plane)
+            statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
     def run(self, inputWarps, skyInfo, **kwargs):
         for mask_plane in self.config.bad_mask_planes:
+            afwImage.Mask.addMaskPlane(mask_plane)
+        for mask_plane in self.config.mask_propagation_thresholds:
             afwImage.Mask.addMaskPlane(mask_plane)
 
         statsCtrl = self._construct_stats_control()
