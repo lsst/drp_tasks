@@ -298,6 +298,17 @@ class AssembleCellCoaddTask(PipelineTask):
         return gc
 
     def _construct_stats_control(self):
+        """Construct a StatisticsControl object for coadd.
+
+        Unlike AssembleCoaddTask or CompareWarpAssembleCoaddTask, there is
+        very little to be configured apart from setting the mask planes and
+        optionally mask propagation thresholds.
+
+        Returns
+        -------
+        statsCtrl : `~lsst.afw.math.StatisticsControl`
+            A control object for StatisticsStack.
+        """
         statsCtrl = afwMath.StatisticsControl()
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
