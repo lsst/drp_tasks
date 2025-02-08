@@ -399,9 +399,10 @@ class AssembleCellCoaddTask(PipelineTask):
             reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
+                inner_bbox = cellInfo.inner_bbox
                 mi = warp[bbox].maskedImage
 
-                if (mi.mask.array & edge).any():
+                if (mi.mask[inner_bbox].array & edge).any():
                     self.log.debug(
                         "Skipping %s in cell %s because it has an EDGE bit set",
                         warpRef.dataId,
@@ -409,7 +410,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                if (mi.mask.array & reject).any():
+                if (mi.mask[inner_bbox].array & reject).any():
                     self.log.debug(
                         "Skipping %s in cell %s because it has a CLIPPED or REJECTED bit set",
                         warpRef.dataId,
