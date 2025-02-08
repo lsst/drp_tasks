@@ -47,7 +47,7 @@ from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
-from lsst.pipe.tasks.coaddBase import makeSkyInfo
+from lsst.pipe.tasks.coaddBase import makeSkyInfo, setRejectedMaskMapping
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
@@ -265,13 +265,15 @@ class AssembleCellCoaddTask(PipelineTask):
         grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
         return grid
 
-    def _construct_grid_container(self, skyInfo):
+    def _construct_grid_container(self, skyInfo, statsCtrl):
         """Construct a grid of AccumulatorMeanStack instances.
 
         Parameters
         ----------
         skyInfo : `~lsst.pipe.base.Struct`
             A Struct object
+        statsCtrl : `~lsst.afw.math.StatisticsControl`
+            A control (config-like) object for StatisticsStack.
 
         Returns
         -------
@@ -280,6 +282,8 @@ class AssembleCellCoaddTask(PipelineTask):
         """
         grid = self._construct_grid(skyInfo)
 
+        maskMap = setRejectedMaskMapping(statsCtrl)
+        self.log.debug("Obtained maskMap = %s for %s", maskMap, skyInfo.patchInfo)
         thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
 
         # Initialize the grid container with AccumulatorMeanStacks
@@ -288,10 +292,12 @@ class AssembleCellCoaddTask(PipelineTask):
             stacker = AccumulatorMeanStack(
                 # The shape is for the numpy arrays, hence transposed.
                 shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
-                bit_mask_value=0,
+                bit_mask_value=statsCtrl.getAndMask(),
                 mask_threshold_dict=thresholdDict,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
+                mask_map=maskMap,
+                no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
             )
             gc[cellInfo.index] = stacker
 
@@ -330,7 +336,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         statsCtrl = self._construct_stats_control()
 
-        gc = self._construct_grid_container(skyInfo)
+        gc = self._construct_grid_container(skyInfo, statsCtrl)
         psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
         psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
 
