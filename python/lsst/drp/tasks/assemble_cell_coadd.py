@@ -310,6 +310,11 @@ class AssembleCellCoaddTask(PipelineTask):
             A control object for StatisticsStack.
         """
         statsCtrl = afwMath.StatisticsControl()
+        # Hardcode the numIter parameter to the default config value set in
+        # CompareWarpAssembleCoaddTask to get consistent weights.
+        # This is temporary and can be removed in DM-48649, since the weight
+        # will be fed in from ExposureSummaryStats table.
+        statsCtrl.setNumIter(2)
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
         for plane, threshold in self.config.mask_propagation_thresholds.items():
@@ -406,7 +411,9 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
+                # TODO: Make this per-detector instead of per-cell in DM-48649.
                 weight = self._compute_weight(mi, statsCtrl)
+
                 if not np.isfinite(weight):
                     # Log at the debug level, because this can be quite common.
                     self.log.debug(
