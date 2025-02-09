@@ -47,7 +47,7 @@ from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
-from lsst.pipe.tasks.coaddBase import makeSkyInfo, setRejectedMaskMapping
+from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejectedMaskMapping
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
@@ -108,6 +108,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
         default=("BAD", "NO_DATA", "SAT", "CLIPPED"),
+    )
+    remove_mask_planes = ListField[str](
+        doc="Mask planes to remove before coadding",
+        default=["NOT_DEBLENDED", "EDGE"],
     )
     calc_error_from_input_variance = Field[bool](
         doc="Calculate coadd variance from input variance by stacking "
@@ -397,6 +401,8 @@ class AssembleCellCoaddTask(PipelineTask):
             # Coadd the warp onto the cells it completely overlaps.
             edge = afwImage.Mask.getPlaneBitMask("EDGE")
             reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
+            removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
+
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 inner_bbox = cellInfo.inner_bbox
