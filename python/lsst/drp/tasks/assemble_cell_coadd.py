@@ -292,6 +292,9 @@ class AssembleCellCoaddTask(PipelineTask):
         return statsCtrl
 
     def run(self, inputWarps, skyInfo, **kwargs):
+        for mask_plane in self.config.bad_mask_planes:
+            afwImage.Mask.addMaskPlane(mask_plane)
+
         statsCtrl = self._construct_stats_control()
 
         gc = self._construct_grid_container(skyInfo)
@@ -330,13 +333,19 @@ class AssembleCellCoaddTask(PipelineTask):
         for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
             warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
+            # TODO: Can we get these mask names from artifactMask?
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
+            warp.mask.addMaskPlane("SENSOR_EDGE")
+            warp.mask.addMaskPlane("INEXACT_PSF")
 
             if artifactMaskRef is not None:
                 # Apply the artifact mask to the warp.
                 artifactMask = artifactMaskRef.get()
-                warp.mask.array |= artifactMask.array
+                assert (
+                    warp.mask.getMaskPlaneDict() == artifactMask.getMaskPlaneDict()
+                ), "Mask dicts do not agree."
+                warp.mask.array = artifactMask.array
                 del artifactMask
 
             # Pre-process the warp before coadding.
