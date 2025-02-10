@@ -76,6 +76,15 @@ class AssembleCellCoaddConnections(
         multiple=True,
     )
 
+    visitSummaryList = Input(
+        doc="Input visit-summary catalogs with updated calibration objects. Mainly used for coadd weights.",
+        name="finalVisitSummary",
+        storageClass="ExposureCatalog",
+        dimensions=("instrument", "visit"),
+        deferLoad=True,
+        multiple=True,
+    )
+
     skyMap = Input(
         doc="Input definition of geometry/bbox and projection/wcs. This must be cell-based.",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
@@ -89,6 +98,15 @@ class AssembleCellCoaddConnections(
         storageClass="MultipleCellCoadd",
         dimensions=("tract", "patch", "band", "skymap"),
     )
+
+    def __init__(self, *, config=None):
+        super().__init__(config=config)
+
+        if not config:
+            return
+
+        if config.do_calculate_weight_from_warp:
+            del self.visitSummaryList
 
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
@@ -104,6 +122,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     scale_zero_point = ConfigurableField(
         target=ScaleZeroPointTask,
         doc="Task to scale warps to a common zero point",
+    )
+    do_calculate_weight_from_warp = Field[bool](
+        doc="Calculate coadd weight from the input warp? Otherwise, the weight is obtained from the visit summary. This is meant as a fallback when run outside the pipeline.",
+        default=False,
     )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
@@ -324,10 +346,11 @@ class AssembleCellCoaddTask(PipelineTask):
             )
 
         artifactMasks = kwargs.get("artifactMasks", [None] * len(inputWarps))
+        visitSummaryList = kwargs.get("visitSummaryList", [None] * len(inputWarps))
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
+        for warpRef, artifactMaskRef, visitSummaryRef in zip(inputWarps, artifactMasks, visitSummaryList):
             warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
             warp.mask.addMaskPlane("CLIPPED")
@@ -344,7 +367,13 @@ class AssembleCellCoaddTask(PipelineTask):
             # independent photometric zero-point. Therefore, we must scale each
             # Warp to set it to a common photometric zeropoint.
             if self.config.do_scale_zero_point:
-                self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
+                imageScaler = self.scale_zero_point.run(exposure=warp, dataRef=warpRef).imageScaler
+                zero_point_scale_factor = imageScaler.scale
+                self.log.debug(
+                    "Scaled the warp %s by %f to match zero points", warpRef.dataId, zero_point_scale_factor
+                )
+            else:
+                zero_point_scale_factor = 1.0
 
             # Coadd the warp onto the cells it completely overlaps.
             edge = afwImage.Mask.getPlaneBitMask("EDGE")
@@ -369,20 +398,29 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                weight = self._compute_weight(mi, statsCtrl)
-                if not np.isfinite(weight):
-                    # Log at the debug level, because this can be quite common.
-                    self.log.debug(
-                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
-                    )
-                    continue
-
                 ccd_table = (
                     warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
                 )
                 assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
                 assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
                 ccd_row = ccd_table[0]
+
+                if visitSummaryRef:
+                    assert visitSummaryRef.dataId["visit"] == ccd_row["visit"]
+                    visitSummary = visitSummaryRef.get()
+                    meanVar = visitSummary[ccd_row["ccd"]]["meanVar"]
+                    meanVar *= zero_point_scale_factor**2
+                    weight = 1.0 / meanVar
+                    del visitSummary
+                else:
+                    weight = self._compute_weight(mi, statsCtrl)
+
+                if not np.isfinite(weight):
+                    # Log at the debug level, because this can be quite common.
+                    self.log.debug(
+                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
+                    )
+                    continue
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
