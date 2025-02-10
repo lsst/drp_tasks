@@ -383,7 +383,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 zero_point_scale_factor = 1.0
 
             # Coadd the warp onto the cells it completely overlaps.
-            edge = afwImage.Mask.getPlaneBitMask("EDGE")
+            edge = afwImage.Mask.getPlaneBitMask("NO_DATA")
             reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
