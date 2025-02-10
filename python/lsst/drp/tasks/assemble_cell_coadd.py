@@ -399,7 +399,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
 
             # Coadd the warp onto the cells it completely overlaps.
-            edge = afwImage.Mask.getPlaneBitMask("EDGE")
+            edge = afwImage.Mask.getPlaneBitMask("NO_DATA")
             reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
             removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
 
