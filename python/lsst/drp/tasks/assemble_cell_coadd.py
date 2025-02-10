@@ -399,7 +399,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
 
             # Coadd the warp onto the cells it completely overlaps.
-            edge = afwImage.Mask.getPlaneBitMask("EDGE")
+            edge = afwImage.Mask.getPlaneBitMask(["NO_DATA", "SENSOR_EDGE"])
             reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
             removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
 
@@ -410,7 +410,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 if (mi.mask[inner_bbox].array & edge).any():
                     self.log.debug(
-                        "Skipping %s in cell %s because it has an EDGE bit set",
+                        "Skipping %s in cell %s because it has a pixel with SENSOR_EDGE or NO_DATA bit set",
                         warpRef.dataId,
                         cellInfo.index,
                     )
@@ -418,7 +418,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 if (mi.mask[inner_bbox].array & reject).any():
                     self.log.debug(
-                        "Skipping %s in cell %s because it has a CLIPPED or REJECTED bit set",
+                        "Skipping %s in cell %s because it has a pixel with CLIPPED or REJECTED bit set",
                         warpRef.dataId,
                         cellInfo.index,
                     )
