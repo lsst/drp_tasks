@@ -19,12 +19,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 __all__ = (
     "AssembleCellCoaddTask",
     "AssembleCellCoaddConfig",
     "ConvertMultipleCellCoaddToExposureTask",
 )
 
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -52,6 +55,9 @@ from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
 
 class AssembleCellCoaddConnections(
     PipelineTaskConnections,
@@ -76,6 +82,15 @@ class AssembleCellCoaddConnections(
         multiple=True,
     )
 
+    visitSummaryList = Input(
+        doc="Input visit-summary catalogs with updated calibration objects. Mainly used for coadd weights.",
+        name="finalVisitSummary",
+        storageClass="ExposureCatalog",
+        dimensions=("instrument", "visit"),
+        deferLoad=True,
+        multiple=True,
+    )
+
     skyMap = Input(
         doc="Input definition of geometry/bbox and projection/wcs. This must be cell-based.",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
@@ -89,6 +104,15 @@ class AssembleCellCoaddConnections(
         storageClass="MultipleCellCoadd",
         dimensions=("tract", "patch", "band", "skymap"),
     )
+
+    def __init__(self, *, config=None):
+        super().__init__(config=config)
+
+        if not config:
+            return
+
+        if config.do_calculate_weight_from_warp:
+            del self.visitSummaryList
 
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
@@ -110,6 +134,11 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         deprecated="Now that visits are scaled to nJy it is no longer necessary or "
         "recommended to scale the zero point, so this will be removed "
         "after v29.",
+    )
+    do_calculate_weight_from_warp = Field[bool](
+        doc="Calculate coadd weight from the input warp? Otherwise, the weight is obtained from the "
+        "visitSummaryList connection. This is meant as a fallback when run outside the pipeline.",
+        default=False,
     )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
@@ -376,12 +405,14 @@ class AssembleCellCoaddTask(PipelineTask):
             )
 
         artifactMasks = kwargs.get("artifactMasks", [None] * len(inputWarps))
+        visitSummaryList = kwargs.get("visitSummaryList", [None] * len(inputWarps))
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
+        for warpRef, artifactMaskRef, visitSummaryRef in zip(inputWarps, artifactMasks, visitSummaryList):
             warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
+            # Pre-process the warp before coadding.
             # TODO: Can we get these mask names from artifactMask?
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
@@ -397,17 +428,49 @@ class AssembleCellCoaddTask(PipelineTask):
                 warp.mask.array = artifactMask.array
                 del artifactMask
 
-            # Pre-process the warp before coadding.
-            # Each Warp that goes into a coadd will typically have an
-            # independent photometric zero-point. Therefore, we must scale each
-            # Warp to set it to a common photometric zeropoint.
             if self.config.do_scale_zero_point:
-                self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
+                # Each Warp that goes into a coadd will typically have an
+                # independent photometric zero-point. Therefore, we must scale
+                # each Warp to set it to a common photometric zeropoint.
+                imageScaler = self.scale_zero_point.run(exposure=warp, dataRef=warpRef).imageScaler
+                zero_point_scale_factor = imageScaler.scale
+                self.log.debug(
+                    "Scaled the warp %s by %f to match zero points", warpRef.dataId, zero_point_scale_factor
+                )
+            else:
+                zero_point_scale_factor = 1.0
 
             # Coadd the warp onto the cells it completely overlaps.
             edge = afwImage.Mask.getPlaneBitMask(["NO_DATA", "SENSOR_EDGE"])
             reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
             removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
+
+            # Compute the weight for each CCD in the warp from the visitSummary
+            # or from the warp itself, if not provided. Computing the weight
+            # from the warp is not recommended, and in that case we compute one
+            # weight per warp and not bother with per-detector weights.
+            weights: Mapping[int, float] = {}  # Mapping from detector to weight.
+            full_ccd_table = warp.getInfo().getCoaddInputs().ccds
+
+            if visitSummaryRef:
+                assert visitSummaryRef.dataId["visit"] == warpRef.dataId["visit"]
+                visitSummary = visitSummaryRef.get()
+                for detector in full_ccd_table["ccd"]:
+                    visitSummaryRow = visitSummary.find(detector)
+                    mean_variance = visitSummaryRow["meanVar"]
+                    mean_variance *= zero_point_scale_factor**2
+                    if warp.metadata.get("BUNIT", None) == "nJy":
+                        mean_variance *= visitSummaryRow.photoCalib.getCalibrationMean() ** 2
+                    weights[detector] = 1.0 / mean_variance
+                del visitSummary
+            else:
+                weight = self._compute_weight(warp, statsCtrl)
+                if not np.isfinite(weight):
+                    self.log.warn("Non-finite weight for %s: skipping", warpRef.dataId)
+                    continue
+
+                for detector in weights:
+                    weights[detector] = weight
 
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
@@ -430,29 +493,22 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                # TODO: Make this per-detector instead of per-cell in DM-48649.
-                weight = self._compute_weight(mi, statsCtrl)
-
-                if not np.isfinite(weight):
-                    # Log at the debug level, because this can be quite common.
-                    self.log.debug(
-                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
-                    )
-                    continue
-
                 # Find the CCD that contributed to this cell.
                 if len(warp.getInfo().getCoaddInputs().ccds) == 1:
                     # If there is only one, don't bother with a WCS look up.
-                    ccd_row = warp.getInfo().getCoaddInputs().ccds[0]
+                    ccd_row = full_ccd_table[0]
                 else:
-                    ccd_table = (
-                        warp.getInfo()
-                        .getCoaddInputs()
-                        .ccds.subsetContaining(cell_centers_sky[cellInfo.index])
-                    )
+                    ccd_table = full_ccd_table.subsetContaining(cell_centers_sky[cellInfo.index])
                     assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
                     assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
                     ccd_row = ccd_table[0]
+
+                weight = weights[ccd_row["ccd"]]
+                if not np.isfinite(weight):
+                    self.log.warn(
+                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
+                    )
+                    continue
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
