@@ -375,6 +375,14 @@ class AssembleCellCoaddTask(PipelineTask):
             statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
+    def _construct_apcorr(self, apCorrMap: afwImage.ApCorrMap):
+        dtype = [("cell_x", int), ("cell_y", int)] + [(name, float) for name in apCorrMap]
+        array = np.recarray((gc.shape.x*gc.shape.y,) dtype=dtype)
+        array[:, :] = 0
+        gc = GridContainer[np.record](gc.shape)
+        for
+
+
     def run(self, inputWarps, skyInfo, **kwargs):
         for mask_plane in self.config.bad_mask_planes:
             afwImage.Mask.addMaskPlane(mask_plane)
