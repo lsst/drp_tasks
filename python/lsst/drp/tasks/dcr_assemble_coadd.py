@@ -240,8 +240,8 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections
         self.assembleStaticSkyModel.retarget(CompareWarpAssembleCoaddTask)
         self.doNImage = True
         self.assembleStaticSkyModel.warpType = self.warpType
-        # The goodSeeingCoadd and nImage files will be overwritten by this Task, so
-        # don't write them the first time.
+        # The goodSeeingCoadd and nImage files will be overwritten by this
+        # Task, so don't write them the first time.
         self.assembleStaticSkyModel.doNImage = False
         self.assembleStaticSkyModel.doWrite = False
         self.detectPsfSources.returnOriginalFootprints = False
@@ -278,8 +278,8 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
     For full details of the mathematics and algorithm, please see
     DMTN-037: DCR-matched template generation (https://dmtn-037.lsst.io).
 
-    This Task produces a DCR-corrected goodSeeingCoadd, as well as a dcrCoadd for
-    each subfilter used in the iterative calculation.
+    This Task produces a DCR-corrected goodSeeingCoadd, as well as a dcrCoadd
+    for each subfilter used in the iterative calculation.
     It begins by dividing the bandpass-defining filter into N equal bandwidth
     "subfilters", and divides the flux in each pixel from an initial coadd
     equally into each as a "dcrModel". Because the airmass and parallactic
@@ -499,16 +499,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         return dcrModels
 
     @timeMethod
-    def run(
-        self,
-        skyInfo,
-        *,
-        warpRefList,
-        imageScalerList,
-        weightList,
-        supplementaryData=None,
-        **kwargs
-    ):
+    def run(self, skyInfo, *, warpRefList, imageScalerList, weightList, supplementaryData=None, **kwargs):
         r"""Assemble the coadd.
 
         Requires additional inputs Struct ``supplementaryData`` to contain a
