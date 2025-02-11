@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 from typing import Self, Type
 
 import numpy as np
@@ -238,14 +239,17 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         config = MakeWarpTask.ConfigClass()
         config.makePsfMatched = True
         config.makeDirect = True
-        makeWarp = MakeWarpTask(config=config)
-        result0 = makeWarp.run(
-            calExpList=[self.exposure],
-            ccdIdList=[self.detector],
-            skyInfo=self.skyInfo,
-            visitId=self.visit,
-            dataIdList=dataIdList,
-        )
+        # TODO: Remove this entire test in DM-47916. We retain it for now.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            makeWarp = MakeWarpTask(config=config)
+            result0 = makeWarp.run(
+                calExpList=[self.exposure],
+                ccdIdList=[self.detector],
+                skyInfo=self.skyInfo,
+                visitId=self.visit,
+                dataIdList=dataIdList,
+            )
         self.assertIsNotNone(result0.exposures["direct"])
         self.assertIsNotNone(result0.exposures["psfMatched"])
 
