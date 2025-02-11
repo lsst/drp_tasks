@@ -416,8 +416,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     weight = self._compute_weight(mi, statsCtrl)
 
                 if not np.isfinite(weight):
-                    # Log at the debug level, because this can be quite common.
-                    self.log.debug(
+                    self.log.warn(
                         "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
                     )
                     continue
