@@ -114,6 +114,9 @@ class AssembleCellCoaddConnections(
         if config.do_calculate_weight_from_warp:
             del self.visitSummaryList
 
+        if not config.do_use_artifact_mask:
+            del self.artifactMasks
+
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
     do_interpolate_coadd = Field[bool](doc="Interpolate over pixels with NO_DATA mask set?", default=False)
@@ -139,6 +142,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Calculate coadd weight from the input warp? Otherwise, the weight is obtained from the "
         "visitSummaryList connection. This is meant as a fallback when run outside the pipeline.",
         default=False,
+    )
+    do_use_artifact_mask = Field[bool](
+        doc="Substitute the mask planes input warp with an alternative artifact mask?",
+        default=True,
     )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
