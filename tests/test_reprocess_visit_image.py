@@ -278,6 +278,9 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         )
         butlerTests.addDatasetType(self.repo, "skyCorr", {"instrument", "visit", "detector"}, "Background")
         butlerTests.addDatasetType(self.repo, "finalized_src_table", {"instrument", "visit"}, "DataFrame")
+        butlerTests.addDatasetType(
+            self.repo, "background_to_photometric_ratio", {"instrument", "visit", "detector"}, "Image"
+        )
 
         # outputs
         butlerTests.addDatasetType(
@@ -331,6 +334,9 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         self.butler.put(lsst.afw.math.BackgroundList(background), "skyCorr", self.visit1_id)
         self.butler.put(lsst.afw.math.BackgroundList(background), "skyCorr", self.visit2_id)
         self.butler.put(lsst.afw.table.SourceCatalog().asAstropy(), "finalized_src_table", self.visit_only_id)
+        self.butler.put(lsst.afw.image.ImageF(), "background_to_photometric_ratio", self.visit_id)
+        self.butler.put(lsst.afw.image.ImageF(), "background_to_photometric_ratio", self.visit1_id)
+        self.butler.put(lsst.afw.image.ImageF(), "background_to_photometric_ratio", self.visit2_id)
         # Make a simple single gaussian psf so that psf is not None in
         # finalVisitSummary table which would result in
         # UpstreamFailureNoWorkFound being raised in ReprocessVisitImageTask,
@@ -367,6 +373,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "background_1": self.visit_id,
                 "background_2": self.visit_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit_id,
                 "sources": self.visit_id,
@@ -388,6 +395,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "wcs",
                 "calib_sources",
                 "id_generator",
+                "background_to_photometric_ratio",
                 "result",
             },
         )
@@ -410,6 +418,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "background_1": self.visit1_id,
                 "background_2": self.visit1_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit1_id,
                 "sources": self.visit1_id,
@@ -441,6 +450,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "background_1": self.visit2_id,
                 "background_2": self.visit2_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit2_id,
                 "sources": self.visit2_id,
@@ -477,6 +487,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "initial_photo_calib": self.visit_id,
                 "background_1": self.visit_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit_id,
                 "sources": self.visit_id,
@@ -498,6 +509,52 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "wcs",
                 "calib_sources",
                 "id_generator",
+                "background_to_photometric_ratio",
+                "result",
+            },
+        )
+
+    def test_runQuantum_illumination_correction(self):
+        """Test the task with illumination correction enabled."""
+        config = ReprocessVisitImageTask.ConfigClass()
+        config.do_apply_flat_background_ratio = True
+        task = ReprocessVisitImageTask(config=config)
+        lsst.pipe.base.testUtils.assertValidInitOutput(task)
+
+        quantum = lsst.pipe.base.testUtils.makeQuantum(
+            task,
+            self.butler,
+            self.visit_id,
+            {
+                "exposures": [self.exposure0_id],
+                "visit_summary": self.visit_only_id,
+                "initial_photo_calib": self.visit_id,
+                "background_1": self.visit_id,
+                "background_2": self.visit_id,
+                "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
+                # outputs
+                "exposure": self.visit_id,
+                "sources": self.visit_id,
+                "sources_footprints": self.visit_id,
+                "background": self.visit_id,
+            },
+        )
+        mock_run = lsst.pipe.base.testUtils.runTestQuantum(task, self.butler, quantum)
+        # Check that the proper kwargs are passed to run().
+        self.assertEqual(
+            mock_run.call_args.kwargs.keys(),
+            {
+                "exposures",
+                "initial_photo_calib",
+                "psf",
+                "background",
+                "ap_corr",
+                "photo_calib",
+                "wcs",
+                "calib_sources",
+                "id_generator",
+                "background_to_photometric_ratio",
                 "result",
             },
         )
