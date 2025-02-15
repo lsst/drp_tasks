@@ -78,6 +78,15 @@ class ReprocessVisitImageConnections(
         storageClass="ArrowAstropy",
         dimensions=["instrument", "visit"],
     )
+    background_to_photometric_ratio = connectionTypes.Input(
+        doc=(
+            "Ratio of a background-flattened image to a photometric-flattened image. "
+            "Only used if do_apply_flat_background_ratio is True."
+        ),
+        name="background_to_photometric_ratio",
+        storageClass="Image",
+        dimensions=("instrument", "visit", "detector"),
+    )
     # TODO DM-46947: pull in the STREAK mask from CompareWarp.
 
     # outputs
@@ -122,6 +131,8 @@ class ReprocessVisitImageConnections(
             del self.background_2
         if not config.remove_initial_photo_calib:
             del self.initial_photo_calib
+        if not config.do_apply_flat_background_ratio:
+            del self.background_to_photometric_ratio
 
 
 class ReprocessVisitImageConfig(
@@ -192,6 +203,11 @@ class ReprocessVisitImageConfig(
         default=0.2,
         doc="Radius in arcseconds to cross-match calib_sources to the output catalog.",
     )
+    do_apply_flat_background_ratio = pexConfig.Field(
+        dtype=bool,
+        default=False,
+        doc="This should be True if processing was done with an illumination correction.",
+    )
 
     def setDefaults(self):
         super().setDefaults()
@@ -229,6 +245,19 @@ class ReprocessVisitImageConfig(
         self.post_calculations.doReplaceWithNoise = False
         for key in self.post_calculations.slots:
             setattr(self.post_calculations.slots, key, None)
+
+    def validate(self):
+        super().validate()
+
+        if self.do_apply_flat_background_ratio:
+            if self.detection.reEstimateBackground:
+                if not self.detection.doApplyFlatBackgroundRatio:
+                    raise pexConfig.FieldValidationError(
+                        ReprocessVisitImageConfig.detection,
+                        self,
+                        "ReprocessVisitImageConfig.detection background must be configured with "
+                        "doApplyFlatBackgroundRatio if do_apply_flat_background_ratio is True.",
+                    )
 
 
 class ReprocessVisitImageTask(pipeBase.PipelineTask):
@@ -341,6 +370,10 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
             background = combine_backgrounds(background_1, background_2)
         else:
             background = background_1
+        if self.config.do_apply_flat_background_ratio:
+            background_to_photometric_ratio = inputs.pop("background_to_photometric_ratio")
+        else:
+            background_to_photometric_ratio = None
 
         # This should not happen with a properly configured execution context.
         assert not inputs, "runQuantum got more inputs than expected"
@@ -383,6 +416,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
                 calib_sources=calib_sources,
                 result=result,
                 id_generator=id_generator,
+                background_to_photometric_ratio=background_to_photometric_ratio,
             )
         except pipeBase.AlgorithmError as e:
             error = pipeBase.AnnotatedPartialOutputsError.annotate(
@@ -405,6 +439,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         wcs,
         calib_sources,
         id_generator=None,
+        background_to_photometric_ratio=None,
         result=None,
     ):
         """Detect and measure sources on the exposure(s) (snap combined as
@@ -438,6 +473,9 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
             Per-visit catalog of measurements to get 'calib_*' flags from.
         id_generator : `lsst.meas.base.IdGenerator`, optional
             Object that generates source IDs and provides random seeds.
+        background_to_photometric_ratio : `lsst.afw.image.ImageF`, optional
+            Background to photometric ratio image, to convert between
+            photometric flattened and background flattened image.
         result : `lsst.pipe.base.Struct`, optional
             Result struct that is modified to allow saving of partial outputs
             for some failure conditions. If the task completes successfully,
@@ -469,10 +507,22 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
 
         result.exposure = self.snap_combine.run(exposures).exposure
 
+        # Apply the illumination correction if required.
+        # This assumes the input images have had a background-flat applied.
+        if self.config.do_apply_flat_background_ratio:
+            result.exposure.maskedImage /= background_to_photometric_ratio
+
         if self.config.remove_initial_photo_calib:
             # Calibrate the image, so it's on the same units as the background.
             result.exposure.maskedImage = initial_photo_calib.calibrateImage(result.exposure.maskedImage)
-        result.exposure.maskedImage -= background.getImage()
+
+        with lsst.meas.algorithms.backgroundFlatContext(
+            result.exposure.maskedImage,
+            self.config.do_apply_flat_background_ratio,
+            backgroundToPhotometricRatio=background_to_photometric_ratio,
+        ):
+            result.exposure.maskedImage -= background.getImage()
+
         if self.config.remove_initial_photo_calib:
             # Uncalibrate so that we do the measurements in instFlux, because
             # we don't have a way to identify measurements as being in nJy.
@@ -484,7 +534,11 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         result.exposure.setPhotoCalib(photo_calib)
 
         result.sources_footprints = self._find_sources(
-            result.exposure, background, calib_sources, id_generator
+            result.exposure,
+            background,
+            calib_sources,
+            id_generator,
+            background_to_photometric_ratio=background_to_photometric_ratio,
         )
         result.background = background
         # TODO (DM-46971):
@@ -506,7 +560,14 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
 
         return result
 
-    def _find_sources(self, exposure, background, calib_sources, id_generator):
+    def _find_sources(
+        self,
+        exposure,
+        background,
+        calib_sources,
+        id_generator,
+        background_to_photometric_ratio=None,
+    ):
         """Detect and measure sources on the exposure.
 
         Parameters
@@ -520,6 +581,9 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
             Per-visit catalog of measurements to get 'calib_*' flags from.
         id_generator : `lsst.meas.base.IdGenerator`
             Object that generates source IDs and provides random seeds.
+        background_to_photometric_ratio : `lsst.afw.image.Image`, optional
+            Image to convert photometric-flattened image to
+            background-flattened image.
 
         Returns
         -------
@@ -529,7 +593,12 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         table = afwTable.SourceTable.make(self.schema, id_generator.make_table_id_factory())
 
         self.repair.run(exposure=exposure)
-        detections = self.detection.run(table=table, exposure=exposure, background=background)
+        detections = self.detection.run(
+            table=table,
+            exposure=exposure,
+            background=background,
+            backgroundToPhotometricRatio=background_to_photometric_ratio,
+        )
         sources = detections.sources
 
         self.sky_sources.run(exposure.mask, id_generator.catalog_id, sources)
