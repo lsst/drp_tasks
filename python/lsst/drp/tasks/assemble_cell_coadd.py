@@ -44,10 +44,10 @@ from lsst.cell_coadds import (
     UniformGrid,
 )
 from lsst.meas.algorithms import AccumulatorMeanStack
-from lsst.pex.config import ConfigField, ConfigurableField, Field, ListField, RangeField
+from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
 from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
-from lsst.pipe.tasks.coaddBase import makeSkyInfo
+from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejectedMaskMapping
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
@@ -107,12 +107,25 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
-        default=("BAD", "NO_DATA", "SAT"),
+        default=("BAD", "NO_DATA", "SAT", "CLIPPED"),
+    )
+    remove_mask_planes = ListField[str](
+        doc="Mask planes to remove before coadding",
+        default=["NOT_DEBLENDED", "EDGE"],
     )
     calc_error_from_input_variance = Field[bool](
         doc="Calculate coadd variance from input variance by stacking "
         "statistic. Passed to AccumulatorMeanStack.",
         default=True,
+    )
+    mask_propagation_thresholds = DictField[str, float](
+        doc=(
+            "Threshold (in fractional weight) of rejection at which we "
+            "propagate a mask plane to the coadd; that is, we set the mask "
+            "bit on the coadd if the fraction the rejected frames "
+            "would have contributed exceeds this value."
+        ),
+        default={"SAT": 0.1},
     )
     max_maskfrac = RangeField[float](
         doc="Maximum fraction of masked pixels in a cell. This is currently "
@@ -256,13 +269,15 @@ class AssembleCellCoaddTask(PipelineTask):
         grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
         return grid
 
-    def _construct_grid_container(self, skyInfo):
+    def _construct_grid_container(self, skyInfo, statsCtrl):
         """Construct a grid of AccumulatorMeanStack instances.
 
         Parameters
         ----------
         skyInfo : `~lsst.pipe.base.Struct`
             A Struct object
+        statsCtrl : `~lsst.afw.math.StatisticsControl`
+            A control (config-like) object for StatisticsStack.
 
         Returns
         -------
@@ -271,30 +286,61 @@ class AssembleCellCoaddTask(PipelineTask):
         """
         grid = self._construct_grid(skyInfo)
 
+        maskMap = setRejectedMaskMapping(statsCtrl)
+        self.log.debug("Obtained maskMap = %s for %s", maskMap, skyInfo.patchInfo)
+        thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
+
         # Initialize the grid container with AccumulatorMeanStacks
         gc = GridContainer[AccumulatorMeanStack](grid.shape)
         for cellInfo in skyInfo.patchInfo:
             stacker = AccumulatorMeanStack(
                 # The shape is for the numpy arrays, hence transposed.
                 shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
-                bit_mask_value=0,
+                bit_mask_value=statsCtrl.getAndMask(),
+                mask_threshold_dict=thresholdDict,
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
+                mask_map=maskMap,
+                no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
             )
             gc[cellInfo.index] = stacker
 
         return gc
 
     def _construct_stats_control(self):
+        """Construct a StatisticsControl object for coadd.
+
+        Unlike AssembleCoaddTask or CompareWarpAssembleCoaddTask, there is
+        very little to be configured apart from setting the mask planes and
+        optionally mask propagation thresholds.
+
+        Returns
+        -------
+        statsCtrl : `~lsst.afw.math.StatisticsControl`
+            A control object for StatisticsStack.
+        """
         statsCtrl = afwMath.StatisticsControl()
+        # Hardcode the numIter parameter to the default config value set in
+        # CompareWarpAssembleCoaddTask to get consistent weights.
+        # This is temporary and can be removed in DM-48649, since the weight
+        # will be fed in from ExposureSummaryStats table.
+        statsCtrl.setNumIter(2)
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
+        for plane, threshold in self.config.mask_propagation_thresholds.items():
+            bit = afwImage.Mask.getMaskPlane(plane)
+            statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
     def run(self, inputWarps, skyInfo, **kwargs):
+        for mask_plane in self.config.bad_mask_planes:
+            afwImage.Mask.addMaskPlane(mask_plane)
+        for mask_plane in self.config.mask_propagation_thresholds:
+            afwImage.Mask.addMaskPlane(mask_plane)
+
         statsCtrl = self._construct_stats_control()
 
-        gc = self._construct_grid_container(skyInfo)
+        gc = self._construct_grid_container(skyInfo, statsCtrl)
         psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
         psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
 
@@ -330,13 +376,19 @@ class AssembleCellCoaddTask(PipelineTask):
         for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
             warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
+            # TODO: Can we get these mask names from artifactMask?
             warp.mask.addMaskPlane("CLIPPED")
             warp.mask.addMaskPlane("REJECTED")
+            warp.mask.addMaskPlane("SENSOR_EDGE")
+            warp.mask.addMaskPlane("INEXACT_PSF")
 
             if artifactMaskRef is not None:
                 # Apply the artifact mask to the warp.
                 artifactMask = artifactMaskRef.get()
-                warp.mask.array |= artifactMask.array
+                assert (
+                    warp.mask.getMaskPlaneDict() == artifactMask.getMaskPlaneDict()
+                ), "Mask dicts do not agree."
+                warp.mask.array = artifactMask.array
                 del artifactMask
 
             # Pre-process the warp before coadding.
@@ -347,29 +399,34 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.scale_zero_point.run(exposure=warp, dataRef=warpRef)
 
             # Coadd the warp onto the cells it completely overlaps.
-            edge = afwImage.Mask.getPlaneBitMask("EDGE")
+            edge = afwImage.Mask.getPlaneBitMask(["NO_DATA", "SENSOR_EDGE"])
             reject = afwImage.Mask.getPlaneBitMask(["CLIPPED", "REJECTED"])
+            removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
+
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
-                mi = warp[bbox].getMaskedImage()
+                inner_bbox = cellInfo.inner_bbox
+                mi = warp[bbox].maskedImage
 
-                if (mi.getMask().array & edge).any():
+                if (mi.mask[inner_bbox].array & edge).any():
                     self.log.debug(
-                        "Skipping %s in cell %s because it has an EDGE bit set",
+                        "Skipping %s in cell %s because it has a pixel with SENSOR_EDGE or NO_DATA bit set",
                         warpRef.dataId,
                         cellInfo.index,
                     )
                     continue
 
-                if (mi.getMask().array & reject).any():
+                if (mi.mask[inner_bbox].array & reject).any():
                     self.log.debug(
-                        "Skipping %s in cell %s because it has a CLIPPED or REJECTED bit set",
+                        "Skipping %s in cell %s because it has a pixel with CLIPPED or REJECTED bit set",
                         warpRef.dataId,
                         cellInfo.index,
                     )
                     continue
 
+                # TODO: Make this per-detector instead of per-cell in DM-48649.
                 weight = self._compute_weight(mi, statsCtrl)
+
                 if not np.isfinite(weight):
                     # Log at the debug level, because this can be quite common.
                     self.log.debug(
@@ -377,12 +434,19 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                ccd_table = (
-                    warp.getInfo().getCoaddInputs().ccds.subsetContaining(cell_centers_sky[cellInfo.index])
-                )
-                assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
-                assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
-                ccd_row = ccd_table[0]
+                # Find the CCD that contributed to this cell.
+                if len(warp.getInfo().getCoaddInputs().ccds) == 1:
+                    # If there is only one, don't bother with a WCS look up.
+                    ccd_row = warp.getInfo().getCoaddInputs().ccds[0]
+                else:
+                    ccd_table = (
+                        warp.getInfo()
+                        .getCoaddInputs()
+                        .ccds.subsetContaining(cell_centers_sky[cellInfo.index])
+                    )
+                    assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
+                    assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
+                    ccd_row = ccd_table[0]
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,

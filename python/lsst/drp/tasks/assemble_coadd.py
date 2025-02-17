@@ -468,8 +468,10 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 [ref.dataId for ref in outputRefs.artifactMasks],
                 [ref.dataId for ref in inputs.warpRefList],
             )
-            for altMask, outputRef in zip(retStruct.altMaskList, artifactMasksRefList, strict=True):
-                mask = afwImage.Mask(retStruct.coaddExposure.getBBox())
+            for altMask, warpRef, outputRef in zip(
+                retStruct.altMaskList, inputs.warpRefList, artifactMasksRefList, strict=True
+            ):
+                mask = warpRef.get(component="mask", parameters={"bbox": retStruct.coaddExposure.getBBox()})
                 self.applyAltMaskPlanes(mask, altMask)
                 butlerQC.put(mask, outputRef)
 
