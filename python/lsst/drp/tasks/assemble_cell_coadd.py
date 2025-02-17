@@ -364,9 +364,9 @@ class AssembleCellCoaddTask(PipelineTask):
         """
         statsCtrl = afwMath.StatisticsControl()
         # Hardcode the numIter parameter to the default config value set in
-        # CompareWarpAssembleCoaddTask to get consistent weights.
-        # This is temporary and can be removed in DM-48649, since the weight
-        # will be fed in from ExposureSummaryStats table.
+        # CompareWarpAssembleCoaddTask to get consistent weights. This is NOT
+        # exposed as a config parameter, since this is only meant to be a
+        # fallback option that is not recommended for production.
         statsCtrl.setNumIter(2)
         statsCtrl.setAndMask(afwImage.Mask.getPlaneBitMask(self.config.bad_mask_planes))
         statsCtrl.setNanSafe(True)
