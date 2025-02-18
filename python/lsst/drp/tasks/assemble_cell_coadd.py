@@ -501,12 +501,12 @@ class AssembleCellCoaddTask(PipelineTask):
                     assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
                     ccd_row = ccd_table[0]
 
-                    weight = weights[ccd_row["ccd"]]
-                    if not np.isfinite(weight):
-                        self.log.warn(
-                            "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
-                        )
-                        continue
+                weight = weights[ccd_row["ccd"]]
+                if not np.isfinite(weight):
+                    self.log.warn(
+                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
+                    )
+                    continue
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
