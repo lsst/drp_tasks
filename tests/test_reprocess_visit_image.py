@@ -191,40 +191,72 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
         self.id_generator = self.config.id_generator.apply(data_id)
 
     def test_run(self):
-        task = ReprocessVisitImageTask(config=self.config)
-        result = task.run(
-            exposures=self.exposure,
-            initial_photo_calib=self.truth_exposure.photoCalib,
-            psf=self.truth_exposure.psf,
-            background=self.background,
-            ap_corr=lsst.afw.image.ApCorrMap(),
-            photo_calib=self.truth_exposure.photoCalib,
-            wcs=self.truth_exposure.wcs,
-            calib_sources=self.visit_catalog,
-            id_generator=self.id_generator,
+
+        background_to_photometric_ratio_value = 1.1
+
+        for do_apply_flat_background_ratio in [False, True]:
+            config = self.config
+            config.do_apply_flat_background_ratio = do_apply_flat_background_ratio
+
+            if do_apply_flat_background_ratio:
+                background_to_photometric_ratio = self.exposure.image.clone()
+                background_to_photometric_ratio.array[:, :] = background_to_photometric_ratio_value
+            else:
+                background_to_photometric_ratio = None
+
+            task = ReprocessVisitImageTask(config=config)
+            result = task.run(
+                exposures=self.exposure.clone(),
+                initial_photo_calib=self.truth_exposure.photoCalib,
+                psf=self.truth_exposure.psf,
+                background=self.background,
+                ap_corr=lsst.afw.image.ApCorrMap(),
+                photo_calib=self.truth_exposure.photoCalib,
+                wcs=self.truth_exposure.wcs,
+                calib_sources=self.visit_catalog,
+                id_generator=self.id_generator,
+                background_to_photometric_ratio=background_to_photometric_ratio,
+            )
+
+            calibrated = result.exposure.photoCalib.calibrateImage(result.exposure.maskedImage)
+            self.assertImagesAlmostEqual(result.exposure.image, calibrated.image)
+            self.assertImagesAlmostEqual(result.exposure.variance, calibrated.variance)
+            self.assertEqual(result.exposure.psf, self.truth_exposure.psf)
+            self.assertEqual(result.exposure.wcs, self.truth_exposure.wcs)
+            # A calibrated exposure has PhotoCalib==1.
+            self.assertNotEqual(result.exposure.photoCalib, self.truth_exposure.photoCalib)
+            self.assertFloatsAlmostEqual(result.exposure.photoCalib.getCalibrationMean(), 1)
+
+            # All sources (plus sky sources) should have been detected.
+            self.assertEqual(len(result.sources), len(self.truth_cat) + self.config.sky_sources.nSources)
+            # Faintest non-sky source should be marked as used.
+            flux_sorted = result.sources[result.sources.argsort("slot_CalibFlux_instFlux")]
+            self.assertTrue(flux_sorted[~flux_sorted["sky_source"]]["calib_psf_used"][0])
+            # Test that the schema init-output agrees with the catalog output.
+            self.assertEqual(task.sources_schema.schema, result.sources_footprints.schema)
+            # The flux/instFlux ratio should be the LocalPhotoCalib value.
+            for record in result.sources_footprints:
+                self.assertAlmostEqual(
+                    record["base_PsfFlux_flux"] / record["base_PsfFlux_instFlux"],
+                    record["base_LocalPhotoCalib"],
+                )
+
+            if not do_apply_flat_background_ratio:
+                result_false = result
+
+        self.assertFloatsAlmostEqual(
+            result_false.sources_footprints["base_PsfFlux_instFlux"]
+            / result.sources_footprints["base_PsfFlux_instFlux"],
+            background_to_photometric_ratio_value,
+            rtol=1e-6,
         )
 
-        calibrated = result.exposure.photoCalib.calibrateImage(result.exposure.maskedImage)
-        self.assertImagesAlmostEqual(result.exposure.image, calibrated.image)
-        self.assertImagesAlmostEqual(result.exposure.variance, calibrated.variance)
-        self.assertEqual(result.exposure.psf, self.truth_exposure.psf)
-        self.assertEqual(result.exposure.wcs, self.truth_exposure.wcs)
-        # A calibrated exposure has PhotoCalib==1.
-        self.assertNotEqual(result.exposure.photoCalib, self.truth_exposure.photoCalib)
-        self.assertFloatsAlmostEqual(result.exposure.photoCalib.getCalibrationMean(), 1)
-
-        # All sources (plus sky sources) should have been detected.
-        self.assertEqual(len(result.sources), len(self.truth_cat) + self.config.sky_sources.nSources)
-        # Faintest non-sky source should be marked as used.
-        flux_sorted = result.sources[result.sources.argsort("slot_CalibFlux_instFlux")]
-        self.assertTrue(flux_sorted[~flux_sorted["sky_source"]]["calib_psf_used"][0])
-        # Test that the schema init-output agrees with the catalog output.
-        self.assertEqual(task.sources_schema.schema, result.sources_footprints.schema)
-        # The flux/instFlux ratio should be the LocalPhotoCalib value.
-        for record in result.sources_footprints:
-            self.assertAlmostEqual(
-                record["base_PsfFlux_flux"] / record["base_PsfFlux_instFlux"], record["base_LocalPhotoCalib"]
-            )
+        self.assertFloatsAlmostEqual(
+            result_false.sources_footprints["base_PsfFlux_flux"]
+            / result.sources_footprints["base_PsfFlux_flux"],
+            background_to_photometric_ratio_value,
+            rtol=1e-6,
+        )
 
         # Prior to DM-49138, LSSTCam-style >32-bit visitIds were silently
         # down-cast to `0`.
