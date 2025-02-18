@@ -451,12 +451,12 @@ class AssembleCellCoaddTask(PipelineTask):
             # from the warp is not recommended, and in that case we compute one
             # weight per warp and not bother with per-detector weights.
             weights: Mapping[int, float] = {}  # Mapping from detector to weight.
-            ccds = warpRef.get(component="coaddInputs").ccds
+            full_ccd_table = warp.getInfo().getCoaddInputs().ccds
 
             if visitSummaryRef:
                 assert visitSummaryRef.dataId["visit"] == warpRef.dataId["visit"]
                 visitSummary = visitSummaryRef.get()
-                for detector in ccds["ccd"]:
+                for detector in full_ccd_table["ccd"]:
                     mean_variance = visitSummary[detector]["meanVar"]
                     mean_variance *= zero_point_scale_factor**2
                     weights[detector] = 1.0 / mean_variance
@@ -494,13 +494,9 @@ class AssembleCellCoaddTask(PipelineTask):
                 # Find the CCD that contributed to this cell.
                 if len(warp.getInfo().getCoaddInputs().ccds) == 1:
                     # If there is only one, don't bother with a WCS look up.
-                    ccd_row = warp.getInfo().getCoaddInputs().ccds[0]
+                    ccd_row = full_ccd_table[0]
                 else:
-                    ccd_table = (
-                        warp.getInfo()
-                        .getCoaddInputs()
-                        .ccds.subsetContaining(cell_centers_sky[cellInfo.index])
-                    )
+                    ccd_table = full_ccd_table.subsetContaining(cell_centers_sky[cellInfo.index])
                     assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
                     assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
                     ccd_row = ccd_table[0]
