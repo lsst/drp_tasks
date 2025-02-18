@@ -418,6 +418,16 @@ class MockCoaddTestData:
         matchedExposure.metadata["BUNIT"] = "nJy"
         return exposure, matchedExposure
 
+    def makeVisitSummaryTable(self, warpList):
+        ccd_visit_weight = {}
+        for warp in warpList:
+            for ccd in warp.getInfo().getCoaddInputs().ccds:
+                ccd_visit_weight[(ccd["visit"], ccd["ccd"])] = 0.5 + np.random.random_sample(0.9, 1.3)
+
+        for (visit, ccd), weight in ccd_visit_weight.items():
+            warp = self.exposures[visit]
+            warp.getInfo().getCoaddInputs().ccds.addNew(ccd, weight)
+
     @staticmethod
     def makeDataRefList(exposures, matchedExposures, warpType, tract=0, patch=42):
         """Make data references from the simulated exposures that can be
