@@ -1468,7 +1468,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                     unconstrainedDetectors.append(str(detector))
 
             if unconstrainedDetectors:
-                raise RuntimeError(
+                raise pipeBase.NoWorkFound(
                     "The model is not constrained. The following detectors do not have enough "
                     f"sources ({nCoeffDetectorModel} required): ",
                     ", ".join(unconstrainedDetectors),
