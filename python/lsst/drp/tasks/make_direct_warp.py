@@ -27,7 +27,8 @@ from typing import TYPE_CHECKING, Iterable
 
 import numpy as np
 
-from lsst.afw.image import ExposureF, Image, Mask
+from lsst.afw.image import ExposureF, Image, Mask, PhotoCalib
+
 from lsst.afw.math import BackgroundList, Warper
 from lsst.coadd.utils import copyGoodPixels
 from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
@@ -573,26 +574,12 @@ class MakeDirectWarpTask(PipelineTask):
                 )
                 continue
 
-            if final_warp.photoCalib is not None:
-                ratio = (
-                    final_warp.photoCalib.getInstFluxAtZeroMagnitude()
-                    / warpedExposure.photoCalib.getInstFluxAtZeroMagnitude()
-                )
-            else:
-                ratio = 1
-
-            self.log.debug("Scaling exposure %s by %f", detector_inputs.data_id, ratio)
-            warpedExposure.maskedImage *= ratio
-
             # Accumulate the partial warps in an online fashion.
             nGood = copyGoodPixels(
                 final_warp.maskedImage,
                 warpedExposure.maskedImage,
                 final_warp.mask.getPlaneBitMask(["NO_DATA"]),
             )
-
-            if final_warp.photoCalib is None and nGood > 0:
-                final_warp.setPhotoCalib(warpedExposure.photoCalib)
 
             ccdId = self.config.idGenerator.apply(detector_inputs.data_id).catalog_id
             inputRecorder.addCalExp(input_exposure, ccdId, nGood)
@@ -632,8 +619,6 @@ class MakeDirectWarpTask(PipelineTask):
                     visit_summary,
                     destBBox=target_bbox,
                 )
-
-                warpedNoise.maskedImage *= ratio
 
                 copyGoodPixels(
                     final_noise_warps[n_noise].maskedImage,
@@ -867,7 +852,10 @@ class MakeDirectWarpTask(PipelineTask):
             input_exposure.maskedImage,
             includeScaleUncertainty=includeScaleUncertainty,
         )
-        input_exposure.maskedImage /= photo_calib.getCalibrationMean()
+        # This new PhotoCalib shouldn't need to be used, but setting it here
+        # to reflect the fact that the image now has calibrated pixels might
+        # help avoid future bugs.
+        input_exposure.setPhotoCalib(PhotoCalib(1.0))
 
         return True
 
@@ -889,6 +877,10 @@ class MakeDirectWarpTask(PipelineTask):
         """
         exp = ExposureF(sky_info.bbox, sky_info.wcs)
         exp.getMaskedImage().set(np.nan, Mask.getPlaneBitMask("NO_DATA"), np.inf)
+        # Set the PhotoCalib to 1 to mean that pixels are nJy, since we will
+        # calibrate them before we warp them.
+        exp.setPhotoCalib(PhotoCalib(1.0))
+        exp.metadata["BUNIT"] = "nJy"
         return exp
 
     @staticmethod
