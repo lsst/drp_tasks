@@ -472,6 +472,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         if self.config.remove_initial_photo_calib:
             # Calibrate the image, so it's on the same units as the background.
             result.exposure.maskedImage = initial_photo_calib.calibrateImage(result.exposure.maskedImage)
+            result.exposure.metadata["BUNIT"] = "nJy"
         result.exposure.maskedImage -= background.getImage()
         if self.config.remove_initial_photo_calib:
             # Uncalibrate so that we do the measurements in instFlux, because
