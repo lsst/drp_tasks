@@ -721,13 +721,19 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                     100 * (convergenceList[0] - convergenceMetric) / convergenceMetric,
                 )
 
+        # Remove in DM-49083
+        if self.config.doScaleZeroPoint:
+            calibration = self.scaleZeroPoint.getPhotoCalib()
+        else:
+            calibration = afwImage.PhotoCalib(1.0)
+
         dcrCoadds = self.fillCoadd(
             dcrModels,
             skyInfo,
             warpRefList,
             weightList,
             psfMatchedWarpRefList=psfMatchedWarpRefList,
-            calibration=self.scaleZeroPoint.getPhotoCalib(),
+            calibration=calibration,
             coaddInputs=templateCoadd.getInfo().getCoaddInputs(),
             mask=baseMask,
             variance=baseVariance,
@@ -1185,7 +1191,11 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             maskedImage.mask = dcrModels.mask
             maskedImage.variance = dcrModels.variance
             coaddExposure.setMaskedImage(maskedImage[skyInfo.bbox])
-            coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
+            # Remove in DM-49083
+            if self.config.doScaleZeroPoint:
+                coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
+            else:
+                coaddExposure.setPhotoCalib(afwImage.PhotoCalib(1.0))
             if mask is not None:
                 coaddExposure.setMask(mask)
             if variance is not None:
@@ -1370,7 +1380,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             visit = warpExpRef.dataId["visit"]
             if altMaskSpans is not None:
                 self.applyAltMaskPlanes(exposure.mask, altMaskSpans)
-            imageScaler.scaleMaskedImage(exposure.maskedImage)
+            # Remove in DM-49083
+            if imageScaler is not None:
+                imageScaler.scaleMaskedImage(exposure.maskedImage)
             # Note that the variance plane here is used to store weights, not
             # the actual variance
             exposure.variance.array[:, :] = 0.0

@@ -195,9 +195,21 @@ class AssembleCoaddConfig(
         "StatisticsControl.setCalcErrorFromInputVariance()",
         default=True,
     )
+    doScaleZeroPoint = pexConfig.Field(
+        dtype=bool,
+        doc="Scale the photometric zero point of the coadd temp exposures "
+        "such that the magnitude zero point results in a flux in nJy.",
+        default=False,
+        deprecated="Now that visits are scaled to nJy it is no longer necessary or "
+        "recommended to scale the zero point, so this will be removed "
+        "after v29.",
+    )
     scaleZeroPoint = pexConfig.ConfigurableField(
         target=ScaleZeroPointTask,
         doc="Task to adjust the photometric zero point of the coadd temp " "exposures",
+        deprecated="Now that visits are scaled to nJy it is no longer necessary or "
+        "recommended to scale the zero point, so this will be removed "
+        "after v29.",
     )
     doInterp = pexConfig.Field(
         doc="Interpolate over NaN pixels? Also extrapolate, if necessary, but " "the results are ugly.",
@@ -335,7 +347,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
     - `~lsst.pipe.tasks.ScaleZeroPointTask`
     - create and use an ``imageScaler`` object to scale the photometric
-      zeropoint for each Warp
+      zeropoint for each Warp (deprecated and will be removed in DM-49083).
     - `~lsst.pipe.tasks.InterpImageTask`
     - interpolate across bad pixels (NaN) in the final coadd
 
@@ -379,7 +391,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         super().__init__(**kwargs)
         self.makeSubtask("interpImage")
-        self.makeSubtask("scaleZeroPoint")
+        if self.config.doScaleZeroPoint:
+            # Remove completely in DM-49083
+            self.makeSubtask("scaleZeroPoint")
 
         if self.config.doMaskBrightObjects:
             mask = afwImage.Mask()
@@ -543,6 +557,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 `list` of weightings.
             ``imageScalerList``
                 `list` of image scalers.
+                Deprecated and will be removed in DM-49083.
         """
         statsCtrl = afwMath.StatisticsControl()
         statsCtrl.setNumSigmaClip(self.config.sigmaClip)
@@ -555,6 +570,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         # warp.
         warpRefList = []
         weightList = []
+        # Remove in DM-49083
         imageScalerList = []
         outputPsfMatchedWarpRefList = []
 
@@ -576,15 +592,22 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             if numpy.isnan(warp.image.array).all():
                 continue
             maskedImage = warp.getMaskedImage()
-            imageScaler = self.scaleZeroPoint.computeImageScaler(
-                exposure=warp,
-                dataRef=warpRef,  # FIXME
-            )
-            try:
-                imageScaler.scaleMaskedImage(maskedImage)
-            except Exception as e:
-                self.log.warning("Scaling failed for %s (skipping it): %s", warpRef.dataId, e)
-                continue
+
+            # Allow users to scale the zero point for backward
+            # compatibility. Remove imageScalarList in DM-49083.
+            if self.config.doScaleZeroPoint:
+                imageScaler = self.scaleZeroPoint.computeImageScaler(
+                    exposure=warp,
+                    dataRef=warpRef,  # FIXME
+                )
+                try:
+                    imageScaler.scaleMaskedImage(maskedImage)
+                except Exception as e:
+                    self.log.warning("Scaling failed for %s (skipping it): %s", warpRef.dataId, e)
+                    continue
+                imageScalerList.append(imageScaler)
+            else:
+                imageScalerList.append(None)
             statObj = afwMath.makeStatistics(
                 maskedImage.getVariance(), maskedImage.getMask(), afwMath.MEANCLIP, statsCtrl
             )
@@ -600,7 +623,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
             warpRefList.append(warpRef)
             weightList.append(weight)
-            imageScalerList.append(imageScaler)
 
             dataId = warpRef.dataId
             psfMatchedWarpRef = psfMatchedWarpRefDict.get(dataId, None)
@@ -678,7 +700,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             List of dataset handles (data references) to Warps
             (previously called CoaddTempExps).
         imageScalerList : `list`
-            List of image scalers.
+            List of image scalers. Deprecated and will be removed after v19
+            in DM-49083.
         weightList : `list`
             List of weights.
         psfMatchedWarpRefList : `list`, optional
@@ -709,6 +732,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 (`~lsst.daf.butler.DeferredDatasetHandle`) (unmodified).
             ``imageScalerList``
                 Input list of image scalers (`list`) (unmodified).
+                Deprecated and will be removed after v19 in DM-49083.
             ``weightList``
                 Input list of weights (`list`) (unmodified).
 
@@ -728,7 +752,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             altMaskList = [None] * len(warpRefList)
 
         coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
-        coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
+        # Deprecated, remove in DM-49083.
+        if self.config.doScaleZeroPoint:
+            coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
+        else:
+            coaddExposure.setPhotoCalib(afwImage.PhotoCalib(1.0))
         coaddExposure.getInfo().setCoaddInputs(self.inputRecorder.makeCoaddInputs())
         self.assembleMetadata(coaddExposure, warpRefList, weightList, psfMatchedWarpRefList)
         coaddMaskedImage = coaddExposure.getMaskedImage()
@@ -778,6 +806,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 except Exception as e:
                     self.log.exception("Cannot compute coadd %s: %s", subBBox, e)
                     raise
+
+        # Calibrate the exposure to nJy
+        # No need to check after DM-49083.
+        if not self.config.doScaleZeroPoint:
+            coaddExposure.metadata["BUNIT"] = "nJy"
 
         # If inputMap is requested, we must finalize the map after the
         # accumulation.
@@ -912,6 +945,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             List of dataset handles (data references) to warp.
         imageScalerList : `list`
             List of image scalers.
+            Deprecated and will be removed after v29 in DM-49083.
         weightList : `list`
             List of weights.
         altMaskList : `list`
@@ -942,7 +976,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             mask = maskedImage.getMask()
             if altMask is not None:
                 self.applyAltMaskPlanes(mask, altMask)
-            imageScaler.scaleMaskedImage(maskedImage)
+            # Remove in DM-49083
+            if imageScaler is not None:
+                imageScaler.scaleMaskedImage(maskedImage)
 
             # Add 1 for each pixel which is not excluded by the exclude mask.
             # In legacyCoadd, pixels may also be excluded by
@@ -986,6 +1022,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             List of dataset handles (data references) to warp.
         imageScalerList : `list`
             List of image scalers.
+            Deprecated and will be removed after v29 in DM-49083.
         weightList : `list`
             List of weights.
         altMaskList : `list`
@@ -1025,7 +1062,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             mask = maskedImage.getMask()
             if altMask is not None:
                 self.applyAltMaskPlanes(mask, altMask)
-            imageScaler.scaleMaskedImage(maskedImage)
+            # Remove in DM-49083.
+            if imageScaler is not None:
+                imageScaler.scaleMaskedImage(maskedImage)
             if self.config.removeMaskPlanes:
                 removeMaskPlanes(maskedImage.mask, self.config.removeMaskPlanes, logger=self.log)
 
@@ -1669,6 +1708,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             supplementaryData.warpRefList = reorderAndPadList(
                 supplementaryData.warpRefList, psfMatchedDataIds, dataIds
             )
+            # Remove in DM-49083
             supplementaryData.imageScalerList = reorderAndPadList(
                 supplementaryData.imageScalerList, psfMatchedDataIds, dataIds
             )
@@ -1950,6 +1990,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             Dataset handle for the warp.
         imageScaler : `lsst.pipe.tasks.scaleZeroPoint.ImageScaler`
             An image scaler object.
+            Deprecated and will be removed after v29 in DM-49083.
         templateCoadd : `lsst.afw.image.Exposure`
             Exposure to be substracted from the scaled warp.
 
@@ -1964,8 +2005,10 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             return None
 
         warp = warpRef.get(parameters={"bbox": templateCoadd.getBBox()})
-        # direct image scaler OK for PSF-matched Warp
-        imageScaler.scaleMaskedImage(warp.getMaskedImage())
+        # direct image scaler OK for PSF-matched Warp.
+        # Remove in DM-49083.
+        if imageScaler is not None:
+            imageScaler.scaleMaskedImage(warp.getMaskedImage())
         mi = warp.getMaskedImage()
         if self.config.doScaleWarpVariance:
             try:
