@@ -27,16 +27,23 @@ from typing import TYPE_CHECKING, Iterable
 
 import numpy as np
 
-from lsst.afw.image import ExposureF, Mask
+from lsst.afw.image import ExposureF, Image, Mask
 from lsst.afw.math import BackgroundList, Warper
 from lsst.coadd.utils import copyGoodPixels
 from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
 from lsst.geom import Box2D
-from lsst.meas.algorithms import CoaddPsf, CoaddPsfConfig
+from lsst.meas.algorithms import CoaddPsf, CoaddPsfConfig, backgroundFlatContext
 from lsst.meas.algorithms.cloughTocher2DInterpolator import CloughTocher2DInterpolateTask
 from lsst.meas.base import DetectorVisitIdGeneratorConfig
 from lsst.pex.config import ConfigField, ConfigurableField, Field, RangeField
-from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
+from lsst.pipe.base import (
+    InMemoryDatasetHandle,
+    NoWorkFound,
+    PipelineTask,
+    PipelineTaskConfig,
+    PipelineTaskConnections,
+    Struct,
+)
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
 from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderTask
@@ -46,7 +53,6 @@ from lsst.skymap import BaseSkyMap
 if TYPE_CHECKING:
     from lsst.afw.image import MaskedImage
     from lsst.afw.table import ExposureCatalog
-    from lsst.pipe.base import InMemoryDatasetHandle
 
 
 __all__ = (
@@ -73,6 +79,9 @@ class WarpDetectorInputs:
     background_apply: BackgroundList | None = None
     """Background model to apply to (i.e. subtract from) the image."""
 
+    background_ratio_or_handle: Image | DeferredDatasetHandle | InMemoryDatasetHandle | None = None
+    """Ratio of background-flattened image to photometric-flattened image."""
+
     @property
     def exposure(self) -> ExposureF:
         """Get the exposure object, loading it if necessary."""
@@ -80,6 +89,14 @@ class WarpDetectorInputs:
             self.exposure_or_handle = self.exposure_or_handle.get()
 
         return self.exposure_or_handle
+
+    @property
+    def background_to_photometric_ratio(self) -> Image:
+        """Get the background_to_photometric object, loading if necessary."""
+        if isinstance(self.background_ratio_or_handle, (DeferredDatasetHandle, InMemoryDatasetHandle)):
+            self.background_ratio_or_handle = self.background_ratio_or_handle.get()
+
+        return self.background_ratio_or_handle
 
     def apply_background(self) -> None:
         """Apply (subtract) the `background_apply` to the exposure in-place.
@@ -93,8 +110,12 @@ class WarpDetectorInputs:
             raise RuntimeError("No background to apply")
 
         if self.background_apply:
-            # Subtract only if `background_apply` is not a trivial background.
-            self.exposure.maskedImage -= self.background_apply.getImage()
+            with backgroundFlatContext(
+                self.exposure.maskedImage,
+                self.background_to_photometric_ratio is not None,
+                backgroundToPhotometricRatio=self.background_to_photometric_ratio,
+            ):
+                self.exposure.maskedImage -= self.background_apply.getImage()
 
     def revert_background(self) -> None:
         """Revert (add) the `background_revert` from the exposure in-place.
@@ -108,8 +129,13 @@ class WarpDetectorInputs:
             raise RuntimeError("No background to revert")
 
         if self.background_revert:
-            # Add only if `background_revert` is not a trivial background.
-            self.exposure.maskedImage += self.background_revert.getImage()
+            with backgroundFlatContext(
+                self.exposure.maskedImage,
+                self.background_to_photometric_ratio is not None,
+                backgroundToPhotometricRatio=self.background_to_photometric_ratio,
+            ):
+                # Add only if `background_revert` is not a trivial background.
+                self.exposure.maskedImage += self.background_revert.getImage()
 
 
 class MakeDirectWarpConnections(
@@ -131,7 +157,7 @@ class MakeDirectWarpConnections(
     )
     background_revert_list = Input(
         doc="Background to be reverted (i.e., added back to the calexp). "
-        "This connection is used only if doRevertOldBackground=False.",
+        "This connection is used only if doRevertOldBackground=True.",
         name="calexpBackground",
         storageClass="Background",
         dimensions=("instrument", "visit", "detector"),
@@ -144,6 +170,16 @@ class MakeDirectWarpConnections(
         storageClass="Background",
         dimensions=("instrument", "visit", "detector"),
         multiple=True,
+    )
+    background_to_photometric_ratio_list = Input(
+        doc="Ratio of a background-flattened image to a photometric-flattened image. "
+        "This is used only if doRevertOldBackground=True or doApplyNewBackground=True "
+        "and doApplyFlatBackgroundRatio=True.",
+        name="background_to_photometric_ratio",
+        storageClass="Image",
+        dimensions=("instrument", "visit", "detector"),
+        multiple=True,
+        deferLoad=True,
     )
     visit_summary = Input(
         doc="Input visit-summary catalog with updated calibration objects.",
@@ -180,6 +216,8 @@ class MakeDirectWarpConnections(
             del self.background_revert_list
         if not config.doApplyNewBackground:
             del self.background_apply_list
+        if not config.doApplyFlatBackgroundRatio:
+            del self.background_to_photometric_ratio_list
 
         if not config.doWarpMaskedFraction:
             del self.masked_fraction_warp
@@ -244,6 +282,11 @@ class MakeDirectWarpConfig(
     )
     doApplyNewBackground = Field[bool](
         doc="Apply the new backgrounds from the `background_apply_list` " "connection?",
+        default=False,
+    )
+    doApplyFlatBackgroundRatio = Field[bool](
+        doc="Apply flat background ratio prior to background adjustments? Should be True "
+        "if processing was done with an illumination correction.",
         default=False,
     )
     useVisitSummaryPsf = Field[bool](
@@ -377,6 +420,8 @@ class MakeDirectWarpTask(PipelineTask):
             inputs[ref.dataId["detector"]].background_revert = butlerQC.get(ref)
         for ref in getattr(inputRefs, "background_apply_list", []):
             inputs[ref.dataId["detector"]].background_apply = butlerQC.get(ref)
+        for ref in getattr(inputRefs, "background_to_photometric_ratio_list", []):
+            inputs[ref.dataId["detector"]].background_to_photometric_ratio = butlerQC.get(ref)
 
         visit_summary = butlerQC.get(inputRefs.visit_summary)
         sky_map = butlerQC.get(inputRefs.sky_map)
@@ -457,7 +502,6 @@ class MakeDirectWarpTask(PipelineTask):
             A Struct object containing the warped exposure, noise exposure(s),
             and masked fraction image.
         """
-
         if self.config.doSelectPreWarp:
             inputs = self._preselect_inputs(inputs, sky_info, visit_summary=visit_summary)
             if not inputs:
