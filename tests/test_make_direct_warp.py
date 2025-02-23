@@ -44,6 +44,8 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
     def setUp(self):
         np.random.seed(12345)
 
+        rng = np.random.Generator(np.random.MT19937(12345))
+
         self.config = MakeDirectWarpConfig()
         self.config.useVisitSummaryPsf = False
         self.config.doSelectPreWarp = False
@@ -65,8 +67,8 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         self.externalSkyWcs = lsst.afw.geom.makeSkyWcs(crpix, crval, externalCdMatrix)
 
         self.exposure = lsst.afw.image.ExposureF(100, 150)
-        self.exposure.maskedImage.image.array = np.random.random((150, 100)).astype(np.float32) * 1000
-        self.exposure.maskedImage.variance.array = np.random.random((150, 100)).astype(np.float32)
+        self.exposure.maskedImage.image.array = rng.random((150, 100)).astype(np.float32) * 1000
+        self.exposure.maskedImage.variance.array = rng.random((150, 100)).astype(np.float32)
         # mask at least one pixel
         self.exposure.maskedImage.mask[5, 5] = 3
         # set the PhotoCalib and Wcs objects of this exposure.
