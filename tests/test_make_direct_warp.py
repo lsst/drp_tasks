@@ -79,6 +79,9 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         cls.exposure.setPsf(GaussianPsf(5, 5, 2.5))
         cls.exposure.setFilter(lsst.afw.image.FilterLabel(physical="fakeFilter", band="fake"))
 
+        cls.backgroundToPhotometricRatio = lsst.afw.image.ImageF(100, 150)
+        cls.backgroundToPhotometricRatio.array[:, :] = 1.1
+
         cls.visit = 100
         cls.detector = 5
         detectorName = f"detector {cls.detector}"
@@ -326,6 +329,55 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         makeWarp = MakeDirectWarpTask(config=config)
         makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
 
+    def test_flat_background_ratio(self):
+        """Test that using the flat background ratio works."""
+        backgroundList = self.make_backgroundList()
+
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
+        warp_detector_inputs_basic = {
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
+            )
+        }
+
+        makeWarpBasic = MakeDirectWarpTask(config=config)
+        resultBasic = makeWarpBasic.run(
+            warp_detector_inputs_basic,
+            sky_info=copy.deepcopy(self.skyInfo),
+            visit_summary=None,
+        )
+
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        backgroundRatioDataRef = InMemoryDatasetHandle(
+            self.backgroundToPhotometricRatio.clone(),
+            dataId=self.dataId,
+        )
+
+        warp_detector_inputs = {
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
+                background_apply=backgroundList,
+                background_revert=backgroundList,
+                background_ratio_or_handle=backgroundRatioDataRef,
+            )
+        }
+
+        config.numberOfNoiseRealizations = 1
+        config.doApplyNewBackground = True
+        config.doRevertOldBackground = True
+        config.doApplyFlatBackgroundRatio = True
+
+        makeWarp = MakeDirectWarpTask(config=config)
+        result = makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
+
+        finite = np.isfinite(result.warp.image.array)
+        delta = result.warp.image.array[finite] - resultBasic.warp.image.array[finite]
+        self.assertFloatsAlmostEqual(np.median(delta), 0.0, atol=1e-6)
+
     def test_background_errors(self):
         """Test that MakeDirectWarpTask raises errors when backgrounds are not
         set correctly.
@@ -464,6 +516,9 @@ class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
         """This test is not applicable when there are no good pixels."""
 
     def test_long_data_ids(self):
+        """This test is not applicable when there are no good pixels."""
+
+    def test_flat_background_ratio(self):
         """This test is not applicable when there are no good pixels."""
 
 
