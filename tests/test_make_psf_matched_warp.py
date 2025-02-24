@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import copy
 import unittest
 
 import numpy as np
@@ -31,6 +32,7 @@ import lsst.afw.image
 import lsst.utils.tests
 from lsst.drp.tasks.make_direct_warp import MakeDirectWarpTask, WarpDetectorInputs
 from lsst.drp.tasks.make_psf_matched_warp import MakePsfMatchedWarpTask
+from lsst.pipe.base import InMemoryDatasetHandle
 
 
 class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
@@ -40,12 +42,12 @@ class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
         This constructs a direct_warp using `MakeDirectWarpTask` and then
         runs `MakePsfMatchedWarpTask` on it.
         """
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        makeWarpConfig = copy.copy(self.config)
 
-        makeWarp = MakeDirectWarpTask(config=self.config)
+        makeWarp = MakeDirectWarpTask(config=makeWarpConfig)
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef, data_id=self.dataRef.dataId
-            )
+            dataRef.dataId.detector.id: WarpDetectorInputs(exposure_or_handle=dataRef, data_id=dataRef.dataId)
         }
         result = makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
