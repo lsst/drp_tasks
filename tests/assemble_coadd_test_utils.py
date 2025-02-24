@@ -414,6 +414,8 @@ class MockCoaddTestData:
 
         exposure = self.makeCoaddTempExp(model, visitInfo, expId)
         matchedExposure = self.makeCoaddTempExp(modelPsfMatched, visitInfo, expId)
+        exposure.metadata["BUNIT"] = "nJy"
+        matchedExposure.metadata["BUNIT"] = "nJy"
         return exposure, matchedExposure
 
     @staticmethod
