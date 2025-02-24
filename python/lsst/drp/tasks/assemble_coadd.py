@@ -564,7 +564,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         # compute warpRefList: a list of warpRef that actually exist
         # and weightList: a list of the weight of the associated coadd warp
         # and imageScalerList: a list of scale factors for the associated coadd
-        # warp.
+        # warp. (deprecated and will be removed in DM-49083)
         warpRefList = []
         weightList = []
         # Remove in DM-49083

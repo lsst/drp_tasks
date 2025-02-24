@@ -1197,6 +1197,10 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
             else:
                 coaddExposure.setPhotoCalib(afwImage.PhotoCalib(1.0))
+                # Set the exposure units to nJy
+                # No need to check after DM-49083.
+                if not self.config.doScaleZeroPoint:
+                    coaddExposure.metadata["BUNIT"] = "nJy"
             if mask is not None:
                 coaddExposure.setMask(mask)
             if variance is not None:
