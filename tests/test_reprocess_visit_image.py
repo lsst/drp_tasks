@@ -80,7 +80,12 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
         self.sky_center = lsst.geom.SpherePoint(245.0, -45.0, lsst.geom.degrees)
         self.photo_calib = 12.3
         dataset = lsst.meas.base.tests.TestDataset(
-            bbox, crval=self.sky_center, calibration=self.photo_calib, detector=detector
+            bbox,
+            crval=self.sky_center,
+            calibration=self.photo_calib,
+            detector=detector,
+            # Force a large visitId, to test DM-49138.
+            visitId=2**33,
         )
         # sqrt of area of a normalized 2d gaussian
         psf_scale = np.sqrt(4 * np.pi * (dataset.psfShape.getDeterminantRadius()) ** 2)
@@ -168,7 +173,7 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
         # Make a realistic id generator so that output catalog ids are useful.
         # NOTE: The id generator is used to seed the noise replacer during
         # measurement, so changes to values here can have subtle effects on
-        # the centroids and fluxes mesaured on the image, which might cause
+        # the centroids and fluxes measured on the image, which might cause
         # tests to fail.
         data_id = lsst.daf.butler.DataCoordinate.standardize(
             instrument="I",
@@ -177,7 +182,9 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
             universe=lsst.daf.butler.DimensionUniverse(),
         )
         self.config.id_generator.packer.name = "observation"
-        self.config.id_generator.packer["observation"].n_observations = 10000
+        # Without the LSSTCam-specific visitId handler, we have to use a large
+        # n_observation to fit visitId=2^33.
+        self.config.id_generator.packer["observation"].n_observations = 2**35
         self.config.id_generator.packer["observation"].n_detectors = 99
         self.config.id_generator.n_releases = 8
         self.config.id_generator.release_id = 2
@@ -218,6 +225,10 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
             self.assertAlmostEqual(
                 record["base_PsfFlux_flux"] / record["base_PsfFlux_instFlux"], record["base_LocalPhotoCalib"]
             )
+
+        # Prior to DM-49138, LSSTCam-style >32-bit visitIds were silently
+        # down-cast to `0`.
+        self.assertTrue((result.sources["visit"] == 2**33).all())
 
 
 class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
