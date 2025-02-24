@@ -261,7 +261,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
 
         schema.addField(
             "visit",
-            type="I",
+            type="L",
             doc="Visit this source appeared on.",
         )
         schema.addField(
