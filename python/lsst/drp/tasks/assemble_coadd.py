@@ -333,9 +333,8 @@ class AssembleCoaddConfig(
 class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     """Assemble a coadded image from a set of warps.
 
-    Each Warp that goes into a coadd will typically have an independent
-    photometric zero-point. Therefore, we must scale each Warp to set it to
-    a common photometric zeropoint. WarpType may be one of 'direct' or
+    Each Warp that goes into a coadd will have its flux calibrated to
+    nJy. WarpType may be one of 'direct' or
     'psfMatched', and the boolean configs `config.makeDirect` and
     `config.makePsfMatched` set which of the warp types will be coadded.
     The coadd is computed as a mean with optional outlier rejection.
@@ -532,11 +531,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
     def prepareInputs(self, refList, coadd_bbox, psfMatchedWarpRefList=None):
         """Prepare the input warps for coaddition by measuring the weight for
-        each warp and the scaling for the photometric zero point.
+        each warp.
 
-        Each Warp has its own photometric zeropoint and background variance.
-        Before coadding these Warps together, compute a scale factor to
-        normalize the photometric zeropoint and compute the weight for each
+        Before coadding these Warps together compute the weight for each
         Warp.
 
         Parameters
@@ -608,6 +605,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 imageScalerList.append(imageScaler)
             else:
                 imageScalerList.append(None)
+                if "BUNIT" not in warp.metadata:
+                    raise ValueError(f"Warp {warpRef.dataId} has no BUNIT metadata")
+                if warp.metadata["BUNIT"] != "nJy":
+                    raise ValueError(
+                        f"Warp {warpRef.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
+                    )
             statObj = afwMath.makeStatistics(
                 maskedImage.getVariance(), maskedImage.getMask(), afwMath.MEANCLIP, statsCtrl
             )
@@ -700,7 +703,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             List of dataset handles (data references) to Warps
             (previously called CoaddTempExps).
         imageScalerList : `list`
-            List of image scalers. Deprecated and will be removed after v19
+            List of image scalers. Deprecated and will be removed after v29
             in DM-49083.
         weightList : `list`
             List of weights.
@@ -732,7 +735,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 (`~lsst.daf.butler.DeferredDatasetHandle`) (unmodified).
             ``imageScalerList``
                 Input list of image scalers (`list`) (unmodified).
-                Deprecated and will be removed after v19 in DM-49083.
+                Deprecated and will be removed after v29 in DM-49083.
             ``weightList``
                 Input list of weights (`list`) (unmodified).
 
@@ -752,7 +755,7 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             altMaskList = [None] * len(warpRefList)
 
         coaddExposure = afwImage.ExposureF(skyInfo.bbox, skyInfo.wcs)
-        # Deprecated, remove in DM-49083.
+        # Deprecated, keep only the `else` branch in DM-49083.
         if self.config.doScaleZeroPoint:
             coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
         else:
@@ -806,11 +809,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 except Exception as e:
                     self.log.exception("Cannot compute coadd %s: %s", subBBox, e)
                     raise
-
-        # Calibrate the exposure to nJy
-        # No need to check after DM-49083.
-        if not self.config.doScaleZeroPoint:
-            coaddExposure.metadata["BUNIT"] = "nJy"
 
         # If inputMap is requested, we must finalize the map after the
         # accumulation.
@@ -877,6 +875,11 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddInputs = coaddExposure.getInfo().getCoaddInputs()
         coaddInputs.ccds.reserve(numCcds)
         coaddInputs.visits.reserve(len(warpList))
+
+        # Set the exposure units to nJy
+        # No need to check after DM-49083.
+        if not self.config.doScaleZeroPoint:
+            coaddExposure.metadata["BUNIT"] = "nJy"
 
         # psfMatchedWarpRefList should be empty except in CompareWarpCoadd.
         if self._doUsePsfMatchedPolygons:
@@ -1776,6 +1779,7 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
             List of dataset handles (data references) to warps.
         imageScalerList : `list`
             List of image scalers.
+            Deprecated and will be removed after v29.
 
         Returns
         -------

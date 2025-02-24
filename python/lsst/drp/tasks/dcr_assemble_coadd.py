@@ -544,6 +544,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The data references to the input warped exposures.
         imageScalerList : `list` [`lsst.pipe.task.ImageScaler`]
             The image scalars correct for the zero point of the exposures.
+            Deprecated and will be removed after v29 in DM-49083.
         weightList : `list` [`float`]
             The weight to give each input exposure in the coadd.
         psfMatchedWarpRefList : `list` \
@@ -1361,6 +1362,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The data references to the input warped exposures.
         imageScalerList : `list` of `lsst.pipe.task.ImageScaler`
             The image scalars correct for the zero point of the exposures.
+            Deprecated and will be removed after v29 in DM-49083.
         spanSetMaskList : `list` of `dict` containing spanSet lists, or `None`
             Each element is dict with keys = mask plane name to add the spans
             to.
