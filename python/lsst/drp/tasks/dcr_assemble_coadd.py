@@ -1153,6 +1153,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                 coaddExposure.getInfo().setCoaddInputs(coaddInputs)
             # Set the metadata for the coadd, including PSF and aperture
             # corrections.
+            self._doUsePsfMatchedPolygons = False
             self.assembleMetadata(
                 coaddExposure,
                 warpRefList,
