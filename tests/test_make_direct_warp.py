@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import copy
 import unittest
 import warnings
 from typing import Self, Type
@@ -41,58 +42,63 @@ from lsst.pipe.tasks.makeWarp import MakeWarpTask
 
 
 class MakeWarpTestCase(lsst.utils.tests.TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
         np.random.seed(12345)
 
-        self.config = MakeDirectWarpConfig()
-        self.config.useVisitSummaryPsf = False
-        self.config.doSelectPreWarp = False
-        self.config.doWarpMaskedFraction = True
-        self.config.numberOfNoiseRealizations = 1
+        rng = np.random.Generator(np.random.MT19937(12345))
+
+        cls.config = MakeDirectWarpConfig()
+        cls.config.useVisitSummaryPsf = False
+        cls.config.doSelectPreWarp = False
+        cls.config.doWarpMaskedFraction = True
+        cls.config.numberOfNoiseRealizations = 1
 
         meanCalibration = 1e-4
         calibrationErr = 1e-5
-        self.exposurePhotoCalib = lsst.afw.image.PhotoCalib(meanCalibration, calibrationErr)
+        cls.exposurePhotoCalib = lsst.afw.image.PhotoCalib(meanCalibration, calibrationErr)
         # An external photoCalib calibration to return
-        self.externalPhotoCalib = lsst.afw.image.PhotoCalib(1e-6, 1e-8)
+        cls.externalPhotoCalib = lsst.afw.image.PhotoCalib(1e-6, 1e-8)
 
         crpix = lsst.geom.Point2D(0, 0)
         crval = lsst.geom.SpherePoint(0, 45, lsst.geom.degrees)
         cdMatrix = lsst.afw.geom.makeCdMatrix(scale=1.0 * lsst.geom.arcseconds)
-        self.skyWcs = lsst.afw.geom.makeSkyWcs(crpix, crval, cdMatrix)
+        cls.skyWcs = lsst.afw.geom.makeSkyWcs(crpix, crval, cdMatrix)
         externalCdMatrix = lsst.afw.geom.makeCdMatrix(scale=0.9 * lsst.geom.arcseconds)
         # An external skyWcs to return
-        self.externalSkyWcs = lsst.afw.geom.makeSkyWcs(crpix, crval, externalCdMatrix)
+        cls.externalSkyWcs = lsst.afw.geom.makeSkyWcs(crpix, crval, externalCdMatrix)
 
-        self.exposure = lsst.afw.image.ExposureF(100, 150)
-        self.exposure.maskedImage.image.array = np.random.random((150, 100)).astype(np.float32) * 1000
-        self.exposure.maskedImage.variance.array = np.random.random((150, 100)).astype(np.float32)
+        cls.exposure = lsst.afw.image.ExposureF(100, 150)
+        cls.exposure.maskedImage.image.array = rng.random((150, 100)).astype(np.float32) * 1000
+        cls.exposure.maskedImage.variance.array = rng.random((150, 100)).astype(np.float32)
         # mask at least one pixel
-        self.exposure.maskedImage.mask[5, 5] = 3
+        cls.exposure.maskedImage.mask[5, 5] = 3
         # set the PhotoCalib and Wcs objects of this exposure.
-        self.exposure.setPhotoCalib(lsst.afw.image.PhotoCalib(meanCalibration, calibrationErr))
-        self.exposure.setWcs(self.skyWcs)
-        self.exposure.setPsf(GaussianPsf(5, 5, 2.5))
-        self.exposure.setFilter(lsst.afw.image.FilterLabel(physical="fakeFilter", band="fake"))
+        cls.exposure.setPhotoCalib(lsst.afw.image.PhotoCalib(meanCalibration, calibrationErr))
+        cls.exposure.setWcs(cls.skyWcs)
+        cls.exposure.setPsf(GaussianPsf(5, 5, 2.5))
+        cls.exposure.setFilter(lsst.afw.image.FilterLabel(physical="fakeFilter", band="fake"))
 
-        self.visit = 100
-        self.detector = 5
-        detectorName = f"detector {self.detector}"
-        detector = lsst.afw.cameraGeom.testUtils.DetectorWrapper(name=detectorName, id=self.detector).detector
-        self.exposure.setDetector(detector)
+        cls.backgroundToPhotometricRatio = lsst.afw.image.ImageF(100, 150)
+        cls.backgroundToPhotometricRatio.array[:, :] = 1.1
 
-        dataId_dict = {"detector_id": self.detector, "visit_id": 1248, "band": "i"}
-        dataId = self.generate_data_id(**dataId_dict)
-        self.dataRef = InMemoryDatasetHandle(self.exposure, dataId=dataId)
+        cls.visit = 100
+        cls.detector = 5
+        detectorName = f"detector {cls.detector}"
+        detector = lsst.afw.cameraGeom.testUtils.DetectorWrapper(name=detectorName, id=cls.detector).detector
+        cls.exposure.setDetector(detector)
+
+        dataId_dict = {"detector_id": cls.detector, "visit_id": 1248, "band": "i"}
+        cls.dataId = cls.generate_data_id(**dataId_dict)
         simpleMapConfig = skyMap.discreteSkyMap.DiscreteSkyMapConfig()
         simpleMapConfig.raList = [crval.getRa().asDegrees()]
         simpleMapConfig.decList = [crval.getDec().asDegrees()]
         simpleMapConfig.radiusList = [0.1]
 
-        self.simpleMap = skyMap.DiscreteSkyMap(simpleMapConfig)
-        self.tractId = 0
-        self.patchId = self.simpleMap[0].findPatch(crval).sequential_index
-        self.skyInfo = makeSkyInfo(self.simpleMap, self.tractId, self.patchId)
+        cls.simpleMap = skyMap.DiscreteSkyMap(simpleMapConfig)
+        cls.tractId = 0
+        cls.patchId = cls.simpleMap[0].findPatch(crval).sequential_index
+        cls.skyInfo = makeSkyInfo(cls.simpleMap, cls.tractId, cls.patchId)
 
     @classmethod
     def generate_data_id(
@@ -195,14 +201,17 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
 
     def test_makeWarp(self):
         """Test basic MakeDirectWarpTask."""
-        makeWarp = MakeDirectWarpTask(config=self.config)
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
+        makeWarp = MakeDirectWarpTask(config=config)
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef,
-                data_id=self.dataRef.dataId,
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
             )
         }
-        result = makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+        result = makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
 
         warp = result.warp
         mfrac = result.masked_fraction_warp
@@ -229,6 +238,9 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         """Test that the warp from MakeWarpTask and MakeDirectWarpTask agree
         when makePsfMatched is True in MakeWarpConfig.
         """
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
         dataIdList = [
             {
                 "visit": self.visit,
@@ -236,13 +248,13 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
             }
         ]
 
-        config = MakeWarpTask.ConfigClass()
-        config.makePsfMatched = True
-        config.makeDirect = True
+        makeWarpConfig = MakeWarpTask.ConfigClass()
+        makeWarpConfig.makePsfMatched = True
+        makeWarpConfig.makeDirect = True
         # TODO: Remove this entire test in DM-47916. We retain it for now.
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=DeprecationWarning)
-            makeWarp = MakeWarpTask(config=config)
+            makeWarp = MakeWarpTask(config=makeWarpConfig)
             result0 = makeWarp.run(
                 calExpList=[self.exposure],
                 ccdIdList=[self.detector],
@@ -253,18 +265,18 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         self.assertIsNotNone(result0.exposures["direct"])
         self.assertIsNotNone(result0.exposures["psfMatched"])
 
-        self.config.doPreWarpInterpolation = False
-        self.config.doSelectPreWarp = False
-        self.config.useVisitSummaryPsf = False
-        task = MakeDirectWarpTask(config=self.config)
+        config.doPreWarpInterpolation = False
+        config.doSelectPreWarp = False
+        config.useVisitSummaryPsf = False
+        task = MakeDirectWarpTask(config=config)
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef,
-                data_id=self.dataRef.dataId,
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
             )
         }
 
-        result1 = task.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+        result1 = task.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
         warp0 = result0.exposures["direct"]
         warp1 = result1.warp[warp0.getBBox()]
         self.assertMaskedImagesAlmostEqual(warp0.maskedImage, warp1.maskedImage, rtol=3e-7, atol=6e-6)
@@ -296,105 +308,174 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         """Test that applying and reverting backgrounds runs without errors,
         especially on noise images.
         """
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
         backgroundList = self.make_backgroundList()
 
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef,
-                data_id=self.dataRef.dataId,
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
                 background_apply=backgroundList if doApplyNewBackground else None,
                 background_revert=backgroundList if doRevertOldBackground else None,
             )
         }
 
-        self.config.numberOfNoiseRealizations = 1
-        self.config.doApplyNewBackground = doApplyNewBackground
-        self.config.doRevertOldBackground = doRevertOldBackground
+        config.numberOfNoiseRealizations = 1
+        config.doApplyNewBackground = doApplyNewBackground
+        config.doRevertOldBackground = doRevertOldBackground
 
-        makeWarp = MakeDirectWarpTask(config=self.config)
-        makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+        makeWarp = MakeDirectWarpTask(config=config)
+        makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
+
+    def test_flat_background_ratio(self):
+        """Test that using the flat background ratio works."""
+        backgroundList = self.make_backgroundList()
+
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
+        warp_detector_inputs_basic = {
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
+            )
+        }
+
+        makeWarpBasic = MakeDirectWarpTask(config=config)
+        resultBasic = makeWarpBasic.run(
+            warp_detector_inputs_basic,
+            sky_info=copy.deepcopy(self.skyInfo),
+            visit_summary=None,
+        )
+
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        backgroundRatioDataRef = InMemoryDatasetHandle(
+            self.backgroundToPhotometricRatio.clone(),
+            dataId=self.dataId,
+        )
+
+        warp_detector_inputs = {
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
+                background_apply=backgroundList,
+                background_revert=backgroundList,
+                background_ratio_or_handle=backgroundRatioDataRef,
+            )
+        }
+
+        config.numberOfNoiseRealizations = 1
+        config.doApplyNewBackground = True
+        config.doRevertOldBackground = True
+        config.doApplyFlatBackgroundRatio = True
+
+        makeWarp = MakeDirectWarpTask(config=config)
+        result = makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
+
+        finite = np.isfinite(result.warp.image.array)
+        delta = result.warp.image.array[finite] - resultBasic.warp.image.array[finite]
+        self.assertFloatsAlmostEqual(np.median(delta), 0.0, atol=1e-6)
 
     def test_background_errors(self):
         """Test that MakeDirectWarpTask raises errors when backgrounds are not
         set correctly.
         """
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
         backgroundList = self.make_backgroundList()
-        self.config.numberOfNoiseRealizations = 1
+        config.numberOfNoiseRealizations = 1
 
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef,
-                data_id=self.dataRef.dataId,
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
                 background_apply=backgroundList,
             )
         }
-        makeWarp = MakeDirectWarpTask(config=self.config)
+        makeWarp = MakeDirectWarpTask(config=config)
         with self.assertRaises(RuntimeError, msg="doApplyNewBackground is False, but"):
-            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+            makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
 
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef,
-                data_id=self.dataRef.dataId,
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
                 background_apply=None,
             )
         }
-        self.config.doApplyNewBackground = True
-        makeWarp = MakeDirectWarpTask(config=self.config)
+        config.doApplyNewBackground = True
+        makeWarp = MakeDirectWarpTask(config=config)
         with self.assertRaises(RuntimeError, msg="No background to apply"):
-            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+            makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
 
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef,
-                data_id=self.dataRef.dataId,
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
                 background_apply=backgroundList,
                 background_revert=backgroundList,
             )
         }
-        makeWarp = MakeDirectWarpTask(config=self.config)
+        makeWarp = MakeDirectWarpTask(config=config)
         with self.assertRaises(RuntimeError, msg="doRevertOldBackground is False, but"):
-            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+            makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
 
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef,
-                data_id=self.dataRef.dataId,
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
                 background_apply=backgroundList,
                 background_revert=None,
             )
         }
-        self.config.doRevertOldBackground = True
-        makeWarp = MakeDirectWarpTask(config=self.config)
+        config.doRevertOldBackground = True
+        makeWarp = MakeDirectWarpTask(config=config)
         with self.assertRaises(RuntimeError, msg="No background to revert"):
-            makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+            makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
 
     def test_long_data_ids(self):
         """Test MakeDirectWarpTask fails gracefully with no good pixels.
 
         It should return an empty exposure, with no PSF.
         """
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef, data_id=self.dataRef.dataId
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
             )
         }
 
-        self.config.border = 0  # Repeated calls will expand it otherwise.
-        makeWarp_original = MakeDirectWarpTask(config=self.config)
-        makeWarp_short = MakeDirectWarpTask(config=self.config)
+        config.border = 0  # Repeated calls will expand it otherwise.
+        makeWarp_original = MakeDirectWarpTask(config=config)
+        makeWarp_short = MakeDirectWarpTask(config=config)
         makeWarp_short.get_seed_from_data_id = (
             lambda data_id: 2**32 - 1 + makeWarp_original.get_seed_from_data_id(data_id)
         )
-        makeWarp_long = MakeDirectWarpTask(config=self.config)
+        makeWarp_long = MakeDirectWarpTask(config=config)
         makeWarp_long.get_seed_from_data_id = lambda data_id: 2**32 + makeWarp_original.get_seed_from_data_id(
             data_id
         )
 
-        result_long = makeWarp_long.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
-        result_short = makeWarp_short.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+        result_long = makeWarp_long.run(
+            warp_detector_inputs,
+            sky_info=copy.deepcopy(self.skyInfo),
+            visit_summary=None,
+        )
+        result_short = makeWarp_short.run(
+            warp_detector_inputs,
+            sky_info=copy.deepcopy(self.skyInfo),
+            visit_summary=None,
+        )
         result_original = makeWarp_original.run(
-            warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None
+            warp_detector_inputs,
+            sky_info=copy.deepcopy(self.skyInfo),
+            visit_summary=None,
         )
 
         self.assertMaskedImagesAlmostEqual(result_long.noise_warp0, result_original.noise_warp0, atol=6e-8)
@@ -403,23 +484,28 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
 
 
 class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
-    def setUp(self):
-        super().setUp()
-        self.exposure.mask.array |= self.exposure.mask.getPlaneBitMask("NO_DATA")
-        self.dataRef = InMemoryDatasetHandle(self.exposure, dataId=self.dataRef.dataId)
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.exposure.mask.array |= cls.exposure.mask.getPlaneBitMask("NO_DATA")
 
     def test_makeWarp(self):
         """Test MakeDirectWarpTask fails gracefully with no good pixels.
 
         It should return an empty exposure, with no PSF.
         """
-        makeWarp = MakeDirectWarpTask(config=self.config)
+        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
+        config = copy.copy(self.config)
+
+        makeWarp = MakeDirectWarpTask(config=config)
         warp_detector_inputs = {
-            self.dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=self.dataRef, data_id=self.dataRef.dataId
+            dataRef.dataId.detector.id: WarpDetectorInputs(
+                exposure_or_handle=dataRef,
+                data_id=dataRef.dataId,
             )
         }
-        result = makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
+        result = makeWarp.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
 
         # Ensure we got None
         self.assertIsNone(result.warp)
@@ -430,6 +516,9 @@ class MakeWarpNoGoodPixelsTestCase(MakeWarpTestCase):
         """This test is not applicable when there are no good pixels."""
 
     def test_long_data_ids(self):
+        """This test is not applicable when there are no good pixels."""
+
+    def test_flat_background_ratio(self):
         """This test is not applicable when there are no good pixels."""
 
 

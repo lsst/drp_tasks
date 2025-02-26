@@ -191,40 +191,72 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
         self.id_generator = self.config.id_generator.apply(data_id)
 
     def test_run(self):
-        task = ReprocessVisitImageTask(config=self.config)
-        result = task.run(
-            exposures=self.exposure,
-            initial_photo_calib=self.truth_exposure.photoCalib,
-            psf=self.truth_exposure.psf,
-            background=self.background,
-            ap_corr=lsst.afw.image.ApCorrMap(),
-            photo_calib=self.truth_exposure.photoCalib,
-            wcs=self.truth_exposure.wcs,
-            calib_sources=self.visit_catalog,
-            id_generator=self.id_generator,
+
+        background_to_photometric_ratio_value = 1.1
+
+        for do_apply_flat_background_ratio in [False, True]:
+            config = self.config
+            config.do_apply_flat_background_ratio = do_apply_flat_background_ratio
+
+            if do_apply_flat_background_ratio:
+                background_to_photometric_ratio = self.exposure.image.clone()
+                background_to_photometric_ratio.array[:, :] = background_to_photometric_ratio_value
+            else:
+                background_to_photometric_ratio = None
+
+            task = ReprocessVisitImageTask(config=config)
+            result = task.run(
+                exposures=self.exposure.clone(),
+                initial_photo_calib=self.truth_exposure.photoCalib,
+                psf=self.truth_exposure.psf,
+                background=self.background,
+                ap_corr=lsst.afw.image.ApCorrMap(),
+                photo_calib=self.truth_exposure.photoCalib,
+                wcs=self.truth_exposure.wcs,
+                calib_sources=self.visit_catalog,
+                id_generator=self.id_generator,
+                background_to_photometric_ratio=background_to_photometric_ratio,
+            )
+
+            calibrated = result.exposure.photoCalib.calibrateImage(result.exposure.maskedImage)
+            self.assertImagesAlmostEqual(result.exposure.image, calibrated.image)
+            self.assertImagesAlmostEqual(result.exposure.variance, calibrated.variance)
+            self.assertEqual(result.exposure.psf, self.truth_exposure.psf)
+            self.assertEqual(result.exposure.wcs, self.truth_exposure.wcs)
+            # A calibrated exposure has PhotoCalib==1.
+            self.assertNotEqual(result.exposure.photoCalib, self.truth_exposure.photoCalib)
+            self.assertFloatsAlmostEqual(result.exposure.photoCalib.getCalibrationMean(), 1)
+
+            # All sources (plus sky sources) should have been detected.
+            self.assertEqual(len(result.sources), len(self.truth_cat) + self.config.sky_sources.nSources)
+            # Faintest non-sky source should be marked as used.
+            flux_sorted = result.sources[result.sources.argsort("slot_CalibFlux_instFlux")]
+            self.assertTrue(flux_sorted[~flux_sorted["sky_source"]]["calib_psf_used"][0])
+            # Test that the schema init-output agrees with the catalog output.
+            self.assertEqual(task.sources_schema.schema, result.sources_footprints.schema)
+            # The flux/instFlux ratio should be the LocalPhotoCalib value.
+            for record in result.sources_footprints:
+                self.assertAlmostEqual(
+                    record["base_PsfFlux_flux"] / record["base_PsfFlux_instFlux"],
+                    record["base_LocalPhotoCalib"],
+                )
+
+            if not do_apply_flat_background_ratio:
+                result_false = result
+
+        self.assertFloatsAlmostEqual(
+            result_false.sources_footprints["base_PsfFlux_instFlux"]
+            / result.sources_footprints["base_PsfFlux_instFlux"],
+            background_to_photometric_ratio_value,
+            rtol=1e-6,
         )
 
-        calibrated = result.exposure.photoCalib.calibrateImage(result.exposure.maskedImage)
-        self.assertImagesAlmostEqual(result.exposure.image, calibrated.image)
-        self.assertImagesAlmostEqual(result.exposure.variance, calibrated.variance)
-        self.assertEqual(result.exposure.psf, self.truth_exposure.psf)
-        self.assertEqual(result.exposure.wcs, self.truth_exposure.wcs)
-        # A calibrated exposure has PhotoCalib==1.
-        self.assertNotEqual(result.exposure.photoCalib, self.truth_exposure.photoCalib)
-        self.assertFloatsAlmostEqual(result.exposure.photoCalib.getCalibrationMean(), 1)
-
-        # All sources (plus sky sources) should have been detected.
-        self.assertEqual(len(result.sources), len(self.truth_cat) + self.config.sky_sources.nSources)
-        # Faintest non-sky source should be marked as used.
-        flux_sorted = result.sources[result.sources.argsort("slot_CalibFlux_instFlux")]
-        self.assertTrue(flux_sorted[~flux_sorted["sky_source"]]["calib_psf_used"][0])
-        # Test that the schema init-output agrees with the catalog output.
-        self.assertEqual(task.sources_schema.schema, result.sources_footprints.schema)
-        # The flux/instFlux ratio should be the LocalPhotoCalib value.
-        for record in result.sources_footprints:
-            self.assertAlmostEqual(
-                record["base_PsfFlux_flux"] / record["base_PsfFlux_instFlux"], record["base_LocalPhotoCalib"]
-            )
+        self.assertFloatsAlmostEqual(
+            result_false.sources_footprints["base_PsfFlux_flux"]
+            / result.sources_footprints["base_PsfFlux_flux"],
+            background_to_photometric_ratio_value,
+            rtol=1e-6,
+        )
 
         # Prior to DM-49138, LSSTCam-style >32-bit visitIds were silently
         # down-cast to `0`.
@@ -278,6 +310,9 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         )
         butlerTests.addDatasetType(self.repo, "skyCorr", {"instrument", "visit", "detector"}, "Background")
         butlerTests.addDatasetType(self.repo, "finalized_src_table", {"instrument", "visit"}, "DataFrame")
+        butlerTests.addDatasetType(
+            self.repo, "background_to_photometric_ratio", {"instrument", "visit", "detector"}, "Image"
+        )
 
         # outputs
         butlerTests.addDatasetType(
@@ -331,6 +366,9 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         self.butler.put(lsst.afw.math.BackgroundList(background), "skyCorr", self.visit1_id)
         self.butler.put(lsst.afw.math.BackgroundList(background), "skyCorr", self.visit2_id)
         self.butler.put(lsst.afw.table.SourceCatalog().asAstropy(), "finalized_src_table", self.visit_only_id)
+        self.butler.put(lsst.afw.image.ImageF(), "background_to_photometric_ratio", self.visit_id)
+        self.butler.put(lsst.afw.image.ImageF(), "background_to_photometric_ratio", self.visit1_id)
+        self.butler.put(lsst.afw.image.ImageF(), "background_to_photometric_ratio", self.visit2_id)
         # Make a simple single gaussian psf so that psf is not None in
         # finalVisitSummary table which would result in
         # UpstreamFailureNoWorkFound being raised in ReprocessVisitImageTask,
@@ -367,6 +405,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "background_1": self.visit_id,
                 "background_2": self.visit_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit_id,
                 "sources": self.visit_id,
@@ -388,6 +427,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "wcs",
                 "calib_sources",
                 "id_generator",
+                "background_to_photometric_ratio",
                 "result",
             },
         )
@@ -410,6 +450,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "background_1": self.visit1_id,
                 "background_2": self.visit1_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit1_id,
                 "sources": self.visit1_id,
@@ -441,6 +482,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "background_1": self.visit2_id,
                 "background_2": self.visit2_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit2_id,
                 "sources": self.visit2_id,
@@ -477,6 +519,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "initial_photo_calib": self.visit_id,
                 "background_1": self.visit_id,
                 "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
                 # outputs
                 "exposure": self.visit_id,
                 "sources": self.visit_id,
@@ -498,6 +541,52 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
                 "wcs",
                 "calib_sources",
                 "id_generator",
+                "background_to_photometric_ratio",
+                "result",
+            },
+        )
+
+    def test_runQuantum_illumination_correction(self):
+        """Test the task with illumination correction enabled."""
+        config = ReprocessVisitImageTask.ConfigClass()
+        config.do_apply_flat_background_ratio = True
+        task = ReprocessVisitImageTask(config=config)
+        lsst.pipe.base.testUtils.assertValidInitOutput(task)
+
+        quantum = lsst.pipe.base.testUtils.makeQuantum(
+            task,
+            self.butler,
+            self.visit_id,
+            {
+                "exposures": [self.exposure0_id],
+                "visit_summary": self.visit_only_id,
+                "initial_photo_calib": self.visit_id,
+                "background_1": self.visit_id,
+                "background_2": self.visit_id,
+                "calib_sources": self.visit_only_id,
+                "background_to_photometric_ratio": self.visit_id,
+                # outputs
+                "exposure": self.visit_id,
+                "sources": self.visit_id,
+                "sources_footprints": self.visit_id,
+                "background": self.visit_id,
+            },
+        )
+        mock_run = lsst.pipe.base.testUtils.runTestQuantum(task, self.butler, quantum)
+        # Check that the proper kwargs are passed to run().
+        self.assertEqual(
+            mock_run.call_args.kwargs.keys(),
+            {
+                "exposures",
+                "initial_photo_calib",
+                "psf",
+                "background",
+                "ap_corr",
+                "photo_calib",
+                "wcs",
+                "calib_sources",
+                "id_generator",
+                "background_to_photometric_ratio",
                 "result",
             },
         )
