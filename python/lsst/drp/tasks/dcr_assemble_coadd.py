@@ -41,8 +41,8 @@ from lsst.pipe.tasks.measurePsf import MeasurePsfTask
 from lsst.utils.timer import timeMethod
 
 from .assemble_coadd import (
-    CompareWarpAssembleCoaddConnections,
     CompareWarpAssembleCoaddConfig,
+    CompareWarpAssembleCoaddConnections,
     CompareWarpAssembleCoaddTask,
 )
 
