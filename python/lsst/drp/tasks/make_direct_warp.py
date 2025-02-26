@@ -462,7 +462,11 @@ class MakeDirectWarpTask(PipelineTask):
         for detector_id, detector_inputs in inputs.items():
             row = visit_summary.find(detector_id)
             if row is None:
-                raise RuntimeError(f"Unexpectedly incomplete visit_summary: {detector_id=} is missing.")
+                self.log.warning(
+                    "Input calexp is not listed in visit_summary: %d; assuming bad.",
+                    detector_id,
+                )
+                continue
             data_id_list.append(detector_inputs.data_id)
             bbox_list.append(row.getBBox())
             wcs_list.append(row.getWcs())
