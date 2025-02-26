@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, Iterable
 import numpy as np
 
 from lsst.afw.image import ExposureF, Image, Mask, PhotoCalib
-
 from lsst.afw.math import BackgroundList, Warper
 from lsst.coadd.utils import copyGoodPixels
 from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
