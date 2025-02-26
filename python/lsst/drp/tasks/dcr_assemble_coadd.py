@@ -41,15 +41,14 @@ from lsst.pipe.tasks.measurePsf import MeasurePsfTask
 from lsst.utils.timer import timeMethod
 
 from .assemble_coadd import (
-    AssembleCoaddConnections,
-    AssembleCoaddTask,
+    CompareWarpAssembleCoaddConnections,
     CompareWarpAssembleCoaddConfig,
     CompareWarpAssembleCoaddTask,
 )
 
 
 class DcrAssembleCoaddConnections(
-    AssembleCoaddConnections,
+    CompareWarpAssembleCoaddConnections,
     dimensions=("tract", "patch", "band", "skymap"),
     defaultTemplates={
         "inputWarpName": "deep",
@@ -103,6 +102,7 @@ class DcrAssembleCoaddConnections(
         # not used.
         self.outputs.remove("coaddExposure")
         self.outputs.remove("nImage")
+        self.inputs.remove("psfMatchedWarps")
 
 
 class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections=DcrAssembleCoaddConnections):
@@ -237,7 +237,7 @@ class DcrAssembleCoaddConfig(CompareWarpAssembleCoaddConfig, pipelineConnections
 
     def setDefaults(self):
         CompareWarpAssembleCoaddConfig.setDefaults(self)
-        self.assembleStaticSkyModel.retarget(CompareWarpAssembleCoaddTask)
+        self.doWriteArtifactMasks = False
         self.doNImage = True
         self.assembleStaticSkyModel.warpType = self.warpType
         # The coadd and nImage files will be overwritten by this
@@ -378,7 +378,6 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             butlerQC.put(retStruct, outputRefs)
         return retStruct
 
-    @utils.inheritDoc(AssembleCoaddTask)
     def _makeSupplementaryData(self, butlerQC, inputRefs, outputRefs):
         """Load the previously-generated template coadd.
 

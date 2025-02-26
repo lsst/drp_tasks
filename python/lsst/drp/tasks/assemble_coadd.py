@@ -145,10 +145,7 @@ class AssembleCoaddConnections(
             self.outputs.remove("inputMap")
 
         if not self.config.doWriteArtifactMasks:
-            try:
-                self.outputs.remove("artifactMasks")
-            except KeyError:
-                pass
+            self.outputs.remove("artifactMasks")
 
 
 class AssembleCoaddConfig(
@@ -860,12 +857,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         coaddInputs.visits.reserve(len(warpList))
 
         # psfMatchedWarpRefList should be empty except in CompareWarpCoadd.
-        try:
-            if self._doUsePsfMatchedPolygons:
-                # Set validPolygons for warp before addVisitToCoadd
-                self._setValidPolygons(warpList, psfMatchedWarpRefList)
-        except TypeError:
-            pass
+        if self._doUsePsfMatchedPolygons:
+            # Set validPolygons for warp before addVisitToCoadd
+            self._setValidPolygons(warpList, psfMatchedWarpRefList)
 
         for warp, weight in zip(warpList, weightList):
             self.inputRecorder.addVisitToCoadd(coaddInputs, warp, weight)
