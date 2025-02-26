@@ -100,10 +100,16 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     do_scale_zero_point = Field[bool](
         doc="Scale warps to a common zero point? This is not needed if they have absolute flux calibration.",
         default=False,
+        deprecated="Now that visits are scaled to nJy it is no longer necessary or "
+        "recommended to scale the zero point, so this will be removed "
+        "after v29.",
     )
     scale_zero_point = ConfigurableField(
         target=ScaleZeroPointTask,
         doc="Task to scale warps to a common zero point",
+        deprecated="Now that visits are scaled to nJy it is no longer necessary or "
+        "recommended to scale the zero point, so this will be removed "
+        "after v29.",
     )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
