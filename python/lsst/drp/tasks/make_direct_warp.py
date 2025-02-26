@@ -421,7 +421,7 @@ class MakeDirectWarpTask(PipelineTask):
         for ref in getattr(inputRefs, "background_apply_list", []):
             inputs[ref.dataId["detector"]].background_apply = butlerQC.get(ref)
         for ref in getattr(inputRefs, "background_to_photometric_ratio_list", []):
-            inputs[ref.dataId["detector"]].background_to_photometric_ratio = butlerQC.get(ref)
+            inputs[ref.dataId["detector"]].background_ratio_or_handle = butlerQC.get(ref)
 
         visit_summary = butlerQC.get(inputRefs.visit_summary)
         sky_map = butlerQC.get(inputRefs.sky_map)
