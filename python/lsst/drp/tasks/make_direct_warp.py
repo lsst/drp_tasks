@@ -421,7 +421,7 @@ class MakeDirectWarpTask(PipelineTask):
         for ref in getattr(inputRefs, "background_apply_list", []):
             inputs[ref.dataId["detector"]].background_apply = butlerQC.get(ref)
         for ref in getattr(inputRefs, "background_to_photometric_ratio_list", []):
-            inputs[ref.dataId["detector"]].background_to_photometric_ratio = butlerQC.get(ref)
+            inputs[ref.dataId["detector"]].background_ratio_or_handle = butlerQC.get(ref)
 
         visit_summary = butlerQC.get(inputRefs.visit_summary)
         sky_map = butlerQC.get(inputRefs.sky_map)
@@ -462,7 +462,11 @@ class MakeDirectWarpTask(PipelineTask):
         for detector_id, detector_inputs in inputs.items():
             row = visit_summary.find(detector_id)
             if row is None:
-                raise RuntimeError(f"Unexpectedly incomplete visit_summary: {detector_id=} is missing.")
+                self.log.warning(
+                    "Input calexp is not listed in visit_summary: %d; assuming bad.",
+                    detector_id,
+                )
+                continue
             data_id_list.append(detector_inputs.data_id)
             bbox_list.append(row.getBBox())
             wcs_list.append(row.getWcs())
