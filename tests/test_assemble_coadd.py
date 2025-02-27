@@ -231,6 +231,7 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
 
         # Check that we produced an exposure.
         self.assertTrue(result.coaddExposure is not None)
+        self.assertTrue("BUNIT" in result.coaddExposure.metadata)
 
     def testAssembleBasic(self):
         config = MockAssembleCoaddConfig()

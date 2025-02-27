@@ -54,9 +54,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         cls.config.doWarpMaskedFraction = True
         cls.config.numberOfNoiseRealizations = 1
 
-        meanCalibration = 1e-4
-        calibrationErr = 1e-5
-        cls.exposurePhotoCalib = lsst.afw.image.PhotoCalib(meanCalibration, calibrationErr)
+        cls.exposurePhotoCalib = lsst.afw.image.PhotoCalib(1.0)
         # An external photoCalib calibration to return
         cls.externalPhotoCalib = lsst.afw.image.PhotoCalib(1e-6, 1e-8)
 
@@ -74,7 +72,7 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         # mask at least one pixel
         cls.exposure.maskedImage.mask[5, 5] = 3
         # set the PhotoCalib and Wcs objects of this exposure.
-        cls.exposure.setPhotoCalib(lsst.afw.image.PhotoCalib(meanCalibration, calibrationErr))
+        cls.exposure.setPhotoCalib(lsst.afw.image.PhotoCalib(1.0))
         cls.exposure.setWcs(cls.skyWcs)
         cls.exposure.setPsf(GaussianPsf(5, 5, 2.5))
         cls.exposure.setFilter(lsst.afw.image.FilterLabel(physical="fakeFilter", band="fake"))

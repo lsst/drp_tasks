@@ -544,6 +544,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The data references to the input warped exposures.
         imageScalerList : `list` [`lsst.pipe.task.ImageScaler`]
             The image scalars correct for the zero point of the exposures.
+            Deprecated and will be removed after v29 in DM-49083.
         weightList : `list` [`float`]
             The weight to give each input exposure in the coadd.
         psfMatchedWarpRefList : `list` \
@@ -721,13 +722,19 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                     100 * (convergenceList[0] - convergenceMetric) / convergenceMetric,
                 )
 
+        # Remove in DM-49083
+        if self.config.doScaleZeroPoint:
+            calibration = self.scaleZeroPoint.getPhotoCalib()
+        else:
+            calibration = afwImage.PhotoCalib(1.0)
+
         dcrCoadds = self.fillCoadd(
             dcrModels,
             skyInfo,
             warpRefList,
             weightList,
             psfMatchedWarpRefList=psfMatchedWarpRefList,
-            calibration=self.scaleZeroPoint.getPhotoCalib(),
+            calibration=calibration,
             coaddInputs=templateCoadd.getInfo().getCoaddInputs(),
             mask=baseMask,
             variance=baseVariance,
@@ -1185,7 +1192,15 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             maskedImage.mask = dcrModels.mask
             maskedImage.variance = dcrModels.variance
             coaddExposure.setMaskedImage(maskedImage[skyInfo.bbox])
-            coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
+            # Remove in DM-49083
+            if self.config.doScaleZeroPoint:
+                coaddExposure.setPhotoCalib(self.scaleZeroPoint.getPhotoCalib())
+            else:
+                coaddExposure.setPhotoCalib(afwImage.PhotoCalib(1.0))
+                # Set the exposure units to nJy
+                # No need to check after DM-49083.
+                if not self.config.doScaleZeroPoint:
+                    coaddExposure.metadata["BUNIT"] = "nJy"
             if mask is not None:
                 coaddExposure.setMask(mask)
             if variance is not None:
@@ -1351,6 +1366,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             The data references to the input warped exposures.
         imageScalerList : `list` of `lsst.pipe.task.ImageScaler`
             The image scalars correct for the zero point of the exposures.
+            Deprecated and will be removed after v29 in DM-49083.
         spanSetMaskList : `list` of `dict` containing spanSet lists, or `None`
             Each element is dict with keys = mask plane name to add the spans
             to.
@@ -1370,7 +1386,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             visit = warpExpRef.dataId["visit"]
             if altMaskSpans is not None:
                 self.applyAltMaskPlanes(exposure.mask, altMaskSpans)
-            imageScaler.scaleMaskedImage(exposure.maskedImage)
+            # Remove in DM-49083
+            if imageScaler is not None:
+                imageScaler.scaleMaskedImage(exposure.maskedImage)
             # Note that the variance plane here is used to store weights, not
             # the actual variance
             exposure.variance.array[:, :] = 0.0
