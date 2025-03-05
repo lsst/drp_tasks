@@ -439,6 +439,12 @@ class AssembleCellCoaddTask(PipelineTask):
                 )
             else:
                 zero_point_scale_factor = 1.0
+                if "BUNIT" not in warp.metadata:
+                    raise ValueError(f"Warp {warpRef.dataId} has no BUNIT metadata")
+                if warp.metadata["BUNIT"] != "nJy":
+                    raise ValueError(
+                        f"Warp {warpRef.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
+                    )
 
             # Coadd the warp onto the cells it completely overlaps.
             edge = afwImage.Mask.getPlaneBitMask(["NO_DATA", "SENSOR_EDGE"])
