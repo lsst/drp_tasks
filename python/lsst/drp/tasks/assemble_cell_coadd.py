@@ -435,10 +435,10 @@ class AssembleCellCoaddTask(PipelineTask):
                 warp.mask.array = artifactMask.array
                 del artifactMask
 
-            # Each Warp that goes into a coadd will typically have an
-            # independent photometric zero-point. Therefore, we must scale each
-            # Warp to set it to a common photometric zeropoint.
             if self.config.do_scale_zero_point:
+                # Each Warp that goes into a coadd will typically have an
+                # independent photometric zero-point. Therefore, we must scale each
+                # Warp to set it to a common photometric zeropoint.
                 imageScaler = self.scale_zero_point.run(exposure=warp, dataRef=warpRef).imageScaler
                 zero_point_scale_factor = imageScaler.scale
                 self.log.debug(
