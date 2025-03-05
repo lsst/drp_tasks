@@ -33,6 +33,7 @@ from astropy.time import Time
 
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
+import lsst.afw.table as afwTable
 import lsst.geom as geom
 import lsst.pipe.base as pipeBase
 from lsst.afw.cameraGeom.testUtils import DetectorWrapper
@@ -40,6 +41,7 @@ from lsst.cell_coadds.test_utils import generate_data_id
 from lsst.geom import arcseconds, degrees
 from lsst.meas.algorithms.testUtils import plantSources
 from lsst.obs.base import MakeRawVisitInfoViaObsInfo
+from lsst.pipe.base import InMemoryDatasetHandle
 from lsst.pipe.tasks.coaddBase import growValidPolygons
 from lsst.pipe.tasks.coaddInputRecorder import CoaddInputRecorderConfig, CoaddInputRecorderTask
 from lsst.skymap import Index2D, PatchInfo
@@ -418,15 +420,22 @@ class MockCoaddTestData:
         matchedExposure.metadata["BUNIT"] = "nJy"
         return exposure, matchedExposure
 
-    def makeVisitSummaryTable(self, warpList):
-        ccd_visit_weight = {}
-        for warp in warpList:
-            for ccd in warp.getInfo().getCoaddInputs().ccds:
-                ccd_visit_weight[(ccd["visit"], ccd["ccd"])] = 0.5 + np.random.random_sample(0.9, 1.3)
+    def makeVisitSummaryTableHandle(self, warpHandle):
+        schema = afwTable.ExposureTable.makeMinimalSchema()
+        schema.addField("visit", type=int, doc="Visit ID")
+        schema.addField("ccd", type=int, doc="CCD ID")
+        schema.addField("meanVar", type=float, units="nJy**2", doc="Mean variance")
+        visitSummaryTable = afwTable.ExposureCatalog(schema)
 
-        for (visit, ccd), weight in ccd_visit_weight.items():
-            warp = self.exposures[visit]
-            warp.getInfo().getCoaddInputs().ccds.addNew(ccd, weight)
+        warp = warpHandle.get()
+        for ccd in warp.getInfo().getCoaddInputs().ccds:
+            record = visitSummaryTable.addNew()
+            record.set("visit", ccd["visit"])
+            record.set("ccd", ccd["ccd"])
+            record.set("meanVar", 0.3 + self.rngMods.random())
+
+        handle = InMemoryDatasetHandle(visitSummaryTable, dataId=warpHandle.dataId)
+        return handle
 
     @staticmethod
     def makeDataRefList(exposures, matchedExposures, warpType, tract=0, patch=42):
