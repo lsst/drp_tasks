@@ -102,7 +102,7 @@ class AssembleCellCoaddConnections(
         doc="Output multiple cell coadd",
         name="{inputWarpName}Coadd{outputCoaddSuffix}",
         storageClass="MultipleCellCoadd",
-        dimensions=("tract", "patch", "band", "skymap"),
+        dimensions=("tract", "patch", "band", "skymap", "instrument"),
     )
 
     def __init__(self, *, config=None):
