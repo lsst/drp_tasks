@@ -250,8 +250,9 @@ class AssembleCellCoaddTask(PipelineTask):
             skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"]
         )
 
+        units = CoaddUnits.legacy if self.config.do_scale_zero_point else CoaddUnits.nJy
         self.common = CommonComponents(
-            units=CoaddUnits.legacy,  # until the ScaleZeroPointTask can scale it to nJy.
+            units=units,
             wcs=inputData["skyInfo"].patchInfo.wcs,
             band=outputDataId.get("band", None),
             identifiers=PatchIdentifiers.from_data_id(outputDataId),
