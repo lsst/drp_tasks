@@ -114,7 +114,7 @@ class AssembleCellCoaddConnections(
         if config.do_calculate_weight_from_warp:
             del self.visitSummaryList
 
-        if config.do_use_artifact_mask:
+        if not config.do_use_artifact_mask:
             del self.artifactMasks
 
 
