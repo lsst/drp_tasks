@@ -469,8 +469,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 assert visitSummaryRef.dataId["visit"] == warpRef.dataId["visit"]
                 visitSummary = visitSummaryRef.get()
                 for detector in full_ccd_table["ccd"]:
-                    mean_variance = visitSummary.find(detector)["meanVar"]
+                    visitSummaryRow = visitSummary.find(detector)
+                    mean_variance = visitSummaryRow["meanVar"]
                     mean_variance *= zero_point_scale_factor**2
+                    if warp.metadata.get("BUNIT", None) == "nJy":
+                        mean_variance *= visitSummaryRow.photoCalib.getCalibrationMean() ** 2
                     weights[detector] = 1.0 / mean_variance
                 del visitSummary
             else:
