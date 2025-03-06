@@ -462,7 +462,7 @@ class MakeDirectWarpTask(PipelineTask):
         for detector_id, detector_inputs in inputs.items():
             row = visit_summary.find(detector_id)
             if row is None:
-                self.log.warning(
+                self.log.info(
                     "Input calexp is not listed in visit_summary: %d; assuming bad.",
                     detector_id,
                 )
