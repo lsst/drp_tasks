@@ -318,6 +318,7 @@ class MakeDirectWarpConfig(
     includeCalibVar = Field[bool](
         doc="Add photometric calibration variance to warp variance plane?",
         default=False,
+        deprecated="Deprecated and disabled.  Will be removed after v30.",
     )
     border = Field[int](
         doc="Pad the patch boundary of the warp by these many pixels, so as to allow for PSF-matching later",
@@ -711,11 +712,7 @@ class MakeDirectWarpTask(PipelineTask):
         if self.config.doPreWarpInterpolation:
             self.preWarpInterpolation.run(input_exposure.maskedImage)
 
-        success = self._apply_all_calibrations(
-            detector_inputs,
-            visit_summary=visit_summary,
-            includeScaleUncertainty=self.config.includeCalibVar,
-        )
+        success = self._apply_all_calibrations(detector_inputs, visit_summary=visit_summary)
 
         if not success:
             return None
@@ -737,7 +734,6 @@ class MakeDirectWarpTask(PipelineTask):
         detector_inputs: WarpDetectorInputs,
         *,
         visit_summary: ExposureCatalog | None = None,
-        includeScaleUncertainty: bool = False,
     ) -> bool:
         """Apply all of the calibrations from visit_summary to the exposure.
 
@@ -760,10 +756,6 @@ class MakeDirectWarpTask(PipelineTask):
             Table of visit summary information.  If not None, the visit summary
             information will be used to update the calibration of the input
             exposures. Otherwise, the input exposures will be used as-is.
-        includeScaleUncertainty : bool
-            Whether to include the uncertainty on the calibration in the
-            resulting variance? Passed onto the `calibrateImage` method of the
-            PhotoCalib object attached to ``exp``.
 
         Returns
         -------
@@ -847,10 +839,7 @@ class MakeDirectWarpTask(PipelineTask):
         # Calibrate the (masked) image.
         # This should likely happen even if visit_summary is None.
         photo_calib = input_exposure.photoCalib
-        input_exposure.maskedImage = photo_calib.calibrateImage(
-            input_exposure.maskedImage,
-            includeScaleUncertainty=includeScaleUncertainty,
-        )
+        input_exposure.maskedImage = photo_calib.calibrateImage(input_exposure.maskedImage)
         # This new PhotoCalib shouldn't need to be used, but setting it here
         # to reflect the fact that the image now has calibrated pixels might
         # help avoid future bugs.
