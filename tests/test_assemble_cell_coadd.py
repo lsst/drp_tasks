@@ -55,7 +55,7 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
 
     ConfigClass = MockAssembleCellCoaddConfig
 
-    def runQuantum(self, mockSkyInfo, warpRefList):
+    def runQuantum(self, mockSkyInfo, warpRefList, visitSummaryList=None):
         """Modified interface for testing coaddition algorithms without a
         Butler.
 
@@ -85,6 +85,7 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
         retStruct = self.run(
             warpRefList,
             mockSkyInfo,
+            visitSummaryList=visitSummaryList,
         )
 
         return retStruct
@@ -109,11 +110,14 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         cls.handleList = testData.makeDataRefList(
             exposures, matchedExposures, "direct", patch=patch, tract=tract
         )
+        cls.visitSummaryList = [
+            testData.makeVisitSummaryTableHandle(warpHandle) for warpHandle in cls.handleList
+        ]
         cls.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
         config = MockAssembleCellCoaddConfig()
         assembleTask = MockAssembleCellCoaddTask(config=config)
-        cls.result = assembleTask.runQuantum(cls.skyInfo, cls.handleList)
+        cls.result = assembleTask.runQuantum(cls.skyInfo, cls.handleList, cls.visitSummaryList)
 
     def checkSortOrder(self, inputs: Iterable[ObservationIdentifiers]) -> None:
         """Check that the inputs are sorted.
