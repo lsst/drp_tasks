@@ -422,8 +422,8 @@ class MockCoaddTestData:
 
     def makeVisitSummaryTableHandle(self, warpHandle):
         schema = afwTable.ExposureTable.makeMinimalSchema()
-        schema.addField("visit", type=int, doc="Visit ID")
-        schema.addField("ccd", type=int, doc="CCD ID")
+        schema.addField("visit", type=np.int64, doc="Visit ID")
+        schema.addField("ccd", type=np.int64, doc="CCD ID")
         schema.addField("meanVar", type=float, units="nJy**2", doc="Mean variance")
         visitSummaryTable = afwTable.ExposureCatalog(schema)
 
