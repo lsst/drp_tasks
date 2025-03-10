@@ -315,6 +315,7 @@ class MakeDirectWarpConfig(
         doc="Subtask that helps fill CoaddInputs catalogs added to the final " "coadd",
         target=CoaddInputRecorderTask,
     )
+    # TODO[DM-49400]: remove this field; it already does nothing.
     includeCalibVar = Field[bool](
         doc="Add photometric calibration variance to warp variance plane?",
         default=False,
