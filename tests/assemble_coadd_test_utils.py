@@ -433,6 +433,7 @@ class MockCoaddTestData:
             record.set("visit", ccd["visit"])
             record.set("ccd", ccd["ccd"])
             record.set("meanVar", 0.3 + self.rngMods.random())
+            record.set("photoCalib", afwImage.PhotoCalib(calibrationMean=10.0))
 
         handle = InMemoryDatasetHandle(visitSummaryTable, dataId=warpHandle.dataId)
         return handle
