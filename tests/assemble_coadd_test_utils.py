@@ -430,8 +430,9 @@ class MockCoaddTestData:
         warp = warpHandle.get()
         for ccd in warp.getInfo().getCoaddInputs().ccds:
             record = visitSummaryTable.addNew()
-            record.set("visit", ccd["visit"])
+            record.set("id", ccd["ccd"])
             record.set("ccd", ccd["ccd"])
+            record.set("visit", ccd["visit"])
             record.set("meanVar", 0.3 + self.rngMods.random())
             record.set("photoCalib", afwImage.PhotoCalib(calibrationMean=10.0))
 
