@@ -246,12 +246,12 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
             }
         ]
 
-        makeWarpConfig = MakeWarpTask.ConfigClass()
-        makeWarpConfig.makePsfMatched = True
-        makeWarpConfig.makeDirect = True
         # TODO: Remove this entire test in DM-47916. We retain it for now.
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            makeWarpConfig = MakeWarpTask.ConfigClass()
+            makeWarpConfig.makePsfMatched = True
+            makeWarpConfig.makeDirect = True
             makeWarp = MakeWarpTask(config=makeWarpConfig)
             result0 = makeWarp.run(
                 calExpList=[self.exposure],
