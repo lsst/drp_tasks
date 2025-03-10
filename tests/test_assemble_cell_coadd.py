@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 from typing import TYPE_CHECKING, Iterable
 
 import numpy as np
@@ -167,6 +168,17 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         This is intended to prevent the code from bit rotting.
         """
         self.runTask()
+        # Check that we produced an exposure.
+        self.assertTrue(self.result.multipleCellCoadd is not None)
+
+    # TODO: Remove this test in DM-49401
+    @lsst.utils.tests.methodParameters(do_scale_zero_point=[False, True])
+    def test_do_scale_zero_point(self, do_scale_zero_point):
+        config = MockAssembleCellCoaddConfig()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            config.do_scale_zero_point = do_scale_zero_point
+            self.runTask(config)
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
 
