@@ -223,7 +223,7 @@ class MockCoaddTestData:
 
     def setDummyCoaddInputs(self, exposure, expId):
         """Generate an `ExposureCatalog` as though the exposures had been
-        processed using `warpAndPsfMatch`.
+        processed using `make_direct_warp`.
 
         Parameters
         ----------
