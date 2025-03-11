@@ -115,9 +115,14 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         ]
         cls.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
-        config = MockAssembleCellCoaddConfig()
+    def tearDown(self) -> None:
+        del self.result
+
+    def runTask(self, config=None) -> None:
+        if config is None:
+            config = MockAssembleCellCoaddConfig()
         assembleTask = MockAssembleCellCoaddTask(config=config)
-        cls.result = assembleTask.runQuantum(cls.skyInfo, cls.handleList, cls.visitSummaryList)
+        self.result = assembleTask.runQuantum(self.skyInfo, self.handleList, self.visitSummaryList)
 
     def checkSortOrder(self, inputs: Iterable[ObservationIdentifiers]) -> None:
         """Check that the inputs are sorted.
@@ -161,6 +166,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         This test does not check the correctness of the coaddition algorithms.
         This is intended to prevent the code from bit rotting.
         """
+        self.runTask()
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
 
@@ -168,6 +174,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         """Check that the visit_count method returns a number less than or
         equal to the total number of input exposures available.
         """
+        self.runTask()
         max_visit_count = len(self.handleList)
         for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             with self.subTest(x=cellId.x, y=cellId.y):
@@ -179,6 +186,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         The ordering is that inputs are sorted first by visit, and within the
         same visit, they are ordered by detector.
         """
+        self.runTask()
         for _, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             self.checkSortOrder(singleCellCoadd.inputs)
 
