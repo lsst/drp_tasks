@@ -182,6 +182,14 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
 
+    @lsst.utils.tests.methodParameters(do_calculate_weight_from_warp=[False, True])
+    def test_do_calculate_weight_from_warp(self, do_calculate_weight_from_warp):
+        config = MockAssembleCellCoaddConfig()
+        config.do_calculate_weight_from_warp = do_calculate_weight_from_warp
+        self.runTask(config)
+        # Check that we produced an exposure.
+        self.assertTrue(self.result.multipleCellCoadd is not None)
+
     def test_visit_count(self):
         """Check that the visit_count method returns a number less than or
         equal to the total number of input exposures available.
