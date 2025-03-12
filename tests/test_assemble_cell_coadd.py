@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 from typing import TYPE_CHECKING, Iterable
 
 import numpy as np
@@ -55,7 +56,7 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
 
     ConfigClass = MockAssembleCellCoaddConfig
 
-    def runQuantum(self, mockSkyInfo, warpRefList):
+    def runQuantum(self, mockSkyInfo, warpRefList, visitSummaryList=None):
         """Modified interface for testing coaddition algorithms without a
         Butler.
 
@@ -85,6 +86,7 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
         retStruct = self.run(
             warpRefList,
             mockSkyInfo,
+            visitSummaryList=visitSummaryList,
         )
 
         return retStruct
@@ -109,11 +111,19 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         cls.handleList = testData.makeDataRefList(
             exposures, matchedExposures, "direct", patch=patch, tract=tract
         )
+        cls.visitSummaryList = [
+            testData.makeVisitSummaryTableHandle(warpHandle) for warpHandle in cls.handleList
+        ]
         cls.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
-        config = MockAssembleCellCoaddConfig()
+    def tearDown(self) -> None:
+        del self.result
+
+    def runTask(self, config=None) -> None:
+        if config is None:
+            config = MockAssembleCellCoaddConfig()
         assembleTask = MockAssembleCellCoaddTask(config=config)
-        cls.result = assembleTask.runQuantum(cls.skyInfo, cls.handleList)
+        self.result = assembleTask.runQuantum(self.skyInfo, self.handleList, self.visitSummaryList)
 
     def checkSortOrder(self, inputs: Iterable[ObservationIdentifiers]) -> None:
         """Check that the inputs are sorted.
@@ -157,6 +167,26 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         This test does not check the correctness of the coaddition algorithms.
         This is intended to prevent the code from bit rotting.
         """
+        self.runTask()
+        # Check that we produced an exposure.
+        self.assertTrue(self.result.multipleCellCoadd is not None)
+
+    # TODO: Remove this test in DM-49401
+    @lsst.utils.tests.methodParameters(do_scale_zero_point=[False, True])
+    def test_do_scale_zero_point(self, do_scale_zero_point):
+        config = MockAssembleCellCoaddConfig()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            config.do_scale_zero_point = do_scale_zero_point
+            self.runTask(config)
+        # Check that we produced an exposure.
+        self.assertTrue(self.result.multipleCellCoadd is not None)
+
+    @lsst.utils.tests.methodParameters(do_calculate_weight_from_warp=[False, True])
+    def test_do_calculate_weight_from_warp(self, do_calculate_weight_from_warp):
+        config = MockAssembleCellCoaddConfig()
+        config.do_calculate_weight_from_warp = do_calculate_weight_from_warp
+        self.runTask(config)
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
 
@@ -164,6 +194,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         """Check that the visit_count method returns a number less than or
         equal to the total number of input exposures available.
         """
+        self.runTask()
         max_visit_count = len(self.handleList)
         for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             with self.subTest(x=cellId.x, y=cellId.y):
@@ -175,6 +206,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         The ordering is that inputs are sorted first by visit, and within the
         same visit, they are ordered by detector.
         """
+        self.runTask()
         for _, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             self.checkSortOrder(singleCellCoadd.inputs)
 
