@@ -380,7 +380,11 @@ class AssembleCellCoaddTask(PipelineTask):
             statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
-    def _construct_apcorr(self, apCorrMap: afwImage.ApCorrMap, shape=Index2D(21, 21)):
+    def _construct_apcorr(self, apCorrMap: afwImage.ApCorrMap, shape=None):
+        if shape is None:
+            from lsst.skymap import Index2D
+
+            shape = Index2D(21, 21)
         gc = GridContainer[np.record](shape)
         dtype = [("cell_x", int), ("cell_y", int)] + [(name, float) for name in apCorrMap]
         array = np.recarray(shape=(gc.shape.x * gc.shape.y,), dtype=dtype)
