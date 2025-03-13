@@ -147,6 +147,11 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Substitute the mask planes input warp with an alternative artifact mask?",
         default=True,
     )
+    do_coadd_inverse_aperture_corrections = Field[bool](
+        doc="Coadd the inverse aperture corrections for each cell? This is formally the more accurate way "
+        "but may be turned off for parity with deepCoadd.",
+        default=False,
+    )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
         default=("BAD", "NO_DATA", "SAT", "CLIPPED"),
@@ -375,13 +380,11 @@ class AssembleCellCoaddTask(PipelineTask):
             statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
-    def _construct_apcorr(self, apCorrMap: afwImage.ApCorrMap):
+    def _construct_apcorr(self, apCorrMap: afwImage.ApCorrMap, shape=Index2D(21, 21)):
+        gc = GridContainer[np.record](shape)
         dtype = [("cell_x", int), ("cell_y", int)] + [(name, float) for name in apCorrMap]
-        array = np.recarray((gc.shape.x*gc.shape.y,) dtype=dtype)
+        array = np.recarray(shape=(gc.shape.x * gc.shape.y,), dtype=dtype)
         array[:, :] = 0
-        gc = GridContainer[np.record](gc.shape)
-        for
-
 
     def run(self, inputWarps, skyInfo, **kwargs):
         for mask_plane in self.config.bad_mask_planes:
@@ -394,6 +397,13 @@ class AssembleCellCoaddTask(PipelineTask):
         gc = self._construct_grid_container(skyInfo, statsCtrl)
         psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
         psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
+
+        apCorrMap = inputWarps[0].get(component="apCorrMap")
+        apCorr_recarray = np.recarray(
+            shape=(gc.shape.x * gc.shape.y,),
+            dtype=[("cell_x", int), ("cell_y", int)] + [(name, float) for name in apCorrMap],
+        )
+        apCorr_gc = GridContainer[np.record](gc.shape)
 
         # Make a container to hold the cell centers in sky coordinates now,
         # so we don't have to recompute them for each warp
@@ -568,6 +578,17 @@ class AssembleCellCoaddTask(PipelineTask):
                 psf_stacker = psf_gc[cellInfo.index]
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
 
+                if (apCorrMap := warp.getInfo().getApCorrMap()) is not None:
+                    # Use the apCorrMap to get the aperture correction for this cell.
+                    for algorithmName, apCorr_value in apCorrMap.items():
+                        if apCorr_value:
+                            if self.config.do_coadd_inverse_aperture_corrections:
+                                # Inverse aperture correction values get coadded.
+                                apCorr_gc[cellInfo.index][algorithmName] += weight / apCorr_value
+                            else:
+                                # Coadd the aperture correction values.
+                                apCorr_gc[cellInfo.index][algorithmName] += weight * apCorr_value
+
             del warp
 
         cells: list[SingleCellCoadd] = []
@@ -581,6 +602,14 @@ class AssembleCellCoaddTask(PipelineTask):
             psf_masked_image = afwImage.MaskedImageF(psf_bbox_gc[cellInfo.index])
             gc[cellInfo.index].fill_stacked_masked_image(cell_masked_image)
             psf_gc[cellInfo.index].fill_stacked_masked_image(psf_masked_image)
+
+            if self.config.do_coadd_inverse_aperture_corrections and apCorrMap:
+                for algorithmName in apCorrMap:
+                    if apCorr_value := apCorr_gc[cellInfo.index][algorithmName]:
+                        # Invert the inverse aperture correction values.
+                        apCorr_gc[cellInfo.index][algorithmName] = 1.0 / apCorr_value
+                    else:
+                        self.log.debug("No aperture correction found for %s", algorithmName)
 
             # Post-process the coadd before converting to new data structures.
             if self.config.do_interpolate_coadd:
