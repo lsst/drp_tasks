@@ -458,9 +458,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             psfSize = psf.computeShape(psfAvgPos).getDeterminantRadius() * sigma2fwhm
             airmass = visitInfo.getBoresightAirmass()
             parallacticAngle = visitInfo.getBoresightParAngle().asDegrees()
-            airmassDict[visit] = airmass
-            angleDict[visit] = parallacticAngle
-            psfSizeDict[visit] = psfSize
+            airmassDict[str(visit)] = airmass
+            angleDict[str(visit)] = parallacticAngle
+            psfSizeDict[str(visit)] = psfSize
             if self.config.doAirmassWeight:
                 weightList[visitNum] *= airmass
             dcrShifts.append(
@@ -480,6 +480,13 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         self.log.info("Selected parallactic angles:\n%s", angleDict)
         self.log.info("Selected PSF sizes:\n%s", psfSizeDict)
         self.bufferSize = int(np.ceil(np.max(dcrShifts)) + 1)
+        # Adding dictionary directly to the metadata did not add all elements.
+        # Ensure that the metadata is listed in the correct order.
+        visits = airmassDict.keys()
+        self.metadata["visits"] = list(visits)
+        self.metadata["airmasses"] = [airmassDict[v] for v in visits]
+        self.metadata["parallacticAngles"] = [angleDict[v] for v in visits]
+        self.metadata["selectedPsfSizes"] = [psfSizeDict[v] for v in visits]
         try:
             psf = self.selectCoaddPsf(templateCoadd, warpRefList)
         except Exception as e:
@@ -596,6 +603,11 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             skyInfo.bbox.getWidth() / subregionSize[0]
         )
         subIter = 0
+        initialConvergence = self.calculateTotalConvergence(
+            dcrModels, skyInfo.bbox, warpRefList, weightList, stats.ctrl
+        )
+        self.metadata["initialConvergence"] = initialConvergence
+        self.log.info("Initial convergence for full patch %.4f%%", initialConvergence)
         for subBBox in subBBoxIter(skyInfo.bbox, subregionSize):
             modelIter = 0
             subIter += 1
@@ -705,6 +717,12 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                     "Final convergence improvement was %.4f%% overall",
                     100 * (convergenceList[0] - convergenceMetric) / convergenceMetric,
                 )
+
+        finalConvergence = self.calculateTotalConvergence(
+            dcrModels, skyInfo.bbox, warpRefList, weightList, stats.ctrl
+        )
+        self.metadata["finalConvergence"] = finalConvergence
+        self.log.info("Final convergence for full patch %.4f%%", finalConvergence)
 
         # Remove in DM-49083
         if self.config.doScaleZeroPoint:
@@ -1045,6 +1063,48 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
             metricList[visit] = singleMetric
             weight += 1.0
         self.log.info("Individual metrics:\n%s", metricList)
+        return 1.0 if weight == 0.0 else metric / weight
+
+    def calculateTotalConvergence(self, dcrModels, bbox, warpRefList, weightList, statsCtrl):
+        """Calculate a quality of fit metric for the matched templates.
+
+        Parameters
+        ----------
+        dcrModels : `lsst.pipe.tasks.DcrModel`
+            Best fit model of the true sky after correcting chromatic effects.
+        bbox : `lsst.geom.box.Box2I`
+            Sub-region to coadd.
+        warpRefList : `list` of `lsst.daf.butler.DeferredDatasetHandle`
+            The data references to the input warped exposures.
+        weightList : `list` of `float`
+            The weight to give each input exposure in the coadd.
+        statsCtrl : `lsst.afw.math.StatisticsControl`
+            Statistics control object for coadd.
+
+        Returns
+        -------
+        convergenceMetric : `float`
+            Quality of fit metric for all input exposures, within the
+            sub-region.
+        """
+        significanceImage = np.abs(dcrModels.getReferenceImage(bbox))
+        nSigma = 3.0
+        significanceImage += nSigma * dcrModels.calculateNoiseCutoff(
+            dcrModels[1], statsCtrl, bufferSize=self.bufferSize
+        )
+        if np.max(significanceImage) == 0:
+            significanceImage += 1.0
+        weight = 0
+        metric = 0.0
+        metricList = {}
+        for warpExpRef, expWeight in zip(warpRefList, weightList):
+            visit = warpExpRef.dataId["visit"]
+            exposure = warpExpRef.get()
+            singleMetric = self.calculateSingleConvergence(dcrModels, exposure, significanceImage, statsCtrl)
+            metric += singleMetric
+            metricList[visit] = singleMetric
+            weight += 1.0
+        self.log.info("Individual metrics from full patch:\n%s", metricList)
         return 1.0 if weight == 0.0 else metric / weight
 
     def calculateSingleConvergence(self, dcrModels, exposure, significanceImage, statsCtrl):
