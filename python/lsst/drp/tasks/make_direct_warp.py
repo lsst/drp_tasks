@@ -318,7 +318,7 @@ class MakeDirectWarpConfig(
     includeCalibVar = Field[bool](
         doc="Add photometric calibration variance to warp variance plane?",
         default=False,
-        deprecated="Deprecated and disabled.  Will be removed after v30.",
+        deprecated="Deprecated and disabled.  Will be removed after v29.",
     )
     border = Field[int](
         doc="Pad the patch boundary of the warp by these many pixels, so as to allow for PSF-matching later",
