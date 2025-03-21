@@ -33,6 +33,7 @@ from astropy.time import Time
 
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
+import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 import lsst.geom as geom
 import lsst.pipe.base as pipeBase
@@ -244,7 +245,7 @@ class MockCoaddTestData:
         tempExpInputRecorder.finish(exposure, nGoodPix=nGoodPix)
         growValidPolygons(exposure.getInfo().getCoaddInputs(), growBy=0)
 
-    def makeCoaddTempExp(self, rawExposure, visitInfo, expId):
+    def makeCoaddTempExp(self, rawExposure, visitInfo, expId, apCorrMap=None):
         """Add the metadata required by `AssembleCoaddTask` to an exposure.
 
         Parameters
@@ -266,6 +267,7 @@ class MockCoaddTestData:
 
         tempExp.setFilter(self.filterLabel)
         tempExp.setPhotoCalib(self.photoCalib)
+        tempExp.setApCorrMap(apCorrMap)
         tempExp.getInfo().setVisitInfo(visitInfo)
         tempExp.getInfo().setDetector(self.detector)
         self.setDummyCoaddInputs(tempExp, expId)
@@ -355,6 +357,39 @@ class MockCoaddTestData:
         visitInfo = MakeRawVisitInfoViaObsInfo.observationInfo2visitInfo(obsInfo)
         return visitInfo
 
+    def makeDummyApCorrMap(self):
+        """Make a dummy aperture correction map for testing.
+
+        This method returns an `~lsst.afw.image.ApCorrMap` instance with
+        random values for the "algo1_instFlux", "algo1_instFluxErr",
+        "algo2_instFlux", and "algo2_instFluxErr" fields that are spatially
+        constant.
+
+        Returns
+        -------
+        apCorrMap : `lsst.afw.image.ApCorrMap`
+            Aperture correction map for the exposure.
+        """
+        apCorrMap = afwImage.ApCorrMap()
+        apCorrMap["algo1_instFlux"] = afwMath.ChebyshevBoundedField(
+            self.bbox,
+            np.array([[self.rngMods.random()]]),
+        )
+        apCorrMap["algo1_instFluxErr"] = afwMath.ChebyshevBoundedField(
+            self.bbox,
+            np.array([[self.rngMods.random()]]),
+        )
+        apCorrMap["algo2_instFlux"] = afwMath.ChebyshevBoundedField(
+            self.bbox,
+            np.array([[self.rngMods.random()]]),
+        )
+        apCorrMap["algo2_instFluxErr"] = afwMath.ChebyshevBoundedField(
+            self.bbox,
+            np.array([[self.rngMods.random()]]),
+        )
+
+        return apCorrMap
+
     def makeTestImage(
         self,
         expId,
@@ -414,8 +449,9 @@ class MockCoaddTestData:
         if badRegionBox is not None:
             model.mask[badRegionBox] = afwImage.Mask.getPlaneBitMask("BAD")
 
-        exposure = self.makeCoaddTempExp(model, visitInfo, expId)
-        matchedExposure = self.makeCoaddTempExp(modelPsfMatched, visitInfo, expId)
+        apCorrMap = self.makeDummyApCorrMap()
+        exposure = self.makeCoaddTempExp(model, visitInfo, expId, apCorrMap)
+        matchedExposure = self.makeCoaddTempExp(modelPsfMatched, visitInfo, expId, apCorrMap)
         exposure.metadata["BUNIT"] = "nJy"
         matchedExposure.metadata["BUNIT"] = "nJy"
         return exposure, matchedExposure

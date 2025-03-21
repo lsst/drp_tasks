@@ -36,6 +36,7 @@ import lsst.afw.math as afwMath
 import lsst.geom as geom
 from lsst.cell_coadds import (
     CellIdentifiers,
+    CoaddApCorrMapStacker,
     CoaddUnits,
     CommonComponents,
     GridContainer,
@@ -146,6 +147,11 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     do_use_artifact_mask = Field[bool](
         doc="Substitute the mask planes input warp with an alternative artifact mask?",
         default=True,
+    )
+    do_coadd_inverse_aperture_corrections = Field[bool](
+        doc="Coadd the inverse aperture corrections for each cell? This is formally the more accurate way "
+        "but may be turned off for parity with deepCoadd.",
+        default=False,
     )
     bad_mask_planes = ListField[str](
         doc="Mask planes that count towards the masked fraction within a cell.",
@@ -375,6 +381,33 @@ class AssembleCellCoaddTask(PipelineTask):
             statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
+    def _construct_ap_corr_grid_container(self, skyInfo):
+        """Construct a grid of CoaddApCorrMapStacker instances.
+
+        Parameters
+        ----------
+        skyInfo : `~lsst.pipe.base.Struct`
+            A Struct object
+
+        Returns
+        -------
+        gc : `~lsst.cell_coadds.GridContainer`
+            A GridContainer object container one CoaddApCorrMapStacker per
+            cell.
+        """
+        grid = self._construct_grid(skyInfo)
+
+        # Initialize the grid container with CoaddApCorrMapStacker.
+        gc = GridContainer[CoaddApCorrMapStacker](grid.shape)
+        for cellInfo in skyInfo.patchInfo:
+            stacker = CoaddApCorrMapStacker(
+                evaluation_point=cellInfo.inner_bbox.getCenter(),
+                do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_aperture_corrections,
+            )
+            gc[cellInfo.index] = stacker
+
+        return gc
+
     def run(self, inputWarps, skyInfo, **kwargs):
         for mask_plane in self.config.bad_mask_planes:
             afwImage.Mask.addMaskPlane(mask_plane)
@@ -386,6 +419,7 @@ class AssembleCellCoaddTask(PipelineTask):
         gc = self._construct_grid_container(skyInfo, statsCtrl)
         psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
         psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
+        ap_corr_gc = self._construct_ap_corr_grid_container(skyInfo)
 
         # Make a container to hold the cell centers in sky coordinates now,
         # so we don't have to recompute them for each warp
@@ -560,6 +594,9 @@ class AssembleCellCoaddTask(PipelineTask):
                 psf_stacker = psf_gc[cellInfo.index]
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
 
+                if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
+                    ap_corr_gc[cellInfo.index].add(ap_corr_map, weight=weight)
+
             del warp
 
         cells: list[SingleCellCoadd] = []
@@ -573,6 +610,11 @@ class AssembleCellCoaddTask(PipelineTask):
             psf_masked_image = afwImage.MaskedImageF(psf_bbox_gc[cellInfo.index])
             gc[cellInfo.index].fill_stacked_masked_image(cell_masked_image)
             psf_gc[cellInfo.index].fill_stacked_masked_image(psf_masked_image)
+
+            if ap_corr_gc[cellInfo.index].ap_corr_names:
+                ap_corr_map = ap_corr_gc[cellInfo.index].final_ap_corr_map
+            else:
+                ap_corr_map = None
 
             # Post-process the coadd before converting to new data structures.
             if self.config.do_interpolate_coadd:
@@ -598,6 +640,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 inputs=observation_identifiers_gc[cellInfo.index],
                 common=self.common,
                 identifiers=identifiers,
+                aperture_correction_map=ap_corr_map,
             )
             # TODO: Attach transmission curve when they become available.
             cells.append(singleCellCoadd)

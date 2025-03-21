@@ -158,8 +158,12 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         for cellId, singleCellCoadd in result.multipleCellCoadd.cells.items():
             with self.subTest(x=cellId.x, y=cellId.y):
                 self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
+            # Check that the aperture correction maps are not None.
+            with self.subTest(x=cellId.x, y=cellId.y):
+                self.assertTrue(singleCellCoadd.aperture_correction_map is not None)
             # Check that the inputs are sorted.
-            self.checkSortOrder(singleCellCoadd.inputs)
+            with self.subTest(x=cellId.x, y=cellId.y):
+                self.checkSortOrder(singleCellCoadd.inputs)
 
     def test_assemble_basic(self):
         """Test that AssembleCellCoaddTask runs successfully without errors.
