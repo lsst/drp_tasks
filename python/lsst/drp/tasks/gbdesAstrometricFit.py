@@ -450,6 +450,12 @@ class GbdesAstrometricFitConfig(
         "returned are not used.",
         default="phot_g_mean",
     )
+    setRefEpoch = pexConfig.Field(
+        dtype=float,
+        doc="Set the reference epoch to a fixed value in MJD (if None, median observation date is used)",
+        default=None,
+        optional=True,
+    )
     applyRefCatProperMotion = pexConfig.Field(
         dtype=bool,
         doc="Apply proper motion to shift reference catalog to epoch of observations.",
@@ -1068,7 +1074,12 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # Set the reference epoch to be the median of the science visits.
         # The reference catalog will be shifted to this date.
-        medianMJD = np.median(mjds)
+        if self.config.setRefEpoch is None:
+            medianMJD = np.median(mjds)
+            self.log.info(f"Ref epoch set to median: {medianMJD}")
+        else:
+            medianMJD = self.config.setRefEpoch
+            self.log.info(f"Ref epoch set by user: {medianMJD}")
         medianEpoch = astropy.time.Time(medianMJD, format="mjd").decimalyear
 
         # Add information for the reference catalog. Most of the values are
