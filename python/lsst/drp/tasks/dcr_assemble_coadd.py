@@ -483,9 +483,9 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         self.bufferSize = int(np.ceil(np.max(dcrShifts)) + 1)
         # writing to metadata
         # do we want to also include the set of visits and warpExpRef?
-        self.metadata["airmasses"] = airmassDict
-        self.metadata["parallacticAngles"] = angleDict
-        self.metadata["selectedPsfSizes"] = psfSizeDict
+        self.metadata["airmasses"].add(airmassDict)
+        self.metadata["parallacticAngles"].add(angleDict)
+        self.metadata["selectedPsfSizes"].add(psfSizeDict)
         try:
             psf = self.selectCoaddPsf(templateCoadd, warpRefList)
         except Exception as e:
