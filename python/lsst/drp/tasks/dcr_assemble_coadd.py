@@ -476,16 +476,17 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
                     )
                 )
             )
-        # remove this part?
         self.log.info("Selected airmasses:\n%s", airmassDict)
         self.log.info("Selected parallactic angles:\n%s", angleDict)
         self.log.info("Selected PSF sizes:\n%s", psfSizeDict)
         self.bufferSize = int(np.ceil(np.max(dcrShifts)) + 1)
-        # writing to metadata
-        # do we want to also include the set of visits and warpExpRef?
-        self.metadata["airmasses"].add(airmassDict)
-        self.metadata["parallacticAngles"].add(angleDict)
-        self.metadata["selectedPsfSizes"].add(psfSizeDict)
+        # Adding dictionary directly to the metadata did not add all elements.
+        # Ensure that the metadata is listed in the correct order.
+        visits = airmassDict.keys()
+        self.metadata["visits"] = visits
+        self.metadata["airmasses"] = [airmassDict[v] for v in visits]
+        self.metadata["parallacticAngles"] = [angleDict[v] for v in visits]
+        self.metadata["selectedPsfSizes"] = [psfSizeDict[v] for v in visits]
         try:
             psf = self.selectCoaddPsf(templateCoadd, warpRefList)
         except Exception as e:
