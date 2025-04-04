@@ -315,7 +315,11 @@ class AssembleCellCoaddTask(PipelineTask):
         # grid has no notion about border or inner/outer boundaries.
         # So we have to clip the outermost border when constructing the grid.
         grid_bbox = skyInfo.patchInfo.outer_bbox.erodedBy(skyInfo.patchInfo.getCellBorder())
-        grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
+        grid = UniformGrid.from_bbox_cell_size(
+            grid_bbox,
+            skyInfo.patchInfo.getCellInnerDimensions(),
+            padding=50,  # TODO: Get it from skyInfo
+        )
         return grid
 
     def _construct_grid_container(self, skyInfo, statsCtrl):
