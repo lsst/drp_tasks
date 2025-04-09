@@ -48,8 +48,14 @@ class ForcedPhotCoaddConnections(
     )
     exposure = pipeBase.connectionTypes.Input(
         doc="Input exposure to perform photometry on.",
-        name="{inputCoaddName}Coadd_calexp",
+        name="{inputCoaddName}CoaddCell",
         storageClass="ExposureF",
+        dimensions=["band", "skymap", "tract", "patch"],
+    )
+    background = pipeBase.connectionTypes.Input(
+        doc="Background to subtract from the exposure.",
+        name="{inputCoaddName}Coadd_background",
+        storageClass="Background",
         dimensions=["band", "skymap", "tract", "patch"],
     )
     refCat = pipeBase.connectionTypes.Input(
@@ -154,21 +160,22 @@ class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=For
         self.measurement.copyColumns["id"] = "id"
         self.measurement.copyColumns["parent"] = "parent"
         self.measurement.plugins.names |= ["base_InputCount", "base_Variance"]
-        self.measurement.plugins["base_PixelFlags"].masksFpAnywhere = [
-            "CLIPPED",
-            "SENSOR_EDGE",
-            "REJECTED",
-            "INEXACT_PSF",
-            # TODO DM-44658 and DM-45980: don't have STREAK propagated yet.
-            # "STREAK",
-        ]
-        self.measurement.plugins["base_PixelFlags"].masksFpCenter = [
-            "CLIPPED",
-            "SENSOR_EDGE",
-            "REJECTED",
-            "INEXACT_PSF",
-            # "STREAK",
-        ]
+        if False:
+            self.measurement.plugins["base_PixelFlags"].masksFpAnywhere = [
+                "CLIPPED",
+                "SENSOR_EDGE",
+                "REJECTED",
+                "INEXACT_PSF",
+                # TODO DM-44658 and DM-45980: don't have STREAK propagated yet.
+                # "STREAK",
+            ]
+            self.measurement.plugins["base_PixelFlags"].masksFpCenter = [
+                "CLIPPED",
+                "SENSOR_EDGE",
+                "REJECTED",
+                "INEXACT_PSF",
+                # "STREAK",
+            ]
 
 
 class ForcedPhotCoaddTask(pipeBase.PipelineTask):
@@ -210,6 +217,12 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         inputs = butlerQC.get(inputRefs)
+
+        mcc = inputs['exposure']
+        exposure = mcc.stitch().asExposure()
+        background = inputs.pop("background")
+        exposure.maskedImage -= background.getImage()
+        inputs["exposure"] = exposure
 
         refCatInBand = inputs.pop("refCatInBand")
         if self.config.footprintDatasetName == "ScarletModelData":
