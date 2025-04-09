@@ -219,10 +219,12 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         inputs = butlerQC.get(inputRefs)
 
         mcc = inputs['exposure']
-        exposure = mcc.stitch().asExposure()
+        stitched_coadd = mcc.stitch()
+        exposure = stitched_coadd.asExposure()
         background = inputs.pop("background")
         exposure.maskedImage -= background.getImage()
         inputs["exposure"] = exposure
+        inputs["apCorrMap"] = stitched_coadd.ap_corr_map
 
         refCatInBand = inputs.pop("refCatInBand")
         if self.config.footprintDatasetName == "ScarletModelData":
@@ -307,7 +309,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
                 srcRecord.setFootprint(fpRecord.getFootprint())
         return measCat, id_generator.catalog_id
 
-    def run(self, measCat, exposure, refCat, refWcs, exposureId=None):
+    def run(self, measCat, exposure, refCat, refWcs, exposureId=None, apCorrMap=None):
         """Perform forced measurement on a single exposure.
 
         Parameters
@@ -324,6 +326,9 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         exposureId : `int`
             Optional unique exposureId used for random seed in measurement
             task.
+        apCorrMap : `~lsst.afw.image.ApCorrMap`, optional
+            Aperture correction map to use for aperture corrections.
+            If not provided, the map is read from the exposure.
 
         Returns
         -------
@@ -342,7 +347,9 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         exposure.psf.setCacheCapacity(2 * len(self.config.measurement.plugins.names))
         self.measurement.run(measCat, exposure, refCat, refWcs, exposureId=exposureId)
         if self.config.doApCorr:
-            self.applyApCorr.run(catalog=measCat, apCorrMap=exposure.getInfo().getApCorrMap())
+            if apCorrMap is None:
+                apCorrMap = exposure.getInfo().getApCorrMap()
+            self.applyApCorr.run(catalog=measCat, apCorrMap=apCorrMap)
         self.catalogCalculation.run(measCat)
 
         return pipeBase.Struct(measCat=measCat)
