@@ -49,7 +49,7 @@ class ForcedPhotCoaddConnections(
     exposure = pipeBase.connectionTypes.Input(
         doc="Input exposure to perform photometry on.",
         name="{inputCoaddName}CoaddCell",
-        storageClass="ExposureF",
+        storageClass="MultipleCellCoadd",
         dimensions=["band", "skymap", "tract", "patch"],
     )
     background = pipeBase.connectionTypes.Input(
