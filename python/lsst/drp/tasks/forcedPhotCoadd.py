@@ -160,22 +160,21 @@ class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=For
         self.measurement.copyColumns["id"] = "id"
         self.measurement.copyColumns["parent"] = "parent"
         self.measurement.plugins.names |= ["base_InputCount", "base_Variance"]
-        if False:
-            self.measurement.plugins["base_PixelFlags"].masksFpAnywhere = [
-                "CLIPPED",
-                "SENSOR_EDGE",
-                "REJECTED",
-                "INEXACT_PSF",
-                # TODO DM-44658 and DM-45980: don't have STREAK propagated yet.
-                # "STREAK",
-            ]
-            self.measurement.plugins["base_PixelFlags"].masksFpCenter = [
-                "CLIPPED",
-                "SENSOR_EDGE",
-                "REJECTED",
-                "INEXACT_PSF",
-                # "STREAK",
-            ]
+        self.measurement.plugins["base_PixelFlags"].masksFpAnywhere = [
+            "CLIPPED",
+            "SENSOR_EDGE",
+            "REJECTED",
+            "INEXACT_PSF",
+            # TODO DM-44658 and DM-45980: don't have STREAK propagated yet.
+            # "STREAK",
+        ]
+        self.measurement.plugins["base_PixelFlags"].masksFpCenter = [
+            "CLIPPED",
+            "SENSOR_EDGE",
+            "REJECTED",
+            "INEXACT_PSF",
+            # "STREAK",
+        ]
 
 
 class ForcedPhotCoaddTask(pipeBase.PipelineTask):
@@ -345,6 +344,11 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         # evaluate it at all, and there's no *good* reason for any algorithm to
         # evaluate it more than once.
         exposure.psf.setCacheCapacity(2 * len(self.config.measurement.plugins.names))
+        # Some mask planes may not be defined on the coadds always.
+        # We add the mask planes, which is a no-op if already defined.
+        for maskPlane in (self.config.measurement.plugins["base_PixelFlags"].masksFpAnywhere +
+                          self.config.measurement.plugins["base_PixelFlags"].masksFpCenter):
+            exposure.mask.addMaskPlane(maskPlane)
         self.measurement.run(measCat, exposure, refCat, refWcs, exposureId=exposureId)
         if self.config.doApCorr:
             if apCorrMap is None:
