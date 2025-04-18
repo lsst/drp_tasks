@@ -642,7 +642,7 @@ class MetadetectionShearTask(PipelineTask):
             `object_schema`.
         """
         from metadetect.lsst.masking import apply_apodized_bright_masks_mbexp, apply_apodized_edge_masks_mbexp
-        from metadetect.lsst.metadetect import get_config as get_mdet_config
+        from metadetect.lsst.configs import get_config as get_mdet_config
         from metadetect.lsst.metadetect import run_metadetect
 
         if simulate:
