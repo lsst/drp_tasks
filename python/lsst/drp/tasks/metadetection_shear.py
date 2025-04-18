@@ -511,7 +511,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "ormask",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "ored mask flags for object",
