@@ -45,16 +45,16 @@ When run through the `~lsst.drp.tasks.reprocess_visit_image.ReprocessVisitImageT
 
 In this mode, the inputs are:
 
-- a single-exposure, single-detector post-ISR image (``postISRCCD``, by default)
-- a ``visit``\-level catalog with per-``detector`` rows (``finalVisitSummary``) that aggregates most calibration model objects.
-- two background models (`calexpBackground``, ``skyCorr``), to be concatenated to form the full background model.
+- a single-exposure, single-detector post-ISR image (``post_isr_image``, by default)
+- a ``visit``\-level catalog with per-``detector`` rows (``visit_summary``) that aggregates most calibration model objects.
+- two background models (``preliminary_visit_image_background``, ``skyCorr``), to be concatenated to form the full background model.
 
 The outputs are:
 
-- the final image, including all calibration models (``pvi``)
-- the catalog of measurements (``sources_detector``)
-- a separate catalog of deblended footprints (``sources_detector_footprints``)
-- a final background model, including both the input background models and a small adjustment that uses the new detections for masking (``pvi_background``).
+- the final image, including all calibration models (``visit_image``)
+- the catalog of measurements (``source_unstandardized``)
+- a separate catalog of deblended footprints (``source_footprints``)
+- a final background model, including both the input background models and a small adjustment that uses the new detections for masking (``visit_image_background``).
 
 .. _lsst.drp.tasks.reprocess_visit_image.ReprocessVisitImageTask-subtasks:
 
