@@ -217,7 +217,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         inputs = butlerQC.get(inputRefs)
 
-        mcc = inputs['exposure']
+        mcc = inputs["exposure"]
         stitched_coadd = mcc.stitch()
         exposure = stitched_coadd.asExposure()
         background = inputs.pop("background")
