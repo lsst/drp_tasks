@@ -349,7 +349,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
 
         return pipeBase.Struct(measCat=measCat)
 
-    run.__doc__ = _run.__doc__
+    run.__doc__ = "DEPR:" + _run.__doc__
 
     def _attachScarletFootprints(self, catalog, modelData, exposure, band):
         """Attach scarlet models as HeavyFootprints"""
