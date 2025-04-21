@@ -309,8 +309,6 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
 
         return self._run(**kwargs)
 
-    self.run.__doc__ = self._run.__doc__
-
     def _run(self, *, measCat, exposure, refCat, refWcs, exposureId=None):
         """Perform forced measurement on a single exposure.
 
@@ -350,6 +348,8 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         self.catalogCalculation.run(measCat)
 
         return pipeBase.Struct(measCat=measCat)
+
+    run.__doc__ = _run.__doc__
 
     def _attachScarletFootprints(self, catalog, modelData, exposure, band):
         """Attach scarlet models as HeavyFootprints"""
