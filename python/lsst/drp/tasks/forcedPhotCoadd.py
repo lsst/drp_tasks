@@ -294,7 +294,24 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
                 srcRecord.setFootprint(fpRecord.getFootprint())
         return measCat, id_generator.catalog_id
 
-    def run(self, measCat, exposure, refCat, refWcs, exposureId=None):
+    def run(self, *args, **kwargs):
+        if len(args) > 0:
+            print("warni")
+        arg_map = {
+            0: "measCat",
+            1: "exposure",
+            2: "refCat",
+            3: "refWcs",
+            4: "exposureId",
+        }
+        for idx, arg in enumerate(args):
+            kwargs[arg_map[idx]] = arg
+
+        return self._run(**kwargs)
+
+    self.run.__doc__ = self._run.__doc__
+
+    def _run(self, *, measCat, exposure, refCat, refWcs, exposureId=None):
         """Perform forced measurement on a single exposure.
 
         Parameters
