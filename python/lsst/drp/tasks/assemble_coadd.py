@@ -35,7 +35,6 @@ import warnings
 
 import lsstDebug
 import numpy
-from deprecated.sphinx import deprecated
 
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
@@ -1081,59 +1080,6 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
 
         if nImage is not None:
             nImage.array[:, :] = stacker.n_image
-
-    # TODO: Remove this deprecated method in DM-48771.
-    @deprecated(
-        reason="This method is converted to a utility function with the same "
-        "name in lsst.pipe.tasks.coaddBase and will be removed after v29.",
-        version="v29.0",
-        category=FutureWarning,
-    )
-    def removeMaskPlanes(self, maskedImage):
-        """Unset the mask of an image for mask planes specified in the config.
-
-        Parameters
-        ----------
-        maskedImage : `lsst.afw.image.MaskedImage`
-            The masked image to be modified.
-
-        Raises
-        ------
-        InvalidParameterError
-            Raised if no mask plane with that name was found.
-        """
-        mask = maskedImage.getMask()
-        removeMaskPlanes(mask, self.config.removeMaskPlanes, logger=self.log)
-
-    # TODO: Remove this deprecated method in DM-48771.
-    @staticmethod
-    @deprecated(
-        reason="This method is converted to a utility function with the same "
-        "name in lsst.pipe.tasks.coaddBase and will be removed after v29.",
-        version="v29.0",
-        category=FutureWarning,
-    )
-    def setRejectedMaskMapping(statsCtrl):
-        """Map certain mask planes of the warps to new planes for the coadd.
-
-        If a pixel is rejected due to a mask value other than EDGE, NO_DATA,
-        or CLIPPED, set it to REJECTED on the coadd.
-        If a pixel is rejected due to EDGE, set the coadd pixel to SENSOR_EDGE.
-        If a pixel is rejected due to CLIPPED, set the coadd pixel to CLIPPED.
-
-        Parameters
-        ----------
-        statsCtrl : `lsst.afw.math.StatisticsControl`
-            Statistics control object for coadd.
-
-        Returns
-        -------
-        maskMap : `list` of `tuple` of `int`
-            A list of mappings of mask planes of the warped exposures to
-            mask planes of the coadd.
-        """
-        maskMap = setRejectedMaskMapping(statsCtrl)
-        return maskMap
 
     def applyAltMaskPlanes(self, mask, altMaskSpans):
         """Apply in place alt mask formatted as SpanSets to a mask.
