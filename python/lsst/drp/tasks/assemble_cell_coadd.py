@@ -312,10 +312,13 @@ class AssembleCellCoaddTask(PipelineTask):
         grid : `~lsst.cell_coadds.UniformGrid`
             A UniformGrid object.
         """
-        # grid has no notion about border or inner/outer boundaries.
-        # So we have to clip the outermost border when constructing the grid.
-        grid_bbox = skyInfo.patchInfo.outer_bbox.erodedBy(skyInfo.patchInfo.getCellBorder())
-        grid = UniformGrid.from_bbox_cell_size(grid_bbox, skyInfo.patchInfo.getCellInnerDimensions())
+        padding = skyInfo.patchInfo.getCellBorder()
+        grid_bbox = skyInfo.patchInfo.outer_bbox.erodedBy(padding)
+        grid = UniformGrid.from_bbox_cell_size(
+            grid_bbox,
+            skyInfo.patchInfo.getCellInnerDimensions(),
+            padding=padding,
+        )
         return grid
 
     def _construct_grid_container(self, skyInfo, statsCtrl):
