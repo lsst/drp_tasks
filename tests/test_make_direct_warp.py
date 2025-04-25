@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import copy
 import unittest
-import warnings
 from typing import Self, Type
 
 import numpy as np
@@ -38,7 +37,6 @@ from lsst.daf.butler import DataCoordinate, DimensionUniverse
 from lsst.drp.tasks.make_direct_warp import MakeDirectWarpConfig, MakeDirectWarpTask, WarpDetectorInputs
 from lsst.pipe.base import InMemoryDatasetHandle
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
-from lsst.pipe.tasks.makeWarp import MakeWarpTask
 
 
 class MakeWarpTestCase(lsst.utils.tests.TestCase):
@@ -231,53 +229,6 @@ class MakeWarpTestCase(lsst.utils.tests.TestCase):
         # Ensure that mfrac has pixels between 0 and 1
         self.assertTrue(np.nanmax(mfrac.array) <= 1)
         self.assertTrue(np.nanmin(mfrac.array) >= 0)
-
-    def test_compare_warps(self):
-        """Test that the warp from MakeWarpTask and MakeDirectWarpTask agree
-        when makePsfMatched is True in MakeWarpConfig.
-        """
-        dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
-        config = copy.copy(self.config)
-
-        dataIdList = [
-            {
-                "visit": self.visit,
-                "detector": self.detector,
-            }
-        ]
-
-        # TODO: Remove this entire test in DM-47916. We retain it for now.
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=FutureWarning)
-            makeWarpConfig = MakeWarpTask.ConfigClass()
-            makeWarpConfig.makePsfMatched = True
-            makeWarpConfig.makeDirect = True
-            makeWarp = MakeWarpTask(config=makeWarpConfig)
-            result0 = makeWarp.run(
-                calExpList=[self.exposure],
-                ccdIdList=[self.detector],
-                skyInfo=self.skyInfo,
-                visitId=self.visit,
-                dataIdList=dataIdList,
-            )
-        self.assertIsNotNone(result0.exposures["direct"])
-        self.assertIsNotNone(result0.exposures["psfMatched"])
-
-        config.doPreWarpInterpolation = False
-        config.doSelectPreWarp = False
-        config.useVisitSummaryPsf = False
-        task = MakeDirectWarpTask(config=config)
-        warp_detector_inputs = {
-            dataRef.dataId.detector.id: WarpDetectorInputs(
-                exposure_or_handle=dataRef,
-                data_id=dataRef.dataId,
-            )
-        }
-
-        result1 = task.run(warp_detector_inputs, sky_info=copy.deepcopy(self.skyInfo), visit_summary=None)
-        warp0 = result0.exposures["direct"]
-        warp1 = result1.warp[warp0.getBBox()]
-        self.assertMaskedImagesAlmostEqual(warp0.maskedImage, warp1.maskedImage, rtol=3e-7, atol=6e-6)
 
     def make_backgroundList(self):
         """Obtain a BackgroundList for the image."""
