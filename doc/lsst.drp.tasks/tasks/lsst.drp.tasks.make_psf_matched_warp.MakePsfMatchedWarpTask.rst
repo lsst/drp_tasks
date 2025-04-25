@@ -1,4 +1,4 @@
-.. lsst-task-topic:: lsst.pipe.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
+.. lsst-task-topic:: lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
 
 ######################
 MakePsfMatchedWarpTask
@@ -13,26 +13,26 @@ The subtask `~lsst.ip.diffim.modelPsfMatch.ModelPsfMatchTask` is responsible for
 The optimal configuration depends on aspects of dataset: the pixel scale, average PSF FWHM and dimensions of the PSF kernel.
 These configs include the requested model PSF, the matching kernel size, padding of the science PSF thumbnail and spatial sampling frequency of the PSF.
 
-.. _lsst.pipe.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask-api:
+.. _lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask-api:
 
 Python API summary
 ==================
 
-.. lsst-task-api-summary:: lsst.pipe.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
+.. lsst-task-api-summary:: lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
 
-.. _lsst.pipe.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask-subtasks:
+.. _lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask-subtasks:
 
 Retargetable subtasks
 =====================
 
-.. lsst-task-config-subtasks:: lsst.pipe.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
+.. lsst-task-config-subtasks:: lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
 
-.. _lsst.pipe.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask-configs:
+.. _lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask-configs:
 
 Configuration fields
 ====================
 
-.. lsst-task-config-fields:: lsst.pipe.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
+.. lsst-task-config-fields:: lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
 
 In Depth
 ========
