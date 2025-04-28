@@ -52,6 +52,18 @@ class ForcedPhotCoaddConnections(
         storageClass="ExposureF",
         dimensions=["band", "skymap", "tract", "patch"],
     )
+    exposure_cell = pipeBase.connectionTypes.Input(
+        doc="Input cell-based coadd exposure to perform photometry on.",
+        name="{inputCoaddName}CoaddCell",
+        storageClass="MultipleCellCoadd",
+        dimensions=["band", "skymap", "tract", "patch"],
+    )
+    background = pipeBase.connectionTypes.Input(
+        doc="Background to subtract from the exposure_cell.",
+        name="{inputCoaddName}Coadd_calexp_background",
+        storageClass="Background",
+        dimensions=["band", "skymap", "tract", "patch"],
+    )
     refCat = pipeBase.connectionTypes.Input(
         doc="Catalog of shapes and positions at which to force photometry.",
         name="{inputCoaddName}Coadd_ref",
@@ -91,10 +103,18 @@ class ForcedPhotCoaddConnections(
 
     def __init__(self, *, config=None):
         super().__init__(config=config)
+        if config is None:
+            return
+
         if config.footprintDatasetName != "ScarletModelData":
             self.inputs.remove("scarletModels")
         if config.footprintDatasetName != "DeblendedFlux":
             self.inputs.remove("footprintCatInBand")
+        if config.useCellCoadds:
+            self.inputs.remove("exposure")
+        else:
+            self.inputs.remove("exposure_cell")
+            self.inputs.remove("background")
 
 
 class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=ForcedPhotCoaddConnections):
@@ -105,6 +125,11 @@ class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=For
         doc="coadd name: typically one of deep or goodSeeing",
         dtype=str,
         default="deep",
+    )
+    useCellCoadds = lsst.pex.config.Field(
+        doc="Use cell-based coadds for forced measurements?",
+        dtype=bool,
+        default=False,
     )
     doApCorr = lsst.pex.config.Field(
         dtype=bool, default=True, doc="Run subtask to apply aperture corrections"
@@ -221,13 +246,24 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
 
         refCat = inputs.pop("refCat")
         refWcs = inputs.pop("refWcs")
-        exposure = inputs.pop("exposure")
-        apCorrMap = exposure.getInfo().getApCorrMap()
+
+        if self.config.useCellCoadds:
+            multiple_cell_coadd = inputs.pop("exposure_cell")
+            stitched_coadd = multiple_cell_coadd.stitch()
+            exposure = stitched_coadd.asExposure()
+            background = inputs.pop("background")
+            exposure.image -= background.getImage()
+            apCorrMap = stitched_coadd.ap_corr_map
+            dataId = inputRefs.exposure_cell.dataId
+        else:
+            exposure = inputs.pop("exposure")
+            apCorrMap = exposure.getInfo().getApCorrMap()
+            dataId = inputRefs.exposure.dataId
 
         assert not inputs, "runQuantum got extra inputs."
 
         measCat, exposureId = self.generateMeasCat(
-            dataId=inputRefs.exposure.dataId,
+            dataId=dataId,
             exposure=exposure,
             refCat=refCat,
             refCatInBand=refCatInBand,
