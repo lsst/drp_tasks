@@ -594,8 +594,8 @@ class AssembleCellCoaddTask(PipelineTask):
                 psf_stacker = psf_gc[cellInfo.index]
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
 
-                if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
-                    ap_corr_gc[cellInfo.index].add(ap_corr_map, weight=weight)
+                # if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
+                    # ap_corr_gc[cellInfo.index].add(ap_corr_map, weight=weight)
 
             del warp
 
@@ -611,10 +611,10 @@ class AssembleCellCoaddTask(PipelineTask):
             gc[cellInfo.index].fill_stacked_masked_image(cell_masked_image)
             psf_gc[cellInfo.index].fill_stacked_masked_image(psf_masked_image)
 
-            if ap_corr_gc[cellInfo.index].ap_corr_names:
-                ap_corr_map = ap_corr_gc[cellInfo.index].final_ap_corr_map
-            else:
-                ap_corr_map = None
+            # if ap_corr_gc[cellInfo.index].ap_corr_names:
+                # ap_corr_map = ap_corr_gc[cellInfo.index].final_ap_corr_map
+            # else:
+                # ap_corr_map = None
 
             # Post-process the coadd before converting to new data structures.
             if self.config.do_interpolate_coadd:
@@ -640,7 +640,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 inputs=observation_identifiers_gc[cellInfo.index],
                 common=self.common,
                 identifiers=identifiers,
-                aperture_correction_map=ap_corr_map,
+                # aperture_correction_map=ap_corr_map,
             )
             # TODO: Attach transmission curve when they become available.
             cells.append(singleCellCoadd)
