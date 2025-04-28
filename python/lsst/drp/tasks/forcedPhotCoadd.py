@@ -218,15 +218,28 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
             footprintData = inputs.pop("footprintCatIndBand")
         else:
             footprintData = None
-        inputs["measCat"], inputs["exposureId"] = self.generateMeasCat(
+
+        refCat = inputs.pop("refCat")
+        refWcs = inputs.pop("refWcs")
+        exposure = inputs.pop("exposure")
+
+        assert not inputs, "runQuantum got extra inputs."
+
+        measCat, exposureId = self.generateMeasCat(
             dataId=inputRefs.exposure.dataId,
-            exposure=inputs["exposure"],
-            refCat=inputs["refCat"],
+            exposure=exposure,
+            refCat=refCat,
             refCatInBand=refCatInBand,
-            refWcs=inputs["refWcs"],
+            refWcs=refWcs,
             footprintData=footprintData,
         )
-        outputs = self.run(**inputs)
+        outputs = self.run(
+            measCat=measCat,
+            exposure=exposure,
+            refCat=refCat,
+            refWcs=refWcs,
+            exposureId=exposureId,
+        )
         # Strip HeavyFootprints to save space on disk
         if self.config.footprintDatasetName == "ScarletModelData" and self.config.doStripFootprints:
             sources = outputs.measCat
