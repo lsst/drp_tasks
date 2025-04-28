@@ -340,6 +340,12 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         # evaluate it at all, and there's no *good* reason for any algorithm to
         # evaluate it more than once.
         exposure.psf.setCacheCapacity(2 * len(self.config.measurement.plugins.names))
+        # Some mask planes may not be defined on the coadds always.
+        # We add the mask planes, which is a no-op if already defined.
+        for maskPlane in self.config.measurement.plugins["base_PixelFlags"].masksFpAnywhere:
+            exposure.mask.addMaskPlane(maskPlane)
+        for maskPlane in self.config.measurement.plugins["base_PixelFlags"].masksFpCenter:
+            exposure.mask.addMaskPlane(maskPlane)
         self.measurement.run(measCat, exposure, refCat, refWcs, exposureId=exposureId)
         if self.config.doApCorr:
             self.applyApCorr.run(catalog=measCat, apCorrMap=exposure.getInfo().getApCorrMap())
