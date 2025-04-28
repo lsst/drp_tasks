@@ -219,12 +219,12 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         else:
             footprintData = None
         inputs["measCat"], inputs["exposureId"] = self.generateMeasCat(
-            inputRefs.exposure.dataId,
-            inputs["exposure"],
-            inputs["refCat"],
-            refCatInBand,
-            inputs["refWcs"],
-            footprintData,
+            dataId=inputRefs.exposure.dataId,
+            exposure=inputs["exposure"],
+            refCat=inputs["refCat"],
+            refCatInBand=refCatInBand,
+            refWcs=inputs["refWcs"],
+            footprintData=footprintData,
         )
         outputs = self.run(**inputs)
         # Strip HeavyFootprints to save space on disk
