@@ -821,7 +821,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             verbose = 2
 
         # Set up the WCS-fitting class using the results of the FOF associator
-        fixMaps = ",".join([f"HSC/{i}/poly" for i in exposureInfo.detectors])
+        if self.config.useInputCameraModel:
+            fixMaps = ",".join(inputCameraModel.keys())
+        else:
+            fixMaps = ""
         wcsf = wcsfit.WCSFit(
             fields,
             instruments,
@@ -837,7 +840,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             refSysErr=self.config.referenceSystematicError,
             usePM=self.config.fitProperMotion,
             verbose=verbose,
-            fixMaps=(fixMaps if self.config.useInputCameraModel else ""),
+            fixMaps=fixMaps,
         )
 
         # Add the science and reference sources
