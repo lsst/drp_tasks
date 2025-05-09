@@ -561,6 +561,10 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
+                if weight == 0:
+                    self.log.info("Zero weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index)
+                    continue
+
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warpRef.dataId,
                     backup_detector=ccd_row["ccd"],
