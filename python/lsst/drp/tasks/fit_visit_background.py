@@ -426,8 +426,8 @@ class FitVisitBackgroundTask(PipelineTask):
     Notes
     -----
     This task requires input `lsst.afw.math.BackgroundList` instances in which
-    all layers (i.e. from different rounds of subtraction) use the same bin
-    size.
+    all layers (i.e. from different rounds of subtraction) either use the same
+    bin size or have a single bin.
     """
 
     ConfigClass: ClassVar[type[FitVisitBackgroundConfig]] = FitVisitBackgroundConfig
@@ -589,16 +589,22 @@ class FitVisitBackgroundTask(PipelineTask):
             focal plane coordinates.
         """
         sum_image: MaskedImageF | None = None
+        sum_constant_value: float = 0.0
+        sum_constant_variance: float = 0.0
+        bg_for_coordinates: BackgroundMI | None = None
         for bg, *_ in bg_list:
             layer_image = bg.getStatsImage()
-            if sum_image is not None:
+            if layer_image.getBBox().getArea() == 1:
+                sum_constant_value += layer_image.image.array[0, 0]
+                sum_constant_variance += layer_image.variance.array[0, 0]
+            elif sum_image is not None:
                 sum_image += layer_image
             else:
                 sum_image = layer_image.clone()
-        # We intentionally use the loop variable because any of the loop
-        # iterations have the same detector and stats-image bboxes, which is
-        # all that we care about.
-        x_fp, y_fp = self._make_bin_grid_fp_coordinates(detector, bg)
+                bg_for_coordinates = bg
+        sum_image.image.array[:, :] += sum_constant_value
+        sum_image.variance.array[:, :] += sum_constant_variance
+        x_fp, y_fp = self._make_bin_grid_fp_coordinates(detector, bg_for_coordinates)
         z = sum_image.image.array.ravel().astype(float)
         w = sum_image.variance.array.ravel().astype(float) ** (-0.5)
         return FitInputData(x=x_fp, y=y_fp, z=z, w=w).masked(np.logical_and(w > 0.0, np.isfinite(z)))
