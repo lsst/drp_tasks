@@ -35,10 +35,16 @@ import numpy as np
 import lsst.geom as geom
 from lsst.afw.geom import Polygon, SinglePolygonException, makeWcsPairTransform
 from lsst.coadd.utils import copyGoodPixels
-from lsst.ip.diffim import ModelPsfMatchTask
+from lsst.ip.diffim import ModelPsfMatchTask, PsfComputeShapeError, WarpedPsfTransformTooBigError
 from lsst.meas.algorithms import GaussianPsfFactory, WarpedPsf
 from lsst.pex.config import ConfigurableField
-from lsst.pipe.base import PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
+from lsst.pipe.base import (
+    AnnotatedPartialOutputsError,
+    PipelineTask,
+    PipelineTaskConfig,
+    PipelineTaskConnections,
+    Struct,
+)
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import growValidPolygons, makeSkyInfo
 from lsst.skymap import BaseSkyMap
@@ -222,7 +228,16 @@ class MakePsfMatchedWarpTask(PipelineTask):
                 warnings.filterwarnings("ignore", message="divide by zero", category=RuntimeWarning)
                 temp_warp.variance.array /= ccd_mask_array
 
-            temp_psf_matched = self.psfMatch.run(temp_warp, modelPsf).psfMatchedExposure
+            try:
+                temp_psf_matched = self.psfMatch.run(temp_warp, modelPsf).psfMatchedExposure
+            except (WarpedPsfTransformTooBigError, PsfComputeShapeError) as e:
+                error = AnnotatedPartialOutputsError(
+                    e,
+                    self,
+                    temp_warp,
+                    log=self.log,
+                )
+                raise error from e
             del temp_warp
 
             # Set pixels outside the intersection polygon to NO_DATA.
