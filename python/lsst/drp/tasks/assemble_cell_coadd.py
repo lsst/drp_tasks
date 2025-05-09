@@ -120,7 +120,7 @@ class AssembleCellCoaddConnections(
 
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
-    do_interpolate_coadd = Field[bool](doc="Interpolate over pixels with NO_DATA mask set?", default=False)
+    do_interpolate_coadd = Field[bool](doc="Interpolate over pixels with NO_DATA mask set?", default=True)
     interpolate_coadd = ConfigurableField(
         target=InterpImageTask,
         doc="Task to interpolate (and extrapolate) over pixels with NO_DATA mask on cell coadds",
@@ -558,6 +558,12 @@ class AssembleCellCoaddTask(PipelineTask):
                 if not np.isfinite(weight):
                     self.log.warn(
                         "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
+                    )
+                    continue
+
+                if weight == 0:
+                    self.log.info(
+                        "Zero weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
                     )
                     continue
 
