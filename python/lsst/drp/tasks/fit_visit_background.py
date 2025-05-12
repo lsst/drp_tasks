@@ -377,12 +377,12 @@ class FitVisitBackgroundConfig(PipelineTaskConfig, pipelineConnections=FitVisitB
     x_order = Field[int](
         "Chebyshev polynomial order in focal-plane X.",
         dtype=int,
-        default=4,
+        default=6,
     )
     y_order = Field[int](
         "Chebyshev polynomial order in focal-plane Y.",
         dtype=int,
-        default=4,
+        default=6,
     )
     fit_detector_pistons = Field[bool](
         "If True, fit a constant to each detector in instead of the zeroth-order Chebyshev term.",
