@@ -348,7 +348,7 @@ class VisitBackgroundModel(pydantic.BaseModel):
 
 
 class FitVisitBackgroundConnections(PipelineTaskConnections, dimensions=["visit"]):
-    camera = cT.Input(
+    camera = cT.PrerequisiteInput(
         "camera",
         storageClass="Camera",
         dimensions=["instrument"],
