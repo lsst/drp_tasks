@@ -520,7 +520,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "ormask",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "ored mask flags for object",
@@ -539,10 +539,10 @@ class MetadetectionShearTask(PipelineTask):
             ]
         )
 
-        for b in self.config.required_bands:
+        for b in config.required_bands:
             pa_schema = pa_schema.append(
                             pa.field(
-                                "wmom_band_flux_flag_%s" % (b),
+                                "wmom_band_flux_flags_%s" % (b),
                                 pa.uint32(),
                                 nullable=False,
                                 metadata={
@@ -720,6 +720,7 @@ class MetadetectionShearTask(PipelineTask):
             res=res,
             meas_type=mdet_config["meas_type"],
             mask_frac=mask_frac,
+            bands=self.config.required_bands,
             full_output=True,
         )
 
@@ -835,6 +836,7 @@ def _make_comb_data(
     res,
     meas_type,
     mask_frac,
+    bands,
     full_output=False,
 ):
     import esutil as eu
@@ -854,7 +856,7 @@ def _make_comb_data(
         # ("wmom_band_flux_err_1", "f4"),
     ]
 
-    for b in self.config.required_bands:
+    for b in bands:
         copy_dt.append(("wmom_band_flux_flags_%s" % (b), "i4"))
         copy_dt.append(("wmom_band_flux_%s" % (b), "f4"))
         copy_dt.append(("wmom_band_flux_err_%s" % (b), "f4"))
@@ -895,7 +897,7 @@ def _make_comb_data(
             for i, b in enumerate(bands):
                 newdata["wmom_band_flux_flags_%s" % (b)] = newdata["wmom_band_flux_flags"][:, i]
                 newdata["wmom_band_flux_%s" % (b)] = newdata["wmom_band_flux"][:, i]
-                newdata["wmom_band_flux_err_%s" % (b)] = newdata["wmom_band_err_flags"][:, i]
+                newdata["wmom_band_flux_err_%s" % (b)] = newdata["wmom_band_flux_flags"][:, i]
 
             newdata["tract"] = idinfo.tract
             newdata["patch_x"] = idinfo.patch.x
