@@ -192,6 +192,15 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
+                    "shear_type",
+                    pa.string(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Type of artificial shear applied to image",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
                     "tract",
                     pa.uint64(),
                     nullable=False,
