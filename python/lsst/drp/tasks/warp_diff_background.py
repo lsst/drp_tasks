@@ -33,7 +33,8 @@ import astropy.table
 import numpy as np
 
 import lsst.afw.math
-from lsst.afw.geom import Polygon, SinglePolygonException, makeWcsPairTransform
+from lsst.afw.cameraGeom import FOCAL_PLANE, PIXELS, Camera, Detector
+from lsst.afw.geom import Polygon, SinglePolygonException, TransformPoint2ToPoint2, makeWcsPairTransform
 from lsst.afw.image import ExposureF, Mask
 from lsst.afw.table import ExposureCatalog, ExposureRecord
 from lsst.daf.butler import DeferredDatasetHandle
@@ -51,14 +52,17 @@ from lsst.pipe.base import (
 from lsst.pipe.base import connectionTypes as cT
 from lsst.skymap import BaseSkyMap, PatchInfo
 
-type DiffTable = np.ndarray
-type VarianceTable = np.ndarray
+
+@dataclasses.dataclass
+class WarpDetectorInfo:
+    polygon: Polygon
+    patch_to_focal_plane: TransformPoint2ToPoint2
 
 
 @dataclasses.dataclass
 class WarpData:
     visit_id: int
-    detectors: Mapping[int, Polygon]
+    detectors: Mapping[int, WarpDetectorInfo]
     exposure: ExposureF
 
     @classmethod
@@ -67,7 +71,7 @@ class WarpData:
         warp_handle: DeferredDatasetHandle,
         correction_warp_handle: DeferredDatasetHandle,
         patch_info: PatchInfo,
-        detectors: Mapping[int, Polygon],
+        detectors: Mapping[int, WarpDetectorInfo],
     ) -> WarpData:
         bbox = patch_info.getInnerBBox()
         exposure = warp_handle.get()[bbox]
@@ -77,6 +81,14 @@ class WarpData:
             exposure=exposure,
             detectors=detectors,
         )
+
+
+@dataclasses.dataclass
+class DiffDetectorArrays:
+    detector_id: np.ndarray
+    x_camera: np.ndarray
+    y_camera: np.ndarray
+    mask: np.ndarray
 
 
 class DiffWarpBackgroundsConnections(PipelineTaskConnections, dimensions=["patch", "band"]):
@@ -109,7 +121,13 @@ class DiffWarpBackgroundsConnections(PipelineTaskConnections, dimensions=["patch
         storageClass="SkyMap",
         dimensions=["skymap"],
     )
-    diffs = cT.Output("warp_diff_binned", storageClass="ArrowAstropy", dimensions=["patch", "band"])
+    camera = cT.PrerequisiteInput(
+        "camera",
+        storageClass="Camera",
+        dimensions=["instrument"],
+        isCalibration=True,
+    )
+    diff_table = cT.Output("warp_diff_binned", storageClass="ArrowAstropy", dimensions=["patch", "band"])
 
     def adjustQuantum(self, inputs, outputs, label, data_id):
         # Trim out inputs for which we don't have some other input for a visit.
@@ -161,6 +179,7 @@ class DiffWarpBackgroundsConfig(PipelineTaskConfig, pipelineConnections=DiffWarp
 
 
 class DiffWarpBackgroundsTask(PipelineTask):
+    _DefaultName: ClassVar[str] = "diffWarpBackgrounds"
     ConfigClass: ClassVar[type[DiffWarpBackgroundsConfig]] = DiffWarpBackgroundsConfig
     config: DiffWarpBackgroundsConfig
 
@@ -168,14 +187,16 @@ class DiffWarpBackgroundsTask(PipelineTask):
     def make_diff_table_dtype() -> np.dtype:
         return np.dtype(
             [
-                ("positive_visit", np.uint64),
-                ("negative_visit", np.uint64),
-                ("positive_detector", np.uint8),
-                ("negative_detector", np.uint8),
-                ("bin_patch_row", np.uint16),
-                ("bin_patch_column", np.uint16),
-                ("bin_tract_x", np.float64),
-                ("bin_tract_y", np.float64),
+                ("positive_visit_id", np.uint64),
+                ("negative_visit_id", np.uint64),
+                ("positive_detector_id", np.uint8),
+                ("negative_detector_id", np.uint8),
+                ("positive_x", np.float64),
+                ("positive_y", np.float64),
+                ("negative_x", np.float64),
+                ("negative_y", np.float64),
+                ("bin_row", np.uint16),
+                ("bin_column", np.uint16),
                 ("bin_value", np.float32),
                 ("bin_variance", np.float32),
             ]
@@ -184,7 +205,7 @@ class DiffWarpBackgroundsTask(PipelineTask):
     def __init__(self, *, config=None, log=None, initInputs=None, **kwargs):
         super().__init__(config=config, log=log, initInputs=initInputs, **kwargs)
         self.diff_table_dtype = self.make_diff_table_dtype()
-        self.stats_flagg = getattr(lsst.afw.math, self.config.statistic)
+        self.stats_flag = getattr(lsst.afw.math, self.config.statistic)
         self.stats_ctrl = lsst.afw.math.StatisticsControl()
         self.stats_ctrl.setAndMask(Mask.getPlaneBitMask(self.config.bad_mask_planes))
         self.stats_ctrl.setNanSafe(True)
@@ -202,11 +223,13 @@ class DiffWarpBackgroundsTask(PipelineTask):
             handle.dataId["visit"]: handle for handle in butlerQC.get(inputRefs.correction_warps)
         }
         visit_summaries = {ref.dataId["visit"]: butlerQC.get(ref) for ref in inputRefs.visit_summaries}
+        camera = butlerQC.get(inputRefs.camera)
         outputs = self.run(
             patch_info=patch_info,
             warp_handles=warp_handles,
             correction_warp_handles=correction_warp_handles,
             visit_summaries=visit_summaries,
+            camera=camera,
         )
         butlerQC.put(outputs, outputRefs)
 
@@ -217,6 +240,7 @@ class DiffWarpBackgroundsTask(PipelineTask):
         warp_handles: Mapping[int, DeferredDatasetHandle],
         correction_warp_handles: Mapping[int, DeferredDatasetHandle],
         visit_summaries: Mapping[int, ExposureCatalog],
+        camera: Camera,
     ) -> Struct:
         self.log.info("Computing detector polygons for %s visits.", len(visit_summaries))
         # A dictionary mapping visit ID to a nested mapping from detector ID to
@@ -225,49 +249,74 @@ class DiffWarpBackgroundsTask(PipelineTask):
         # this dictionary as we process them.
         to_do: dict[int, dict[int, Polygon]] = {}
         for visit_id, visit_summary in visit_summaries.items():
-            visit_polygons = {
-                record.getId(): polygon
+            visit_detector_info = {
+                record.getId(): detector_info
                 for record in visit_summary
-                if (polygon := self._make_detector_patch_polygon(record, patch_info)) is not None
+                if (detector_info := self._make_detector_info(record, patch_info, camera[record.getId()]))
+                is not None
             }
-            if visit_polygons:
-                to_do[visit_id] = visit_polygons
+            if visit_detector_info:
+                to_do[visit_id] = visit_detector_info
         self.log.info("Selecting up to %s reference visits.", self.config.n_reference_visits)
         reference_visits = self._select_reference_visits(to_do)
+        self.log.info("Loading %s reference visit warps.", len(reference_visits))
         reference_warps = [
             WarpData.load_and_crop(
-                warp_handles[visit_id], correction_warp_handles[visit_id], patch_info, to_do.pop(visit_id)
+                warp_handles[visit_id],
+                correction_warp_handles[visit_id],
+                patch_info,
+                to_do.pop(visit_id),
             )
             for visit_id in reference_visits
         ]
-        diff_table_chunks: list[DiffTable] = []
+        self.log.info(
+            "Diffing %s reference visit pairs.", len(reference_visits) * (len(reference_visits) - 1) / 2
+        )
+        diff_table_chunks: list[np.ndarray] = []
         for positive, negative in itertools.combinations(reference_warps.items(), r=2):
             diff_table_chunks.append(self._compute_bin_diffs(positive, negative))
-        for visit_id, visit_polygons in sorted(to_do.items()):  # sort just for determinism
-            new_warp_data = WarpData.load_and_crop(
-                warp_handles[visit_id], correction_warp_handles[visit_id], patch_info, to_do.pop(visit_id)
+        self.log.info("Diffing reference visits with %s other visits.", len(to_do))
+        for visit_id in sorted(to_do.keys()):  # sort just for determinism
+            positive = WarpData.load_and_crop(
+                warp_handles[visit_id],
+                correction_warp_handles[visit_id],
+                patch_info,
+                to_do.pop(visit_id),
             )
-            for reference in reference_warps:
-                diff_table_chunks.append(self._compute_bin_diffs(new_warp_data, reference))
-        return Struct(diff_table=astropy.table.Table(np.vstack(diff_table_chunks)))
+            for negative in reference_warps:
+                diff_table_chunks.append(self._compute_bin_diffs(positive, negative))
+        return Struct(
+            diff_table=astropy.table.Table(np.vstack(diff_table_chunks)),
+        )
 
-    def _make_detector_patch_polygon(self, record: ExposureRecord, patch_info: PatchInfo) -> Polygon | None:
+    def _make_detector_info(
+        self, record: ExposureRecord, patch_info: PatchInfo, detector: Detector
+    ) -> WarpDetectorInfo | None:
         detector_to_patch = makeWcsPairTransform(record.wcs, patch_info.getWcs())
         if (polygon := record.validPolygon) is None:
             polygon = Polygon(Box2D(record.getBBox()))
         try:
-            return polygon.transform(detector_to_patch).intersectionSingle(Box2D(patch_info.getInnerBBox()))
+            patch_polygon = polygon.transform(detector_to_patch).intersectionSingle(
+                Box2D(patch_info.getInnerBBox())
+            )
         except SinglePolygonException:
             return None
+        return WarpDetectorInfo(
+            polygon=patch_polygon,
+            patch_to_focal_plane=detector_to_patch.inverted().then(
+                detector.getTransform(PIXELS, FOCAL_PLANE)
+            ),
+        )
 
-    def _select_reference_visits(self, polygons: Mapping[int, Mapping[int, Polygon]]) -> list[int]:
-        if len(polygons) <= self.config.n_reference_visits:
-            return list(polygons.keys())
+    def _select_reference_visits(self, visits: Mapping[int, Mapping[int, WarpDetectorInfo]]) -> list[int]:
+        if len(visits) <= self.config.n_reference_visits:
+            return list(visits.keys())
         coverage = {
             visit_id: {
-                detector_id: polygon.calculateArea() for detector_id, polygon in detector_polygons.items()
+                detector_id: detector_info.calculateArea()
+                for detector_id, detector_info in visit_detector_info.items()
             }
-            for visit_id, detector_polygons in polygons.items()
+            for visit_id, visit_detector_info in visits.items()
         }
         target_area = 4 * self.config.bin_size**2
 
@@ -293,7 +342,7 @@ class DiffWarpBackgroundsTask(PipelineTask):
                     other_visit_coverage.pop(detector_id, None)
         return reference_visits
 
-    def _compute_bin_diffs(self, positive: WarpData, negative: WarpData) -> DiffTable:
+    def _compute_bin_diffs(self, positive: WarpData, negative: WarpData) -> np.ndarray:
         """Compute the piece of the diff table that corresponds on one pair of
         warps.
         """
@@ -311,29 +360,29 @@ class DiffWarpBackgroundsTask(PipelineTask):
         bkgd = lsst.afw.math.makeBackground(diff, bctrl)
         stats_image = bkgd.getStatsImage()
         result = np.zeros(nx * ny, dtype=self.diff_table_dtype)
-        result["positive_visit"] = positive.visit_id
-        result["negative_visit"] = negative.visit_id
-        result["bin_patch_row"] = np.arange(0, ny, dtype=result["bin_patch_row"].dtype)[:, np.newaxis]
-        result["bin_patch_column"] = np.arange(0, nx, dtype=result["bin_patch_row"].dtype)[np.newaxis, :]
-        result["bin_values"] = stats_image.image.array.ravel()
-        result["bin_variances"] = stats_image.variance.array.ravel()
+        result["positive_visit_id"] = positive.visit_id
+        result["negative_visit_id"] = negative.visit_id
+        result["bin_row"] = np.arange(0, ny, dtype=result["bin_row"].dtype)[:, np.newaxis]
+        result["bin_column"] = np.arange(0, nx, dtype=result["bin_row"].dtype)[np.newaxis, :]
+        result["bin_value"] = stats_image.image.array.ravel()
+        result["bin_variance"] = stats_image.variance.array.ravel()
         x_centers = bkgd.getBinCentersX()
         y_centers = bkgd.getBinCentersY()
-        result["bin_tract_x"] = x_centers[np.newaxis, :]
-        result["bin_tract_y"] = y_centers[:, np.newaxis]
         corners = self._make_bin_corners_array(Box2D(diff.getBBox()), x_centers, y_centers)
-        result["positive_detector"], positive_detector_mask = self._make_detector_id_array(
-            corners, positive.detectors
-        )
-        result["negative_detector"], negative_detector_mask = self._make_detector_id_array(
-            corners, negative.detectors
-        )
+        positive_detector = self._make_detector_arrays(corners, x_centers, y_centers, positive.detectors)
+        result["positive_detector_id"] = positive_detector.detector_id
+        result["positive_x"] = positive_detector.x_camera
+        result["positive_y"] = positive_detector.y_camera
+        negative_detector = self._make_detector_arrays(corners, x_centers, y_centers, negative.detectors)
+        result["negative_detector_id"] = negative_detector.detector_id
+        result["negative_x"] = negative_detector.x_camera
+        result["negative_y"] = negative_detector.y_camera
         mask = np.all(
             [
-                positive_detector_mask,
-                negative_detector_mask,
-                np.isfinite(result["bin_values"]),
-                result["bin_variances"] > 0,
+                positive_detector.mask,
+                negative_detector.mask,
+                np.isfinite(result["bin_value"]),
+                result["bin_variance"] > 0,
             ],
             axis=0,
         )
@@ -380,26 +429,29 @@ class DiffWarpBackgroundsTask(PipelineTask):
             ]
         )
 
-    def _make_detector_id_array(
-        self, corners: np.ndarray, detectors: Mapping[int, Polygon]
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Make an array of detector IDs from an array of bin corners.
+    def _make_detector_arrays(
+        self,
+        corners: np.ndarray,
+        x_patch: np.ndarray,
+        y_patch: np.ndarray,
+        detectors: Mapping[int, WarpDetectorInfo],
+    ) -> DiffDetectorArrays:
+        """Make arrays for columns in the diff table that must be computed
+        detector-by-detector.
 
         Parameters
         ----------
         corners : `numpy.ndarray`
             ``(4, ny, nx)`` array of bin corners.
-        detectors : `~collections.abc.Mapping` [ `int`,]\
-                `lsst.afw.geom.Polygon`]-
-            Mapping from detector ID to polygon.
+        TODO
+        detectors : `~collections.abc.Mapping` [ `int`, `WarpDetectorData` ]
+            Mapping from detector ID to struct that includes the polygon and
+            coordinate transfrom from patch to focal-plane coordinates.
 
         Returns
         -------
-        id_array : `numpy.ndarray`
-            Array of detector IDs with shape ``(ny, nx).``
-        mask : `numpy.ndarray
-            Boolean array that is `True` for all bins with one detector,
-            with shape ``(ny, nx)``.
+        detector_arrays : `DiffDetectorArrays`
+            Struct of per-detector arrays.
 
         Notes
         -----
@@ -408,10 +460,18 @@ class DiffWarpBackgroundsTask(PipelineTask):
         and optical distortion is very large (i.e. so detector boundaries
         are not straight lines in tract coordinates).
         """
+        x_patch_grid, y_patch_grid = np.meshgrid(x_patch, y_patch)
         id_array = np.zeros(corners.shape[1:], dtype=np.uint8)
+        x_camera = np.zeros(id_array.shape, dtype=np.float64)
+        y_camera = np.zeros(id_array.shape, dtype=np.float64)
         mask = np.zeros(id_array.shape, dtype=bool)
-        for detector_id, polygon in detectors.items():
-            detector_mask = np.all(polygon.contains(corners), axis=0)
+        for detector_id, detector_info in detectors.items():
+            detector_mask = np.all(detector_info.polygon.contains(corners), axis=0)
             id_array[detector_mask] = detector_id
+            xy = detector_info.patch_to_focal_plane.getMapping().applyForward(
+                np.vstack((x_patch_grid[detector_mask], y_patch_grid[detector_mask]))
+            )
+            x_camera[detector_mask] = xy[0]
+            y_camera[detector_mask] = xy[1]
             mask = np.logical_or(mask, detector_mask)
-        return id_array, mask
+        return DiffDetectorArrays(detector_id=id_array, x_camera=x_camera, y_camera=y_camera, mask=mask)
