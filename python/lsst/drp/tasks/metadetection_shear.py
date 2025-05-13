@@ -177,7 +177,7 @@ class MetadetectionShearTask(PipelineTask):
             Schema for the object catalog produced by this task.  Each field's
             metadata should include both a 'doc' entry and a 'unit' entry.
         """
-        return pa.schema(
+        pa_schema = pa.schema(
             [
                 pa.field(
                     "id",
@@ -401,33 +401,33 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-                pa.field(
-                    "wmom_band_flux_flags_1",
-                    pa.uint32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "wmom flux measurement flags for object in filter 1.",
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "wmom_band_flux_1",
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "wmom flux for object in filter 1.",
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "wmom_band_flux_err_1",
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "wmom flux uncertainty for object in filter 1.",
-                        "unit": "",
-                    },
-                ),
+                # pa.field(
+                #     "wmom_band_flux_flags_1",
+                #     pa.uint32(),
+                #     nullable=False,
+                #     metadata={
+                #         "doc": "wmom flux measurement flags for object in filter 1.",
+                #         "unit": "",
+                #     },
+                # ),
+                # pa.field(
+                #     "wmom_band_flux_1",
+                #     pa.float32(),
+                #     nullable=False,
+                #     metadata={
+                #         "doc": "wmom flux for object in filter 1.",
+                #         "unit": "",
+                #     },
+                # ),
+                # pa.field(
+                #     "wmom_band_flux_err_1",
+                #     pa.float32(),
+                #     nullable=False,
+                #     metadata={
+                #         "doc": "wmom flux uncertainty for object in filter 1.",
+                #         "unit": "",
+                #     },
+                # ),
                 pa.field(
                     "shear_bands",
                     pa.string(),
@@ -538,6 +538,43 @@ class MetadetectionShearTask(PipelineTask):
                 ),
             ]
         )
+
+        for b in self.config.required_bands:
+            pa_schema = pa_schema.append(
+                            pa.field(
+                                "wmom_band_flux_flag_%s" % (b),
+                                pa.uint32(),
+                                nullable=False,
+                                metadata={
+                                    "doc": "wmom flux measurement flags for object in filter %s." % (b),
+                                    "unit": "",
+                                },
+                            ),
+                        )
+            pa_schema = pa_schema.append(
+                            pa.field(
+                                "wmom_band_flux_%s" % (b),
+                                pa.float32(),
+                                nullable=False,
+                                metadata={
+                                    "doc": "wmom flux for object in filter %s." % (b),
+                                    "unit": "",
+                                },
+                            ),
+                        )
+            pa_schema = pa_schema.append(
+                            pa.field(
+                                "wmom_band_flux_err_%s" % (b),
+                                pa.uint32(),
+                                nullable=False,
+                                metadata={
+                                    "doc": "wmom flux uncertainty for object in filter %s." % (b),
+                                    "unit": "",
+                                },
+                            ),
+                        )
+
+        return pa_schema
 
     def runQuantum(
         self,
@@ -812,10 +849,15 @@ def _make_comb_data(
         ("wmom_psf_g_2", "f4"),
         ("wmom_g_1", "f4"),
         ("wmom_g_2", "f4"),
-        ("wmom_band_flux_flags_1", "i4"),
-        ("wmom_band_flux_1", "f4"),
-        ("wmom_band_flux_err_1", "f4"),
+        # ("wmom_band_flux_flags_1", "i4"),
+        # ("wmom_band_flux_1", "f4"),
+        # ("wmom_band_flux_err_1", "f4"),
     ]
+
+    for b in self.config.required_bands:
+        copy_dt.append(("wmom_band_flux_flags_%s" % (b), "i4"))
+        copy_dt.append(("wmom_band_flux_%s" % (b), "f4"))
+        copy_dt.append(("wmom_band_flux_err_%s" % (b), "f4"))
 
     add_dt = [
         ("id", "u8"),
@@ -846,9 +888,14 @@ def _make_comb_data(
             newdata["wmom_psf_g_2"] = newdata["wmom_psf_g"][:, 1]
             newdata["wmom_g_1"] = newdata["wmom_g"][:, 0]
             newdata["wmom_g_2"] = newdata["wmom_g"][:, 1]
-            newdata["wmom_band_flux_flags_1"] = newdata["wmom_band_flux_flags"]
-            newdata["wmom_band_flux_1"] = newdata["wmom_band_flux"]
-            newdata["wmom_band_flux_err_1"] = newdata["wmom_band_flux_err"]
+            # newdata["wmom_band_flux_flags_1"] = newdata["wmom_band_flux_flags"]
+            # newdata["wmom_band_flux_1"] = newdata["wmom_band_flux"]
+            # newdata["wmom_band_flux_err_1"] = newdata["wmom_band_flux_err"]
+
+            for i, b in enumerate(bands):
+                newdata["wmom_band_flux_flags_%s" % (b)] = newdata["wmom_band_flux_flags"][:, i]
+                newdata["wmom_band_flux_%s" % (b)] = newdata["wmom_band_flux"][:, i]
+                newdata["wmom_band_flux_err_%s" % (b)] = newdata["wmom_band_err_flags"][:, i]
 
             newdata["tract"] = idinfo.tract
             newdata["patch_x"] = idinfo.patch.x
