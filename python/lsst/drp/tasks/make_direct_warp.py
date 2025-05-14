@@ -528,7 +528,8 @@ class MakeDirectWarpTask(PipelineTask):
         # So we create empty exposure(s) to accumulate the warps of each type,
         # and then process each detector serially.
         final_warp = self._prepareEmptyExposure(sky_info)
-        final_masked_fraction_warp = self._prepareEmptyExposure(sky_info)
+        if self.config.doWarpMaskedFraction:
+            final_masked_fraction_warp = self._prepareEmptyExposure(sky_info)
         final_noise_warps = {
             n_noise: self._prepareEmptyExposure(sky_info)
             for n_noise in range(self.config.numberOfNoiseRealizations)
