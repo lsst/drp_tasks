@@ -91,7 +91,7 @@ class WarpDetectorInputs:
         return self.exposure_or_handle
 
     @property
-    def background_to_photometric_ratio(self) -> Image:
+    def background_to_photometric_ratio(self) -> Image | None:
         """Get the background_to_photometric object, loading if necessary."""
         if isinstance(self.background_ratio_or_handle, (DeferredDatasetHandle, InMemoryDatasetHandle)):
             self.background_ratio_or_handle = self.background_ratio_or_handle.get()
