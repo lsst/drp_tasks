@@ -206,6 +206,12 @@ class MakeDirectWarpConnections(
         storageClass="ImageF",
         dimensions=("tract", "patch", "skymap", "instrument", "visit"),
     )
+    photometric_to_background_ratio_warp = Output(
+        doc="Warped version of the inverse of the background_to_photometric_ratio exposure.",
+        name="photometric_to_background_ratio_warp",
+        storageClass="ImageF",
+        dimensions=("tract", "patch", "skymap", "instrument", "visit"),
+    )
 
     def __init__(self, *, config=None):
         super().__init__(config=config)
@@ -221,6 +227,8 @@ class MakeDirectWarpConnections(
 
         if not config.doWarpMaskedFraction:
             del self.masked_fraction_warp
+        if not config.doWarpPhotometricToBackgroundRatio:
+            del self.photometric_to_background_ratio_warp
 
         # Dynamically set output connections for noise images, depending on the
         # number of noise realization specified in the config.
@@ -336,6 +344,18 @@ class MakeDirectWarpConfig(
         doc="Configuration for the warp that warps the mask fraction image",
         dtype=Warper.ConfigClass,
     )
+    doWarpPhotometricToBackgroundRatio = Field[bool](
+        doc=(
+            "Warp the inverse of the background_to_photometric_ratio image? "
+            "If this is True but doApplyFlatBackgroundRatio is False, an image "
+            "of ones is warped instead."
+        ),
+        default=False,
+    )
+    backgroundToPhotometricRatioWarper = ConfigField(
+        doc="Configuration for the warp that warps the background_to_photometric ratio",
+        dtype=Warper.ConfigClass,
+    )
     coaddPsf = ConfigField(
         doc="Configuration for CoaddPsf",
         dtype=CoaddPsfConfig,
@@ -365,6 +385,7 @@ class MakeDirectWarpConfig(
         self.warper.warpingKernelName = "lanczos3"
         self.warper.cacheSize = 0
         self.maskedFractionWarper.warpingKernelName = "bilinear"
+        self.backgroundToPhotometricRatioWarper.warpingKernelName = "bilinear"
 
 
 class MakeDirectWarpTask(PipelineTask):
@@ -400,6 +421,10 @@ class MakeDirectWarpTask(PipelineTask):
         self.warper = Warper.fromConfig(self.config.warper)
         if self.config.doWarpMaskedFraction:
             self.maskedFractionWarper = Warper.fromConfig(self.config.maskedFractionWarper)
+        if self.config.doWarpPhotometricToBackgroundRatio:
+            self.backgroundToPhotometricRatioWarper = Warper.fromConfig(
+                self.config.backgroundToPhotometricRatioWarper
+            )
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # Docstring inherited.
@@ -530,6 +555,8 @@ class MakeDirectWarpTask(PipelineTask):
         final_warp = self._prepareEmptyExposure(sky_info)
         if self.config.doWarpMaskedFraction:
             final_masked_fraction_warp = self._prepareEmptyExposure(sky_info)
+        if self.config.doWarpPhotometricToBackgroundRatio:
+            final_photometric_to_background_ratio_warp = self._prepareEmptyExposure(sky_info)
         final_noise_warps = {
             n_noise: self._prepareEmptyExposure(sky_info)
             for n_noise in range(self.config.numberOfNoiseRealizations)
@@ -604,6 +631,22 @@ class MakeDirectWarpTask(PipelineTask):
                     final_masked_fraction_warp.mask.getPlaneBitMask(["NO_DATA"]),
                 )
 
+            if self.config.doWarpPhotometricToBackgroundRatio:
+                ptbr_exp = input_exposure.clone()
+                ptbr_exp.image.array[:, :] = 1.0
+                ptbr_exp.mask.array[:, :] = 0
+                ptbr_exp.variance.array[:, :] = 1.0
+                if detector_inputs.background_to_photometric_ratio is not None:
+                    ptbr_exp.image.array[:, :] /= detector_inputs.background_to_photometric_ratio.array[:, :]
+                btpr_warp = self.backgroundToPhotometricRatioWarper.warpExposure(
+                    target_wcs, ptbr_exp, destBBox=target_bbox
+                )
+                copyGoodPixels(
+                    final_photometric_to_background_ratio_warp.maskedImage,
+                    btpr_warp.maskedImage,
+                    final_photometric_to_background_ratio_warp.mask.getPlaneBitMask(["NO_DATA"]),
+                )
+
             # Process and accumulate noise images.
             for n_noise in range(self.config.numberOfNoiseRealizations):
                 noise_calexp = noise_calexps[n_noise]
@@ -659,6 +702,9 @@ class MakeDirectWarpTask(PipelineTask):
 
         if self.config.doWarpMaskedFraction:
             results.masked_fraction_warp = final_masked_fraction_warp.image
+
+        if self.config.doWarpPhotometricToBackgroundRatio:
+            results.photometric_to_background_ratio_warp = final_photometric_to_background_ratio_warp.image
 
         for noise_index, noise_exposure in final_noise_warps.items():
             setattr(results, f"noise_warp{noise_index}", noise_exposure.maskedImage)
