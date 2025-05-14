@@ -90,6 +90,8 @@ class DiffDetectorArrays:
     detector_id: np.ndarray
     x_camera: np.ndarray
     y_camera: np.ndarray
+    x_detector: np.ndarray
+    y_detector: np.ndarray
     scaling: np.ndarray
     mask: np.ndarray
 
@@ -194,12 +196,18 @@ class DiffWarpBackgroundsTask(PipelineTask):
                 ("negative_visit_id", np.uint64),
                 ("positive_detector_id", np.uint8),
                 ("negative_detector_id", np.uint8),
-                ("positive_x", np.float64),
-                ("positive_y", np.float64),
-                ("negative_x", np.float64),
-                ("negative_y", np.float64),
+                ("positive_camera_x", np.float64),
+                ("positive_camera_y", np.float64),
+                ("negative_camera_x", np.float64),
+                ("negative_camera_y", np.float64),
+                ("positive_detector_x", np.float64),
+                ("positive_detector_y", np.float64),
+                ("negative_detector_x", np.float64),
+                ("negative_detector_y", np.float64),
                 ("positive_scaling", np.float64),
                 ("negative_scaling", np.float64),
+                ("tract_x", np.float64),
+                ("tract_y", np.float64),
                 ("bin_row", np.uint16),
                 ("bin_column", np.uint16),
                 ("bin_value", np.float32),
@@ -377,16 +385,23 @@ class DiffWarpBackgroundsTask(PipelineTask):
         result["bin_variance"] = stats_image.variance.array.ravel()
         x_centers = bkgd.getBinCentersX()
         y_centers = bkgd.getBinCentersY()
+        result["tract_x"], result["tract_y"] = np.meshgrid(x_centers, y_centers)
         corners = self._make_bin_corners_array(Box2D(diff.getBBox()), x_centers, y_centers)
-        positive_detector = self._make_detector_arrays(corners, x_centers, y_centers, positive.detectors)
+        positive_detector = self._make_detector_arrays(
+            corners, result["tract_x"], result["tract_y"], positive.detectors
+        )
         result["positive_detector_id"] = positive_detector.detector_id
-        result["positive_x"] = positive_detector.x_camera
-        result["positive_y"] = positive_detector.y_camera
+        result["positive_camera_x"] = positive_detector.x_camera
+        result["positive_camera_y"] = positive_detector.y_camera
+        result["positive_detector_x"] = positive_detector.x_detector
+        result["positive_detector_y"] = positive_detector.y_detector
         result["positive_scaling"] = positive_detector.scaling
         negative_detector = self._make_detector_arrays(corners, x_centers, y_centers, negative.detectors)
         result["negative_detector_id"] = negative_detector.detector_id
-        result["negative_x"] = negative_detector.x_camera
-        result["negative_y"] = negative_detector.y_camera
+        result["negative_camera_x"] = negative_detector.x_camera
+        result["negative_camera_y"] = negative_detector.y_camera
+        result["negative_detector_x"] = negative_detector.x_detector
+        result["negative_detector_y"] = negative_detector.y_detector
         result["negative_scaling"] = negative_detector.scaling
         mask = np.all(
             [
@@ -443,8 +458,8 @@ class DiffWarpBackgroundsTask(PipelineTask):
     def _make_detector_arrays(
         self,
         corners: np.ndarray,
-        x_patch: np.ndarray,
-        y_patch: np.ndarray,
+        tract_x: np.ndarray,
+        tract_y: np.ndarray,
         detectors: Mapping[int, WarpDetectorInfo],
     ) -> DiffDetectorArrays:
         """Make arrays for columns in the diff table that must be computed
@@ -471,21 +486,24 @@ class DiffWarpBackgroundsTask(PipelineTask):
         and optical distortion is very large (i.e. so detector boundaries
         are not straight lines in tract coordinates).
         """
-        x_patch_grid, y_patch_grid = np.meshgrid(x_patch, y_patch)
         id_array = np.zeros(corners.shape[1:], dtype=np.uint8)
         x_camera = np.zeros(id_array.shape, dtype=np.float64)
         y_camera = np.zeros(id_array.shape, dtype=np.float64)
+        x_detector = np.zeros(id_array.shape, dtype=np.float64)
+        y_detector = np.zeros(id_array.shape, dtype=np.float64)
         scaling = np.zeros(id_array.shape, dtype=np.float64)
         mask = np.zeros(id_array.shape, dtype=bool)
         for detector_id, detector_info in detectors.items():
             detector_mask = np.all(detector_info.polygon.contains(corners), axis=0)
             id_array[detector_mask] = detector_id
             xy_detector = detector_info.patch_to_detector.getMapping().applyForward(
-                np.vstack((x_patch_grid[detector_mask], y_patch_grid[detector_mask]))
+                np.vstack((tract_x[detector_mask], tract_y[detector_mask]))
             )
             scaling[detector_mask] = detector_info.photo_calib.getLocalCalibrationArray(
                 xy_detector[0], xy_detector[1]
             )
+            x_detector[detector_mask] = xy_detector[0]
+            y_detector[detector_mask] = xy_detector[1]
             xy_camera = (
                 detector_info.detector.getTransform(PIXELS, FOCAL_PLANE)
                 .getMapping()
@@ -495,5 +513,11 @@ class DiffWarpBackgroundsTask(PipelineTask):
             y_camera[detector_mask] = xy_camera[1]
             mask = np.logical_or(mask, detector_mask)
         return DiffDetectorArrays(
-            detector_id=id_array, x_camera=x_camera, y_camera=y_camera, scaling=scaling, mask=mask
+            detector_id=id_array,
+            x_camera=x_camera,
+            y_camera=y_camera,
+            x_detector=x_detector,
+            y_detector=y_detector,
+            scaling=scaling,
+            mask=mask,
         )
