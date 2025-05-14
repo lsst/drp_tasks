@@ -244,9 +244,11 @@ class BuildWarpDiffMatrixTask(PipelineTask):
         positive_chebyshev_matrix = ChebyshevBoundedField.makeFitMatrix(
             camera_bbox, bin_diff_table["positive_x"], bin_diff_table["positive_y"], ctrl
         )[:, 1:]
+        positive_chebyshev_matrix *= bin_diff_table["positive_scaling"][:, np.newaxis]
         negative_chebyshev_matrix = ChebyshevBoundedField.makeFitMatrix(
             camera_bbox, bin_diff_table["negative_x"], bin_diff_table["negative_y"], ctrl
         )[:, 1:]
+        negative_chebyshev_matrix *= bin_diff_table["negative_scaling"][:, np.newaxis]
         for visit_id in visits_in_bin:
             positive_mask = bin_diff_table["positive_visit_id"] == visit_id
             negative_mask = bin_diff_table["negative_visit_id"] == visit_id
@@ -255,17 +257,17 @@ class BuildWarpDiffMatrixTask(PipelineTask):
             B[negative_mask, j : j + self.n_chebyshev] += negative_chebyshev_matrix[negative_mask, :]
         for i in range(len(bin_diff_table)):
             j = (
-                all_visits[bin_diff_table["positive_visit_id"]] * n_visit_parameters
+                all_visits[bin_diff_table["positive_visit_id"][i]] * n_visit_parameters
                 + self.n_chebyshev
-                + all_detectors[bin_diff_table["positive_detector_id"]]
+                + all_detectors[bin_diff_table["positive_detector_id"][i]]
             )
-            B[i, j] = 1.0
+            B[i, j] = bin_diff_table["positive_scaling"].data[i]
             j = (
-                all_visits[bin_diff_table["negative_visit_id"]] * n_visit_parameters
+                all_visits[bin_diff_table["negative_visit_id"][i]] * n_visit_parameters
                 + self.n_chebyshev
-                + all_detectors[bin_diff_table["negative_detector_id"]]
+                + all_detectors[bin_diff_table["negative_detector_id"][i]]
             )
-            B[i, j] = -1.0
+            B[i, j] = -bin_diff_table["negative_scaling"].data[i]
         return B
 
     @staticmethod
