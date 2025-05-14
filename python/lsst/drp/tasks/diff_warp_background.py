@@ -35,7 +35,7 @@ import numpy as np
 import lsst.afw.math
 from lsst.afw.cameraGeom import FOCAL_PLANE, PIXELS, Camera, Detector
 from lsst.afw.geom import Polygon, SinglePolygonException, TransformPoint2ToPoint2, makeWcsPairTransform
-from lsst.afw.image import ExposureF, Mask
+from lsst.afw.image import ExposureF, Mask, PhotoCalib
 from lsst.afw.table import ExposureCatalog, ExposureRecord
 from lsst.daf.butler import DeferredDatasetHandle
 from lsst.geom import Box2D
@@ -56,7 +56,9 @@ from lsst.skymap import BaseSkyMap, PatchInfo
 @dataclasses.dataclass
 class WarpDetectorInfo:
     polygon: Polygon
-    patch_to_focal_plane: TransformPoint2ToPoint2
+    detector: Detector
+    patch_to_detector: TransformPoint2ToPoint2
+    photo_calib: PhotoCalib
 
 
 @dataclasses.dataclass
@@ -88,6 +90,7 @@ class DiffDetectorArrays:
     detector_id: np.ndarray
     x_camera: np.ndarray
     y_camera: np.ndarray
+    scaling: np.ndarray
     mask: np.ndarray
 
 
@@ -195,6 +198,8 @@ class DiffWarpBackgroundsTask(PipelineTask):
                 ("positive_y", np.float64),
                 ("negative_x", np.float64),
                 ("negative_y", np.float64),
+                ("positive_scaling", np.float64),
+                ("negative_scaling", np.float64),
                 ("bin_row", np.uint16),
                 ("bin_column", np.uint16),
                 ("bin_value", np.float32),
@@ -301,11 +306,15 @@ class DiffWarpBackgroundsTask(PipelineTask):
             )
         except SinglePolygonException:
             return None
+        photo_calib = record.getPhotoCalib()
+        if photo_calib is None:
+            return None
+        patch_to_detector = detector_to_patch.inverted()
         return WarpDetectorInfo(
             polygon=patch_polygon,
-            patch_to_focal_plane=detector_to_patch.inverted().then(
-                detector.getTransform(PIXELS, FOCAL_PLANE)
-            ),
+            detector=detector,
+            patch_to_detector=patch_to_detector,
+            photo_calib=photo_calib,
         )
 
     def _select_reference_visits(self, visits: Mapping[int, Mapping[int, WarpDetectorInfo]]) -> list[int]:
@@ -373,10 +382,12 @@ class DiffWarpBackgroundsTask(PipelineTask):
         result["positive_detector_id"] = positive_detector.detector_id
         result["positive_x"] = positive_detector.x_camera
         result["positive_y"] = positive_detector.y_camera
+        result["positive_scaling"] = positive_detector.scaling
         negative_detector = self._make_detector_arrays(corners, x_centers, y_centers, negative.detectors)
         result["negative_detector_id"] = negative_detector.detector_id
         result["negative_x"] = negative_detector.x_camera
         result["negative_y"] = negative_detector.y_camera
+        result["negative_scaling"] = negative_detector.scaling
         mask = np.all(
             [
                 positive_detector.mask,
@@ -464,14 +475,25 @@ class DiffWarpBackgroundsTask(PipelineTask):
         id_array = np.zeros(corners.shape[1:], dtype=np.uint8)
         x_camera = np.zeros(id_array.shape, dtype=np.float64)
         y_camera = np.zeros(id_array.shape, dtype=np.float64)
+        scaling = np.zeros(id_array.shape, dtype=np.float64)
         mask = np.zeros(id_array.shape, dtype=bool)
         for detector_id, detector_info in detectors.items():
             detector_mask = np.all(detector_info.polygon.contains(corners), axis=0)
             id_array[detector_mask] = detector_id
-            xy = detector_info.patch_to_focal_plane.getMapping().applyForward(
+            xy_detector = detector_info.patch_to_detector.getMapping().applyForward(
                 np.vstack((x_patch_grid[detector_mask], y_patch_grid[detector_mask]))
             )
-            x_camera[detector_mask] = xy[0]
-            y_camera[detector_mask] = xy[1]
+            scaling[detector_mask] = detector_info.photo_calib.getLocalCalibrationArray(
+                xy_detector[0], xy_detector[1]
+            )
+            xy_camera = (
+                detector_info.detector.getTransform(PIXELS, FOCAL_PLANE)
+                .getMapping()
+                .applyForward(xy_detector)
+            )
+            x_camera[detector_mask] = xy_camera[0]
+            y_camera[detector_mask] = xy_camera[1]
             mask = np.logical_or(mask, detector_mask)
-        return DiffDetectorArrays(detector_id=id_array, x_camera=x_camera, y_camera=y_camera, mask=mask)
+        return DiffDetectorArrays(
+            detector_id=id_array, x_camera=x_camera, y_camera=y_camera, scaling=scaling, mask=mask
+        )
