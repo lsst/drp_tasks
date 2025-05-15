@@ -258,8 +258,6 @@ class VisitBackgroundModel(pydantic.BaseModel):
     chebyshev_basis: ChebyshevBasis
     """Chebyshev basis in focal-plane coordinates."""
 
-    type_pistons: list[pydantic.StrictStr] | None = None
-
     detector_ids: list[pydantic.StrictInt] | None = None
     """IDs of detectors that have pistons.
 
