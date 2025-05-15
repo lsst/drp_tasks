@@ -79,7 +79,7 @@ class FitInputData:
     """A mapping from detector ID to a slice that corresponds to the points
     in that detector in the arrays.
 
-    This may be either empty foir single-detector objects.
+    This may be empty for single-detector objects.
     """
 
     def __post_init__(self) -> None:
