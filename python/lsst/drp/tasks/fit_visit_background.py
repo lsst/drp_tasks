@@ -96,7 +96,8 @@ class FitInputData:
         self.y.flags.writeable = False
         self.z.flags.writeable = False
         self.w.flags.writeable = False
-        self.sky_frame.flags.writeable = False
+        if self.sky_frame is not None:
+            self.sky_frame.flags.writeable = False
 
     def __len__(self) -> int:
         return len(self.z)
@@ -119,7 +120,7 @@ class FitInputData:
             y=self.y[mask],
             z=self.z[mask],
             w=self.w[mask],
-            sky_frame=self.sky_frame[mask],
+            sky_frame=self.sky_frame[mask] if self.sky_frame is not None else None,
         )
 
     def fit(self, matrix: np.ndarray) -> VisitBackgroundFit:
@@ -138,8 +139,12 @@ class FitInputData:
             matrix and the input data.
         """
         if self.sky_frame is not None:
-            matrix = np.hstack([matrix, self.sky_frame[np.newaxis, :]])
-        coefficients, _, _, _ = np.linalg.lstsq(matrix * self.w[:, np.newaxis], self.z * self.w)
+            full_matrix = np.zeros((matrix.shape[0], matrix.shape[1] + 1), dtype=float)
+            full_matrix[:, :-1] = matrix
+            full_matrix[:, -1] = self.sky_frame
+        else:
+            full_matrix = matrix
+        coefficients, _, _, _ = np.linalg.lstsq(full_matrix * self.w[:, np.newaxis], self.z * self.w)
         sky_frame_factor: float | None = None
         if self.sky_frame is not None:
             sky_frame_factor = coefficients[-1]
@@ -229,7 +234,7 @@ class VisitBackgroundFit:
 
         This does not include the sky frame term.
         """
-        return np.dot(self.matrix, self.coefficients)
+        return np.dot(self.matrix, self.coefficients) + self.sky_frame_factor * self.data.sky_frame
 
     @cached_property
     def residuals(self) -> np.ndarray:
@@ -339,6 +344,7 @@ class VisitBackgroundModel(pydantic.BaseModel):
         y: np.ndarray,
         detector_slices: Mapping[int, slice],
         detectors: Mapping[int, Detector],
+        drop_chebyshev0: bool,
     ) -> np.ndarray:
         """Construct a matrix that can be used to fit for the coefficients of
         this model or evaluate the model given coefficients.
@@ -358,6 +364,7 @@ class VisitBackgroundModel(pydantic.BaseModel):
         detectors : `~collections.abc.Mapping` [`int`,\
                 `lsst.afw.cameraGeom.Detector`]
             Descriptions of all detectors that the matrix will evaluate on.
+        TODO
 
         Returns
         -------
@@ -370,14 +377,15 @@ class VisitBackgroundModel(pydantic.BaseModel):
         ctrl.orderX = self.chebyshev_basis.x_order
         ctrl.orderY = self.chebyshev_basis.y_order
         chebyshev_matrix = ChebyshevBoundedField.makeFitMatrix(self.chebyshev_basis.bbox, x, y, ctrl)
+        if drop_chebyshev0:
+            chebyshev_matrix = chebyshev_matrix[:, 1:]
         n_data = chebyshev_matrix.shape[0]
         n_chebyshev = chebyshev_matrix.shape[1]
         n_coeffs = n_chebyshev
         if self.detector_ids is not None:
-            n_chebyshev -= 1
             n_coeffs = n_chebyshev + len(self.detector_ids)
             matrix = np.zeros((n_data, n_coeffs), dtype=float)
-            matrix[:, :n_chebyshev] = chebyshev_matrix[:, 1:]
+            matrix[:, :n_chebyshev] = chebyshev_matrix
             for j, detector_id in enumerate(self.detector_ids, start=n_chebyshev):
                 detector_slice = detector_slices.get(detector_id, slice(0, 0))
                 matrix[detector_slice, j] = 1.0
@@ -385,7 +393,7 @@ class VisitBackgroundModel(pydantic.BaseModel):
             n_chebyshev -= 1
             n_coeffs = n_chebyshev + len(self.detector_types)
             matrix = np.zeros((n_data, n_coeffs), dtype=float)
-            matrix[:, :n_chebyshev] = chebyshev_matrix[:, 1:]
+            matrix[:, :n_chebyshev] = chebyshev_matrix
             for detector_id, detector in detectors.items():
                 j = n_chebyshev + self.detector_types.index(detector.getPhysicalType())
                 matrix[detector_slices[detector_id], j] = 1.0
@@ -439,7 +447,7 @@ class FitVisitBackgroundConnections(PipelineTaskConnections, dimensions=["visit"
             sky_connection, sky_refs = inputs["sky_frame_backgrounds"]
             input_refs_by_detector = {ref.dataId["detector"]: ref for ref in input_refs}
             sky_refs_by_detector = {ref.dataId["detector"]: ref for ref in sky_refs}
-            if sky_refs_by_detector.keys() >= input_refs_by_detector.keys():
+            if not (sky_refs_by_detector.keys() >= input_refs_by_detector.keys()):
                 missing = input_refs_by_detector.keys() - sky_refs_by_detector.keys()
                 raise FileNotFoundError(
                     f"No binned sky frame for detector(s) {missing} in visit {data_id['visit']}."
@@ -478,14 +486,14 @@ class FitVisitBackgroundConfig(PipelineTaskConfig, pipelineConnections=FitVisitB
         dtype=bool,
         default=True,
     )
-    clip_positive_factor = Field[float](
-        "Clip sample points with (data - model)/model greater than this threshold and re-fit.",
+    clip_positive_threshold = Field[float](
+        "Clip sample points with (data - model) greater than this threshold and re-fit.",
         dtype=float,
         optional=True,
-        default=None,
+        default=50.0,
     )
-    clip_negative_factor = Field[float](
-        "Clip sample points with (data - model)/model less than this threshold and re-fit.",
+    clip_negative_threshold = Field[float](
+        "Clip sample points with (data - model) less than this threshold and re-fit.",
         dtype=float,
         optional=True,
         default=None,
@@ -613,20 +621,25 @@ class FitVisitBackgroundTask(PipelineTask):
             model.detector_ids = list(full_data.detector_slices.keys())
         elif self.config.fit_type_pistons:
             model.set_detector_types(detectors.values())
-        matrix = model.make_matrix(full_data.x, full_data.y, full_data.detector_slices, detectors=detectors)
+        matrix = model.make_matrix(
+            full_data.x, full_data.y, full_data.detector_slices, detectors=detectors,
+            drop_chebyshev0=(
+                self.config.fit_detector_pistons or self.config.fit_type_pistons
+            )
+        )
         fit = full_data.fit(matrix)
         self.log.info(
-            "Fit %s-parameter focal-plane model to %s data points.", len(fit.coefficients), len(fit.data)
+            "Fit %s-parameter focal-plane model to %s data points.",
+            len(fit.coefficients) + (fit.sky_frame_factor is not None), len(fit.data)
         )
-        if self.config.clip_positive_factor is not None or self.config.clip_negative_factor is not None:
+        if self.config.clip_positive_threshold is not None or self.config.clip_negative_threshold is not None:
             for n_iter in range(self.config.clip_iterations):
-                relative_residuals = fit.residuals / fit.model
-                if self.config.clip_positive_factor is not None:
-                    bad = relative_residuals > self.config.clip_positive_factor
-                    if self.config.clip_negative_factor is not None:
-                        bad = np.logical_or(bad, relative_residuals < self.config.clip_negative_factor)
+                if self.config.clip_positive_threshold is not None:
+                    bad = fit.residuals > self.config.clip_positive_threshold
+                    if self.config.clip_negative_threshold is not None:
+                        bad = np.logical_or(bad, fit.residuals < self.config.clip_negative_threshold)
                 else:
-                    bad = relative_residuals < self.config.clip_negative_factor
+                    bad = fit.residuals < self.config.clip_negative_threshold
                 n_clipped = sum(bad)
                 if not n_clipped:
                     break
@@ -636,7 +649,12 @@ class FitVisitBackgroundTask(PipelineTask):
         model.sky_frame_factor = fit.sky_frame_factor
         self.log.info("Projecting focal-plane model back to detectors.")
         output_backgrounds = {
-            detector_id: self._make_output_background(detector, model, input_backgrounds[detector_id])
+            detector_id: self._make_output_background(
+                detector, model, input_backgrounds[detector_id],
+                sky_frame_bg_list=(
+                    sky_frame_backgrounds[detector_id] if sky_frame_backgrounds is not None else None
+                )
+            )
             for detector_id, detector in detectors.items()
         }
         return Struct(output_backgrounds=output_backgrounds, model=model, fit=fit)
@@ -712,7 +730,7 @@ class FitVisitBackgroundTask(PipelineTask):
                     f"{sky_frame_sum_image.getWidth()}×{sky_frame_sum_image.getHeight()} bins, but has "
                     f"background has {sum_image.getWidth()}×{sum_image.getHeight()}."
                 )
-            sky_frame = sky_frame_sum_image.array.ravel().astype(float)
+            sky_frame = sky_frame_sum_image.image.array.ravel().astype(float)
         return FitInputData(x=x_fp, y=y_fp, z=z, w=w, sky_frame=sky_frame).masked(
             np.logical_and(w > 0.0, np.isfinite(z))
         )
@@ -781,6 +799,9 @@ class FitVisitBackgroundTask(PipelineTask):
             y_fp,
             detector_slices={detector.getId(): slice(0, None)},
             detectors={detector.getId(): detector},
+            drop_chebyshev0=(
+                self.config.fit_detector_pistons or self.config.fit_type_pistons
+            )
         )
         z = np.dot(matrix, model.coefficients)
         stats_image.image.array[:, :] = z.reshape(n_bins_y, n_bins_x)
