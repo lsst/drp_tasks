@@ -393,14 +393,14 @@ class FitVisitBackgroundConfig(PipelineTaskConfig, pipelineConnections=FitVisitB
         dtype=bool,
         default=True,
     )
-    clip_positive_factor = Field[float](
-        "Clip sample points with (data - model)/model greater than this threshold and re-fit.",
+    clip_positive_threshold = Field[float](
+        "Clip sample points with (data - model) greater than this threshold and re-fit.",
         dtype=float,
         optional=True,
-        default=None,
+        default=50.0,
     )
-    clip_negative_factor = Field[float](
-        "Clip sample points with (data - model)/model less than this threshold and re-fit.",
+    clip_negative_threshold = Field[float](
+        "Clip sample points with (data - model) less than this threshold and re-fit.",
         dtype=float,
         optional=True,
         default=None,
@@ -512,15 +512,14 @@ class FitVisitBackgroundTask(PipelineTask):
         self.log.info(
             "Fit %s-parameter focal-plane model to %s data points.", len(fit.coefficients), len(fit.data)
         )
-        if self.config.clip_positive_factor is not None or self.config.clip_negative_factor is not None:
+        if self.config.clip_positive_threshold is not None or self.config.clip_negative_threshold is not None:
             for n_iter in range(self.config.clip_iterations):
-                relative_residuals = fit.residuals / fit.model
-                if self.config.clip_positive_factor is not None:
-                    bad = relative_residuals > self.config.clip_positive_factor
-                    if self.config.clip_negative_factor is not None:
-                        bad = np.logical_or(bad, relative_residuals < self.config.clip_negative_factor)
+                if self.config.clip_positive_threshold is not None:
+                    bad = fit.residuals > self.config.clip_positive_threshold
+                    if self.config.clip_negative_threshold is not None:
+                        bad = np.logical_or(bad, fit.residuals < self.config.clip_negative_threshold)
                 else:
-                    bad = relative_residuals < self.config.clip_negative_factor
+                    bad = fit.residuals < self.config.clip_negative_threshold
                 n_clipped = sum(bad)
                 if not n_clipped:
                     break
