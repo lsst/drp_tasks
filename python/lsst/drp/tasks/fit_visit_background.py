@@ -230,18 +230,15 @@ class VisitBackgroundFit:
 
     @cached_property
     def model(self) -> np.ndarray:
-        """The model evaluated at the data points.
-
-        This does not include the sky frame term.
-        """
-        return np.dot(self.matrix, self.coefficients) + self.sky_frame_factor * self.data.sky_frame
+        """The model evaluated at the data points."""
+        result = np.dot(self.matrix, self.coefficients)
+        if self.sky_frame_factor is not None and self.data.sky_frame is not None:
+            result += self.sky_frame_factor * self.data.sky_frame
+        return result
 
     @cached_property
     def residuals(self) -> np.ndarray:
-        """The difference between the data and the model.
-
-        This does not include the sky frame term.
-        """
+        """The difference between the data and the model."""
         return self.data.z - self.model
 
 
@@ -318,10 +315,7 @@ class VisitBackgroundModel(pydantic.BaseModel):
     """
 
     sky_frame_factor: float | None = None
-    """Factor the sky frame is multiplied by in this model.
-
-    When this is not None, `sky_frame_datasets` must not be `None`.
-    """
+    """Factor the sky frame is multiplied by in this model."""
 
     coefficients: list[pydantic.StrictFloat] = pydantic.Field(default_factory=list)
     """Model parameters, not including the sky frame factor.
@@ -393,7 +387,6 @@ class VisitBackgroundModel(pydantic.BaseModel):
                 detector_slice = detector_slices.get(detector_id, slice(0, 0))
                 matrix[detector_slice, j] = 1.0
         elif self.detector_types is not None:
-            n_chebyshev -= 1
             n_coeffs = n_chebyshev + len(self.detector_types)
             matrix = np.zeros((n_data, n_coeffs), dtype=float)
             matrix[:, :n_chebyshev] = chebyshev_matrix
