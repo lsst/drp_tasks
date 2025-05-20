@@ -274,7 +274,6 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         if schema is None:
             schema = afwTable.SourceTable.makeMinimalSchema()
 
-        afwTable.CoordKey.addErrorFields(schema)
         self.makeSubtask("snap_combine")
         self.makeSubtask("repair")
         self.makeSubtask("detection", schema=schema)
