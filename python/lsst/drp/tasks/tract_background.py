@@ -29,7 +29,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from lsst.afw.image import ExposureF, ImageF, FilterLabel
+from lsst.afw.image import ExposureF, ImageF, MaskX, FilterLabel
 from lsst.afw.math import (
     BackgroundList,
     binImage,
@@ -74,7 +74,7 @@ class BinnedTractGeometry:
         )
 
 
-class MeasureTractBackgroundConnections(PipelineTaskConnections, dimensions=["tract", "band"]):
+class MeasureTractBackgroundConnections(PipelineTaskConnections, dimensions=["tract"]):
     sky_map = cT.Input(
         doc="Input definition of geometry/bbox and projection/wcs for warps.",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
@@ -101,16 +101,18 @@ class MeasureTractBackgroundConnections(PipelineTaskConnections, dimensions=["tr
         storageClass="SkyMap",
         dimensions=("skymap",),
     )
-    hf_diagnostic_image = cT.Output(
+    hf_diagnostic_images = cT.Output(
         "deep_coadd_hf_background_image",
         doc="Tract-level image of the original high-frequency background superpixels.",
         storageClass="ExposureF",
+        multiple=True,
         dimensions=["tract", "band"],
     )
-    lf_diagnostic_image = cT.Output(
+    lf_diagnostic_images = cT.Output(
         "deep_coadd_lf_background_image",
         doc="Tract-level image of the remeasured low-frequency background superpixels.",
         storageClass="ExposureF",
+        multiple=True,
         dimensions=["tract", "band"],
     )
 
@@ -183,40 +185,46 @@ class MeasureTractBackgroundTask(PipelineTask):
     ):
         sky_map = butlerQC.get(inputRefs.sky_map)
         tract_info = sky_map[butlerQC.quantum.dataId["tract"]]
-        hf_backgrounds = {ref.dataId["patch"]: butlerQC.get(ref) for ref in inputRefs.hf_backgrounds}
+        hf_backgrounds = {(ref.dataId["band"], ref.dataId["patch"]): butlerQC.get(ref) for ref in inputRefs.hf_backgrounds}
         results = self.run(hf_backgrounds=hf_backgrounds, tract_info=tract_info)
         for ref in outputRefs.lf_backgrounds:
-            butlerQC.put(results.lf_backgrounds[ref.dataId["patch"]], ref)
+            butlerQC.put(results.lf_backgrounds[ref.dataId["band"], ref.dataId["patch"]], ref)
         if self.config.write_diagnostic_images:
-            results.hf_diagnostic_image.setFilter(FilterLabel.fromBand(butlerQC.quantum.dataId["band"]))
-            results.lf_diagnostic_image.setFilter(FilterLabel.fromBand(butlerQC.quantum.dataId["band"]))
-            butlerQC.put(results.hf_diagnostic_image, outputRefs.hf_diagnostic_image)
-            butlerQC.put(results.lf_diagnostic_image, outputRefs.lf_diagnostic_image)
+            for ref in outputRefs.hf_diagnostic_images:
+                butlerQC.put(results.hf_diagnostic_images[ref.dataId["band"]], ref)
+            for ref in outputRefs.lf_diagnostic_images:
+                butlerQC.put(results.lf_diagnostic_images[ref.dataId["band"]], ref)
 
-    def run(self, *, hf_backgrounds: Mapping[int, BackgroundList], tract_info: TractInfo) -> Struct:
+    def run(self, *, hf_backgrounds: Mapping[tuple[str, int], BackgroundList], tract_info: TractInfo) -> Struct:
         geometry = self.compute_geometry(hf_backgrounds=hf_backgrounds, tract_info=tract_info)
-        hf_bg_exposure = self.make_hf_background_exposure(geometry=geometry, hf_backgrounds=hf_backgrounds)
-        hf_bg_exposure.mask.addMaskPlane(self.config.mask_grow_output_plane)
+        hf_bg_exposures = self.make_hf_background_exposures(geometry=geometry, hf_backgrounds=hf_backgrounds)
+        common_mask = MaskX(geometry.binned_bbox)
+        for hf_bg_exposure in hf_bg_exposures.values():
+            common_mask |= hf_bg_exposure.mask
         grow_spans = (
             SpanSet.fromMask(
-                hf_bg_exposure.mask, hf_bg_exposure.mask.getPlaneBitMask(self.config.mask_grow_input_planes)
+                common_mask, common_mask.getPlaneBitMask(self.config.mask_grow_input_planes)
             )
             .dilated(self.config.mask_grow_radius)
             .clippedTo(geometry.binned_bbox)
         )
         grow_spans.setMask(
-            hf_bg_exposure.mask, hf_bg_exposure.mask.getPlaneBitMask(self.config.mask_grow_output_plane)
+            common_mask, common_mask.getPlaneBitMask(self.config.mask_grow_output_plane)
         )
-        lf_bg_list = self.background.run(hf_bg_exposure).background
-        lf_bg_exposure = hf_bg_exposure.clone()
-        lf_bg_exposure.image = lf_bg_list.getImage()
+        lf_bg_exposures = {}
+        for band, hf_bg_exposure in hf_bg_exposures.items():
+            hf_bg_exposure.mask = common_mask
+            lf_bg_list = self.background.run(hf_bg_exposure).background
+            lf_bg_exposure = hf_bg_exposure.clone()
+            lf_bg_exposure.image = lf_bg_list.getImage()
+            lf_bg_exposures[band] = lf_bg_exposure
         lf_backgrounds = self.make_lf_background_lists(
-            lf_bg_image=lf_bg_exposure.image, geometry=geometry, hf_backgrounds=hf_backgrounds
+            lf_bg_exposures=lf_bg_exposures, geometry=geometry, hf_backgrounds=hf_backgrounds
         )
         return Struct(
             lf_backgrounds=lf_backgrounds,
-            hf_diagnostic_image=hf_bg_exposure,
-            lf_diagnostic_image=lf_bg_exposure,
+            hf_diagnostic_images=hf_bg_exposures,
+            lf_diagnostic_images=lf_bg_exposures,
             geometry=geometry,
         )
 
@@ -225,7 +233,7 @@ class MeasureTractBackgroundTask(PipelineTask):
     ) -> BinnedTractGeometry:
         original_bbox = Box2I()
         superpixel_size: Extent2I | None = None
-        for patch_id, hf_bg_list in hf_backgrounds.items():
+        for (_, patch_id), hf_bg_list in hf_backgrounds.items():
             patch_info = tract_info[patch_id]
             patch_bbox = patch_info.getInnerBBox()
             original_bbox.include(patch_bbox)
@@ -251,44 +259,49 @@ class MeasureTractBackgroundTask(PipelineTask):
             binned_wcs=make_binned_wcs(tract_info.getWcs(), superpixel_size.x, superpixel_size.y),
         )
 
-    def make_hf_background_exposure(
-        self, *, geometry: BinnedTractGeometry, hf_backgrounds: Mapping[int, BackgroundList]
-    ) -> ExposureF:
-        result = ExposureF(geometry.binned_bbox)
-        result.setWcs(geometry.binned_wcs)
-        no_data_bitmask = result.mask.getPlaneBitMask("NO_DATA")
-        result.image.array[...] = np.nan
-        result.mask.array[...] = no_data_bitmask
-        result.variance.array[...] = 0.0
-        for patch_id, hf_bg_list in hf_backgrounds.items():
+    def make_hf_background_exposures(
+        self, *, geometry: BinnedTractGeometry, hf_backgrounds: Mapping[tuple[str, int], BackgroundList]
+    ) -> dict[str, ExposureF]:
+        result = {}
+        no_data_bitmask = MaskX.getPlaneBitMask("NO_DATA")
+        for (band, patch_id), hf_bg_list in hf_backgrounds.items():
+            if (exposure := result.get(band)) is None:
+                exposure = ExposureF(geometry.binned_bbox)
+                exposure.setWcs(geometry.binned_wcs)
+                exposure.setFilter(FilterLabel.fromBand(band))
+                exposure.image.array[...] = np.nan
+                exposure.mask.array[...] = no_data_bitmask
+                exposure.variance.array[...] = 0.0
+                exposure.mask.addMaskPlane(self.config.mask_grow_output_plane)
+                result[band] = exposure
             slices = geometry.slices(patch_id)
-            result.image.array[slices] = 0.0
-            result.mask.array[slices] = 0
+            exposure.image.array[slices] = 0.0
+            exposure.mask.array[slices] = 0
             for hf_bg, *_ in hf_bg_list:
                 stats_image = hf_bg.getStatsImage()
-                result.image.array[slices] += stats_image.image.array
-                result.mask.array[slices] |= stats_image.mask.array
-                result.mask.array[slices] |= no_data_bitmask * np.isnan(stats_image.image.array)
-                result.variance.array[slices] += stats_image.variance.array
+                exposure.image.array[slices] += stats_image.image.array
+                exposure.mask.array[slices] |= stats_image.mask.array
+                exposure.mask.array[slices] |= no_data_bitmask * np.isnan(stats_image.image.array)
+                exposure.variance.array[slices] += stats_image.variance.array
         return result
 
     def make_lf_background_lists(
         self,
         *,
-        lf_bg_image: ImageF,
+        lf_bg_exposures: Mapping[str, ExposureF],
         geometry: BinnedTractGeometry,
-        hf_backgrounds: Mapping[int, BackgroundList],
-    ) -> dict[int, BackgroundList]:
+        hf_backgrounds: Mapping[tuple[str, int], BackgroundList],
+    ) -> dict[tuple[str, int], BackgroundList]:
         result = {}
-        for patch_id, hf_bg_list in hf_backgrounds.items():
+        for (band, patch_id), hf_bg_list in hf_backgrounds.items():
             lf_bg_list = BackgroundList()
             lf_bg_list.append(hf_bg_list[0])
             lf_bg, *_ = lf_bg_list[0]
             stats_image = lf_bg.getStatsImage()
-            stats_image.image.array[...] = lf_bg_image.array[geometry.slices(patch_id)]
+            stats_image.image.array[...] = lf_bg_exposures[band].image.array[geometry.slices(patch_id)]
             stats_image.mask.array[...] = 0
             stats_image.variance.array[...] = 1.0
-            result[patch_id] = lf_bg_list
+            result[band, patch_id] = lf_bg_list
         return result
 
 
