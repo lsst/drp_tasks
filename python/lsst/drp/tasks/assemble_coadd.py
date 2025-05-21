@@ -1417,7 +1417,7 @@ class CompareWarpAssembleCoaddConfig(
     prefilterArtifactsMaskPlanes = pexConfig.ListField(
         doc="Prefilter artifact candidates that are mostly covered by these bad mask planes.",
         dtype=str,
-        default=("NO_DATA", "BAD", "SAT", "SUSPECT"),
+        default=("NO_DATA", "BAD", "SUSPECT"),
     )
     prefilterArtifactsRatio = pexConfig.Field(
         doc="Prefilter artifact candidates with less than this fraction overlapping good pixels",
