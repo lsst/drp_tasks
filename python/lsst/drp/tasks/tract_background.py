@@ -29,7 +29,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from lsst.afw.image import ExposureF, ImageF, MaskX, FilterLabel
+from lsst.afw.image import ExposureF, MaskX, FilterLabel
 from lsst.afw.math import (
     BackgroundList,
     binImage,
@@ -59,20 +59,17 @@ class BinnedTractGeometry:
     binned_bbox: Box2I
     binned_wcs: SkyWcs
 
-    def slices(self, patch_id: int) -> tuple[slice, slice]:
-        patch_info = self.tract_info[patch_id]
-        patch_bbox = patch_info.getInnerBBox()
+    def slices(self, child_bbox: Box2I) -> tuple[slice, slice]:
         return (
             slice(
-                (patch_bbox.y.begin - self.original_bbox.y.begin) // self.superpixel_size.y,
-                (patch_bbox.y.end - self.original_bbox.y.begin) // self.superpixel_size.y,
+                (child_bbox.y.begin - self.original_bbox.y.begin) // self.superpixel_size.y,
+                (child_bbox.y.end - self.original_bbox.y.begin) // self.superpixel_size.y,
             ),
             slice(
-                (patch_bbox.x.begin - self.original_bbox.x.begin) // self.superpixel_size.x,
-                (patch_bbox.x.end - self.original_bbox.x.begin) // self.superpixel_size.x,
+                (child_bbox.x.begin - self.original_bbox.x.begin) // self.superpixel_size.x,
+                (child_bbox.x.end - self.original_bbox.x.begin) // self.superpixel_size.x,
             ),
         )
-
 
 class MeasureTractBackgroundConnections(PipelineTaskConnections, dimensions=["tract"]):
     sky_map = cT.Input(
@@ -233,20 +230,22 @@ class MeasureTractBackgroundTask(PipelineTask):
     ) -> BinnedTractGeometry:
         original_bbox = Box2I()
         superpixel_size: Extent2I | None = None
-        for (_, patch_id), hf_bg_list in hf_backgrounds.items():
-            patch_info = tract_info[patch_id]
-            patch_bbox = patch_info.getInnerBBox()
-            original_bbox.include(patch_bbox)
+        for hf_bg_list in hf_backgrounds.values():
+            patch_bbox: Box2I | None = None
             for hf_bg, *_ in hf_bg_list:
-                assert patch_bbox == hf_bg.getImageBBox()
+                if patch_bbox is None:
+                    patch_bbox = hf_bg.getImageBBox()
+                else:
+                    assert patch_bbox == hf_bg.getImageBBox()
+                stats_image_bbox = hf_bg.getStatsImage().getBBox()
                 if superpixel_size is None:
-                    stats_image_bbox = hf_bg.getStatsImage().getBBox()
                     superpixel_size = Extent2I(
                         patch_bbox.width // stats_image_bbox.width,
                         patch_bbox.height // stats_image_bbox.height,
                     )
-                    assert superpixel_size.x * stats_image_bbox.width == patch_bbox.width
-                    assert superpixel_size.y * stats_image_bbox.height == patch_bbox.height
+                assert superpixel_size.x * stats_image_bbox.width == patch_bbox.width
+                assert superpixel_size.y * stats_image_bbox.height == patch_bbox.height
+            original_bbox.include(patch_bbox)
         binned_bbox = Box2I(
             Point2I(original_bbox.x.begin // superpixel_size.x, original_bbox.y.begin // superpixel_size.y),
             Extent2I(original_bbox.width // superpixel_size.x, original_bbox.height // superpixel_size.y),
@@ -264,7 +263,7 @@ class MeasureTractBackgroundTask(PipelineTask):
     ) -> dict[str, ExposureF]:
         result = {}
         no_data_bitmask = MaskX.getPlaneBitMask("NO_DATA")
-        for (band, patch_id), hf_bg_list in hf_backgrounds.items():
+        for (band, _), hf_bg_list in hf_backgrounds.items():
             if (exposure := result.get(band)) is None:
                 exposure = ExposureF(geometry.binned_bbox)
                 exposure.setWcs(geometry.binned_wcs)
@@ -274,15 +273,15 @@ class MeasureTractBackgroundTask(PipelineTask):
                 exposure.variance.array[...] = 0.0
                 exposure.mask.addMaskPlane(self.config.mask_grow_output_plane)
                 result[band] = exposure
-            slices = geometry.slices(patch_id)
-            exposure.image.array[slices] = 0.0
-            exposure.mask.array[slices] = 0
-            for hf_bg, *_ in hf_bg_list:
-                stats_image = hf_bg.getStatsImage()
-                exposure.image.array[slices] += stats_image.image.array
-                exposure.mask.array[slices] |= stats_image.mask.array
-                exposure.mask.array[slices] |= no_data_bitmask * np.isnan(stats_image.image.array)
-                exposure.variance.array[slices] += stats_image.variance.array
+            if len(hf_bg_list) != 1:
+                raise RuntimeError("Input BackgroundList must have exactly one layer.")
+            hf_bg = hf_bg_list[0][0]
+            tract_slices = geometry.slices(hf_bg.getImageBBox())
+            stats_image = hf_bg.getStatsImage()
+            exposure.image.array[tract_slices] = stats_image.image.array
+            exposure.mask.array[tract_slices] = stats_image.mask.array
+            exposure.mask.array[tract_slices] |= no_data_bitmask * np.isnan(stats_image.image.array)
+            exposure.variance.array[tract_slices] = stats_image.variance.array
         return result
 
     def make_lf_background_lists(
@@ -298,7 +297,8 @@ class MeasureTractBackgroundTask(PipelineTask):
             lf_bg_list.append(hf_bg_list[0])
             lf_bg, *_ = lf_bg_list[0]
             stats_image = lf_bg.getStatsImage()
-            stats_image.image.array[...] = lf_bg_exposures[band].image.array[geometry.slices(patch_id)]
+            slices = geometry.slices(lf_bg.getImageBBox())
+            stats_image.image.array[...] = lf_bg_exposures[band].image.array[slices]
             stats_image.mask.array[...] = 0
             stats_image.variance.array[...] = 1.0
             result[band, patch_id] = lf_bg_list
