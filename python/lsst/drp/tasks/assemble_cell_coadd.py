@@ -118,9 +118,12 @@ class AssembleCellCoaddConnections(
         if not config.do_use_artifact_mask:
             del self.artifactMasks
 
+        if not config.do_write_multiple_cell_coadd:
+            del self.multipleCellCoadd
+
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
-    do_interpolate_coadd = Field[bool](doc="Interpolate over pixels with NO_DATA mask set?", default=False)
+    do_interpolate_coadd = Field[bool](doc="Interpolate over pixels with NO_DATA mask set?", default=True)
     interpolate_coadd = ConfigurableField(
         target=InterpImageTask,
         doc="Task to interpolate (and extrapolate) over pixels with NO_DATA mask on cell coadds",
@@ -194,6 +197,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Dimensions of the PSF image stamp size to be assigned to cells (must be odd).",
         check=lambda x: (x > 0) and (x % 2 == 1),
     )
+    do_write_multiple_cell_coadd = Field[bool](
+        default=True,
+        doc="Persist the cell-based coadd?",
+    )
 
 
 class AssembleCellCoaddTask(PipelineTask):
@@ -243,6 +250,9 @@ class AssembleCellCoaddTask(PipelineTask):
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # Docstring inherited.
+        if not self.config.do_write_multiple_cell_coadd:
+            return
+
         inputData = butlerQC.get(inputRefs)
 
         if not inputData["inputWarps"]:
@@ -559,6 +569,10 @@ class AssembleCellCoaddTask(PipelineTask):
                     self.log.warn(
                         "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
                     )
+                    continue
+
+                if weight == 0:
+                    self.log.info("Zero weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index)
                     continue
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
