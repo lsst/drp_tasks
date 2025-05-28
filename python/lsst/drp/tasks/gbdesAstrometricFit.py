@@ -2074,12 +2074,18 @@ class GbdesAstrometricMultibandFitConnections(
     )
 
 
+class GbdesAstrometricMultibandFitConfig(
+    GbdesAstrometricFitConfig, pipelineConnections=GbdesAstrometricMultibandFitConnections
+):
+    pass
+
+
 class GbdesAstrometricMultibandFitTask(GbdesAstrometricFitTask):
     """Calibrate the WCS across multiple visits in multiple filters of the same
     field using the GBDES package.
     """
 
-    ConfigClass = GbdesAstrometricFitConfig
+    ConfigClass = GbdesAstrometricMultibandFitConfig
     _DefaultName = "gbdesAstrometricMultibandFit"
 
 
@@ -2781,10 +2787,19 @@ class GbdesGlobalAstrometricMultibandFitConnections(
     )
 
 
+class GbdesGlobalAstrometricMultibandFitConfig(
+    GbdesAstrometricFitConfig,
+    pipelineConnections=GbdesGlobalAstrometricMultibandFitConnections,
+):
+    """Configuration for the GbdesGlobalAstrometricMultibandFitTask"""
+
+    pass
+
+
 class GbdesGlobalAstrometricMultibandFitTask(GbdesGlobalAstrometricFitTask):
     """Calibrate the WCS across multiple visits in multiple filters and
     multiple fields using the GBDES package.
     """
 
-    ConfigClass = GbdesGlobalAstrometricFitConfig
+    ConfigClass = GbdesGlobalAstrometricMultibandFitConfig
     _DefaultName = "gbdesAstrometricMultibandFit"
