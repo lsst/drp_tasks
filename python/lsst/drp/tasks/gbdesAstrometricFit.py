@@ -612,6 +612,12 @@ class GbdesAstrometricFitConfig(
         # Use only primary sources.
         self.sourceSelector["science"].doRequirePrimary = True
 
+        self.sourceSelector["science"].doSignalToNoise = True
+        self.sourceSelector["science"].signalToNoise.minimum = 8.0
+        self.sourceSelector["science"].signalToNoise.maximum = 1000.0
+        self.sourceSelector["science"].signalToNoise.fluxField = self.sourceFluxType + "_instFlux"
+        self.sourceSelector["science"].signalToNoise.errField = self.sourceFluxType + "_instFluxErr"
+
     def validate(self):
         super().validate()
 
@@ -782,6 +788,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # Get information about the extent of the input visits
         fields, fieldCenter, fieldRadius = self._prep_sky(inputVisitSummaries, exposureInfo.medianEpoch)
+        self.log.info("Field center set at %s with radius %s degrees", fieldCenter, fieldRadius.asDegrees())
 
         self.log.info("Load catalogs and associate sources")
         # Set up class to associate sources into matches using a
@@ -1926,9 +1933,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         )
 
         # Pixels will need to be rescaled before going into the mappings
-        sampleDetector = visitSummaryTables[0][0]
-        xscale = sampleDetector["bbox_max_x"] - sampleDetector["bbox_min_x"]
-        yscale = sampleDetector["bbox_max_y"] - sampleDetector["bbox_min_y"]
+        xscale = int(mapTemplate["BAND/DEVICE/poly"]["XMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["XMin"])
+        yscale = int(mapTemplate["BAND/DEVICE/poly"]["YMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["YMin"])
 
         catalogs = {}
         colorFits = {}
