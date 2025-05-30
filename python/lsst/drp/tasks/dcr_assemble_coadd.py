@@ -1058,7 +1058,7 @@ class DcrAssembleCoaddTask(CompareWarpAssembleCoaddTask):
         for warpExpRef, expWeight in zip(warpRefList, weightList):
             visit = warpExpRef.dataId["visit"]
             if subExposures is None:
-                exposure = warpExpRef.get()
+                exposure = warpExpRef.get()[bbox]
             else:
                 exposure = subExposures[visit][bbox]
             singleMetric = self.calculateSingleConvergence(dcrModels, exposure, significanceImage, statsCtrl)
