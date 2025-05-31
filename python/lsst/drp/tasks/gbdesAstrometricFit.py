@@ -573,6 +573,16 @@ class GbdesAstrometricFitConfig(
         doc="Build and output an lsst.afw.cameraGeom.Camera object using the fit per-detector model.",
         default=False,
     )
+    clipThresh = pexConfig.Field(
+        dtype=float,
+        doc="Threshold for clipping outliers in the fit (in standard deviations)",
+        default=5.0,
+    )
+    clipFraction = pexConfig.Field(
+        dtype=float,
+        doc="Minimum fraction of clipped sources that triggers a new fit iteration.",
+        default=0.0,
+    )
 
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
@@ -859,6 +869,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             reserveFraction=self.config.fitReserveFraction,
             randomNumberSeed=self.config.fitReserveRandomSeed,
             minFitExposures=nCoeffVisitModel,
+            clipThresh=self.config.clipThresh,
+            clipFraction=self.config.clipFraction,
         )
         self.log.info("WCS fitting done")
 
@@ -2074,12 +2086,18 @@ class GbdesAstrometricMultibandFitConnections(
     )
 
 
+class GbdesAstrometricMultibandFitConfig(
+    GbdesAstrometricFitConfig, pipelineConnections=GbdesAstrometricMultibandFitConnections
+):
+    pass
+
+
 class GbdesAstrometricMultibandFitTask(GbdesAstrometricFitTask):
     """Calibrate the WCS across multiple visits in multiple filters of the same
     field using the GBDES package.
     """
 
-    ConfigClass = GbdesAstrometricFitConfig
+    ConfigClass = GbdesAstrometricMultibandFitConfig
     _DefaultName = "gbdesAstrometricMultibandFit"
 
 
@@ -2445,7 +2463,10 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
 
         # Do the WCS fit
         wcsf.fit(
-            reserveFraction=self.config.fitReserveFraction, randomNumberSeed=self.config.fitReserveRandomSeed
+            reserveFraction=self.config.fitReserveFraction,
+            randomNumberSeed=self.config.fitReserveRandomSeed,
+            clipThresh=self.config.clipThresh,
+            clipFraction=self.config.clipFraction,
         )
         self.log.info("WCS fitting done")
 
@@ -2781,10 +2802,19 @@ class GbdesGlobalAstrometricMultibandFitConnections(
     )
 
 
+class GbdesGlobalAstrometricMultibandFitConfig(
+    GbdesAstrometricFitConfig,
+    pipelineConnections=GbdesGlobalAstrometricMultibandFitConnections,
+):
+    """Configuration for the GbdesGlobalAstrometricMultibandFitTask"""
+
+    pass
+
+
 class GbdesGlobalAstrometricMultibandFitTask(GbdesGlobalAstrometricFitTask):
     """Calibrate the WCS across multiple visits in multiple filters and
     multiple fields using the GBDES package.
     """
 
-    ConfigClass = GbdesGlobalAstrometricFitConfig
+    ConfigClass = GbdesGlobalAstrometricMultibandFitConfig
     _DefaultName = "gbdesAstrometricMultibandFit"
