@@ -28,16 +28,17 @@ from collections.abc import Iterable, Mapping
 from typing import ClassVar
 
 import numpy as np
+from scipy.interpolate import RBFInterpolator
 
 from lsst.afw.geom import SkyWcs, SpanSet, makeModifiedWcs, makeTransform
-from lsst.afw.image import ExposureF, FilterLabel, MaskX
+from lsst.afw.image import ExposureF, FilterLabel, MaskedImageF, MaskX
 from lsst.afw.math import (
     BackgroundList,
     binImage,
 )
 from lsst.geom import AffineTransform, Box2I, Extent2I, LinearTransform, Point2I
 from lsst.meas.algorithms import SubtractBackgroundTask
-from lsst.pex.config import ConfigurableField, Field, ListField
+from lsst.pex.config import Config, ConfigurableField, Field, ListField
 from lsst.pipe.base import (
     InputQuantizedConnection,
     OutputQuantizedConnection,
@@ -46,9 +47,143 @@ from lsst.pipe.base import (
     PipelineTaskConnections,
     QuantumContext,
     Struct,
+    Task,
 )
 from lsst.pipe.base import connectionTypes as cT
 from lsst.skymap import BaseSkyMap, TractInfo
+
+
+class BlendImagesConfig(Config):
+    control_ra = ListField(
+        doc="Right ascension (decimal degrees) of the control points for the blend.",
+        dtype=float,
+        default=[],
+    )
+    control_dec = ListField(
+        doc="Declination (decimal degrees) of the control points for the blend.",
+        dtype=float,
+        default=[],
+    )
+    control_frac2 = ListField(
+        doc=("Fraction (number between zero and one) of the second image at each control point."),
+        dtype=float,
+        default=[],
+    )
+    rbf_neighbors = Field(
+        doc="Number of neighbors for the interpolator (see scipy.interpolate.RBFInterpolator).",
+        dtype=int,
+        default=64,
+        optional=True,
+    )
+    rbf_smoothing = Field(
+        doc="Smoothing for the interpolator (see scipy.interpolate.RBFInterpolator).",
+        dtype=float,
+        default=0.0,
+    )
+    rbf_kernel = Field(
+        doc="Kernel for the interpolator (see scipy.interpolate.RBFInterpolator).",
+        dtype=str,
+        default="thin_plate_spline",
+    )
+    rbf_epsilon = Field(
+        doc="Shape parameter for the interpolator (see scipy.interpolate.RBFInterpolator).",
+        dtype=float,
+        default=None,
+        optional=True,
+    )
+    rbf_degree = Field(
+        doc="Degree of the added polynomial for the interpolator (see scipy.interpolate.RBFInterpolator).",
+        dtype=float,
+        default=None,
+        optional=True,
+    )
+
+    def validate(self) -> None:
+        if len(self.control_ra) != len(self.control_dec):
+            raise ValueError(
+                f"Control point lists have different sizes in RA ({len(self.control_ra)} "
+                f"and dec ({len(self.control_dec)}."
+            )
+        if len(self.control_ra) != len(self.control_hf_fraction):
+            raise ValueError(
+                f"Control point lists have different sizes in RA ({len(self.control_ra)} "
+                f"and value ({len(self.control_hf_fraction)}."
+            )
+        super().validate()
+
+
+class BlendImagesTask(Task):
+    _DefaultName: ClassVar[str] = "blendImages"
+    ConfigClass: ClassVar[type[BlendImagesConfig]] = BlendImagesConfig
+    config: BlendImagesConfig
+
+    @property
+    def has_control_points(self) -> bool:
+        return bool(self.config.control_ra)
+
+    def run(
+        self, image1: MaskedImageF, image2: MaskedImageF, wcs: SkyWcs, *, bad_mask_planes: Iterable[str] = ()
+    ) -> MaskedImageF:
+        bad_mask_planes = list(bad_mask_planes)
+        bbox = image1.getBBox()
+        x_grid, y_grid = np.meshgrid(np.arange(bbox.x.begin, bbox.x.end), np.arange(bbox.y.begin, bbox.y.end))
+        control_config_frac2 = np.array(self.config.control_frac2, dtype=np.float64)
+        control_config_xy = np.zeros(control_config_frac2.shape + (2,), dtype=np.float64)
+        control_config_xy[:, 0], control_config_xy[:, 1] = wcs.skyToPixelArray(
+            np.array(self.config.control_ra, dtype=np.float64),
+            np.array(self.config.control_dec, dtype=np.float64),
+            degrees=True,
+        )
+        bitmask1 = image1.mask.getPlaneBitMask(bad_mask_planes)
+        bitmask2 = image2.mask.getPlaneBitMask(bad_mask_planes)
+        bad1 = np.logical_or(np.isnan(image1.image.array), image1.mask.array & bitmask1)
+        bad2 = np.logical_or(np.isnan(image2.image.array), image2.mask.array & bitmask2)
+        eval_mask = np.logical_not(np.logical_or(bad1, bad2))
+        bad1_only = np.logical_and(bad1, np.logical_not(bad2))
+        bad2_only = np.logical_and(bad2, np.logical_not(bad1))
+        control_bad1_xy = np.zeros((np.sum(bad1_only, dtype=int), 2), dtype=np.float64)
+        control_bad1_xy[:, 0] = x_grid[bad1_only]
+        control_bad1_xy[:, 1] = y_grid[bad1_only]
+        control_bad1_frac2 = np.ones(control_bad1_xy.shape[0], dtype=np.float64)
+        control_bad2_xy = np.zeros((np.sum(bad2_only, dtype=int), 2), dtype=np.float64)
+        control_bad2_xy[:, 0] = x_grid[bad2_only]
+        control_bad2_xy[:, 1] = y_grid[bad2_only]
+        control_bad2_frac2 = np.zeros(control_bad2_xy.shape[0], dtype=np.float64)
+        control_xy = np.concatenate([control_config_xy, control_bad1_xy, control_bad2_xy])
+        control_frac2 = np.concatenate([control_config_frac2, control_bad1_frac2, control_bad2_frac2])
+        interpolator = RBFInterpolator(
+            control_xy,
+            control_frac2,
+            neighbors=self.config.rbf_neighbors,
+            smoothing=self.config.rbf_smoothing,
+            kernel=self.config.rbf_kernel,
+            epsilon=self.config.rbf_epsilon,
+            degree=self.config.rbf_degree,
+        )
+        eval_xy = np.zeros((np.sum(eval_mask, dtype=int), 2), dtype=np.float64)
+        eval_xy[:, 0] = x_grid[eval_mask]
+        eval_xy[:, 1] = y_grid[eval_mask]
+        frac2 = interpolator(eval_xy)
+        frac1 = 1 - frac2
+        result = MaskedImageF(bbox)
+        no_data = result.mask.getPlaneBitMask("NO_DATA")
+        result.image.array[...] = np.nan
+        result.image.array[eval_mask] = (
+            frac1 * image1.image.array[eval_mask] + frac2 * image2.image.array[eval_mask]
+        )
+        result.image.array[bad1_only] = image2.image.array[bad1_only]
+        result.image.array[bad2_only] = image1.image.array[bad2_only]
+        result.variance.array[...] = 0.0
+        result.variance.array[eval_mask] = (
+            frac1 * image1.variance.array[eval_mask] + frac2 * image2.variance.array[eval_mask]
+        )
+        result.variance.array[bad1_only] = image2.variance.array[bad1_only]
+        result.variance.array[bad2_only] = image1.variance.array[bad2_only]
+        result.mask.array[...] = no_data
+        result.mask.array[eval_mask] = 0
+        result.mask.array[bad1_only] = 0
+        result.mask.array[bad2_only] = 0
+        return result
 
 
 @dataclasses.dataclass
@@ -198,6 +333,11 @@ class MeasureTractBackgroundConfig(PipelineTaskConfig, pipelineConnections=Measu
         dtype=str,
         default="BG_IGNORE",
     )
+    blend = ConfigurableField(
+        "Configuration for blending the input high-frequency (as image 1) and low-frequency (as image 2) "
+        "by interpolating desired fractions at configured control points.",
+        BlendImagesTask,
+    )
     write_diagnostic_images = Field(
         "Whether to write diagnostic image outputs.",
         dtype=bool,
@@ -255,10 +395,13 @@ class MeasureTractBackgroundTask(PipelineTask):
     _DefaultName: ClassVar[str] = "measureTractBackground"
     ConfigClass: ClassVar[type[MeasureTractBackgroundConfig]] = MeasureTractBackgroundConfig
     config: MeasureTractBackgroundConfig
+    background: SubtractBackgroundTask
+    blend: BlendImagesTask
 
     def __init__(self, *, config=None, log=None, initInputs=None, **kwargs):
         super().__init__(config=config, log=log, initInputs=initInputs, **kwargs)
         self.makeSubtask("background")
+        self.makeSubtask("blend")
 
     def runQuantum(
         self,
@@ -327,6 +470,13 @@ class MeasureTractBackgroundTask(PipelineTask):
             lf_bg_list = self.background.run(hf_bg_exposure).background
             lf_bg_exposure = hf_bg_exposure.clone()
             lf_bg_exposure.image = lf_bg_list.getImage()
+            if self.blend.has_control_points:
+                lf_bg_exposure.maskedImage = self.blend.run(
+                    hf_bg_exposure.maskedImage,
+                    lf_bg_exposure.maskedImage,
+                    hf_bg_exposure.getWcs(),
+                    bad_mask_planes=self.background.config.ignoredPixelMask,
+                )
             lf_bg_exposures[band] = lf_bg_exposure
         lf_backgrounds = self.make_lf_background_lists(
             lf_bg_exposures=lf_bg_exposures, geometry=geometry, hf_backgrounds=hf_backgrounds
