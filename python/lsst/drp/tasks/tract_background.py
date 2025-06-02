@@ -123,11 +123,31 @@ class MeasureTractBackgroundConnections(PipelineTaskConnections, dimensions=["tr
         multiple=True,
         dimensions=["patch", "band"],
     )
+    hf_variance = cT.Input(
+        "deep_coadd_hf_variance",
+        doc=(
+            "Original high-frequency background variance estimate.  Must have the same bins as "
+            "hf_backgrounds."
+        ),
+        storageClass="Background",
+        multiple=True,
+        dimensions=["patch", "band"],
+    )
     lf_backgrounds = cT.Output(
         "deep_coadd_lf_background",
         doc=(
             "Remeasured low-frequency background, covering the same patches and area within those patches "
             "as the input high-frequency backgrounds."
+        ),
+        storageClass="Background",
+        multiple=True,
+        dimensions=["patch", "band"],
+    )
+    lf_variance = cT.Output(
+        "deep_coadd_lf_variance",
+        doc=(
+            "Remeasured low-frequency background variance, covering the same patches and area within "
+            "those patches as the input high-frequency backgrounds."
         ),
         storageClass="Background",
         multiple=True,
@@ -162,13 +182,24 @@ class MeasureTractBackgroundConnections(PipelineTaskConnections, dimensions=["tr
 
     def adjustQuantum(self, inputs, outputs, label, data_id):
         # Make sure we have an input for every output, and vice-versa.
-        hf_connection, hf_refs = inputs["hf_backgrounds"]
-        lf_connection, lf_refs = outputs["lf_backgrounds"]
-        hf_refs_by_data_id = {ref.dataId: ref for ref in hf_refs}
-        lf_refs_by_data_id = {ref.dataId: ref for ref in lf_refs}
-        common = sorted(hf_refs_by_data_id.keys() & lf_refs_by_data_id.keys())
-        inputs["hf_backgrounds"] = (hf_connection, [hf_refs_by_data_id[d] for d in common])
-        outputs["lf_backgrounds"] = (lf_connection, [lf_refs_by_data_id[d] for d in common])
+        hf_bg_connection, hf_bg_refs = inputs["hf_backgrounds"]
+        lf_bg_connection, lf_bg_refs = outputs["lf_backgrounds"]
+        hf_var_connection, hf_var_refs = inputs["hf_variance"]
+        lf_var_connection, lf_var_refs = outputs["lf_variance"]
+        hf_bg_refs_by_data_id = {ref.dataId: ref for ref in hf_bg_refs}
+        lf_bg_refs_by_data_id = {ref.dataId: ref for ref in lf_bg_refs}
+        hf_var_refs_by_data_id = {ref.dataId: ref for ref in hf_var_refs}
+        lf_var_refs_by_data_id = {ref.dataId: ref for ref in lf_var_refs}
+        common = sorted(
+            hf_bg_refs_by_data_id.keys()
+            & lf_bg_refs_by_data_id.keys()
+            & hf_var_refs_by_data_id.keys()
+            & lf_var_refs_by_data_id.keys()
+        )
+        inputs["hf_backgrounds"] = (hf_bg_connection, [hf_bg_refs_by_data_id[d] for d in common])
+        outputs["lf_backgrounds"] = (lf_bg_connection, [lf_bg_refs_by_data_id[d] for d in common])
+        inputs["hf_variance"] = (hf_var_connection, [hf_var_refs_by_data_id[d] for d in common])
+        outputs["lf_variance"] = (lf_var_connection, [lf_var_refs_by_data_id[d] for d in common])
         return super().adjustQuantum(inputs, outputs, label, data_id)
 
 
@@ -271,9 +302,20 @@ class MeasureTractBackgroundTask(PipelineTask):
         hf_backgrounds = {
             (ref.dataId["band"], ref.dataId["patch"]): butlerQC.get(ref) for ref in inputRefs.hf_backgrounds
         }
-        results = self.run(hf_backgrounds=hf_backgrounds, tract_info=tract_info)
+        hf_variance = {
+            (ref.dataId["band"], ref.dataId["patch"]): butlerQC.get(ref) for ref in inputRefs.hf_variance
+        }
+        results = self.run(hf_backgrounds=hf_backgrounds, hf_variance=hf_variance, tract_info=tract_info)
         for ref in outputRefs.lf_backgrounds:
             butlerQC.put(results.lf_backgrounds[ref.dataId["band"], ref.dataId["patch"]], ref)
+        for ref in outputRefs.lf_variance:
+            try:
+                butlerQC.put(results.lf_variance[ref.dataId["band"], ref.dataId["patch"]], ref)
+            except KeyError:
+                key = (ref.dataId["band"], ref.dataId["patch"])
+                self.log.warn(f"Key {key} not in {sorted(results.lf_variance.keys())}")
+                self.log.warn(f"Key {key} in {sorted(results.lf_background.keys())}: {key in results.lf_background.keys()}")
+                raise
         if self.config.write_diagnostic_images:
             for ref in outputRefs.hf_diagnostic_images:
                 butlerQC.put(results.hf_diagnostic_images[ref.dataId["band"]], ref)
@@ -281,7 +323,11 @@ class MeasureTractBackgroundTask(PipelineTask):
                 butlerQC.put(results.lf_diagnostic_images[ref.dataId["band"]], ref)
 
     def run(
-        self, *, hf_backgrounds: Mapping[tuple[str, int], BackgroundList], tract_info: TractInfo
+        self,
+        *,
+        hf_backgrounds: Mapping[tuple[str, int], BackgroundList],
+        hf_variance: Mapping[tuple[str, int], BackgroundList],
+        tract_info: TractInfo,
     ) -> Struct:
         """Estimate a tract-level background model.
 
@@ -292,6 +338,9 @@ class MeasureTractBackgroundTask(PipelineTask):
             by tuples of ``(band, patch)``.  Each background must have a single
             layer with bins that exactly divide the patch inner region (but may
             have bins of the same size outside the patch inner region).
+        hf_variance : `~collections.abc.Mapping`
+            "Backgrounds" measured on the variance planes, with the same
+            structure as ``hf_backgrounds``.
         tract_info : `lsst.skymap.TractInfo`
             Geometry information for the tract.
 
@@ -303,6 +352,9 @@ class MeasureTractBackgroundTask(PipelineTask):
             - ``lf_backgrounds``: mapping of output
               `lsst.afw.math.BackgroundList` instances, with the same keys as
               ``hf_backgrounds``.
+            - ``lf_variance``: mapping of output
+              `lsst.afw.math.BackgroundList` instances, with the same keys as
+              ``hf_backgrounds``.
             - ``hf_diagnostic_images``: mapping of tract-level superpixel
               images with the input backgrounds, keyed by band.
             - ``lf_diagnostic_images``: mapping of tract-level superpixel
@@ -312,6 +364,7 @@ class MeasureTractBackgroundTask(PipelineTask):
         """
         geometry = self.compute_geometry(hf_backgrounds=hf_backgrounds.values(), tract_info=tract_info)
         hf_bg_exposures = self.make_hf_background_exposures(geometry=geometry, hf_backgrounds=hf_backgrounds)
+        hf_var_exposures = self.make_hf_background_exposures(geometry=geometry, hf_backgrounds=hf_variance)
         common_mask = MaskX(geometry.binned_bbox)
         for hf_bg_exposure in hf_bg_exposures.values():
             common_mask |= hf_bg_exposure.mask
@@ -328,11 +381,22 @@ class MeasureTractBackgroundTask(PipelineTask):
             lf_bg_exposure = hf_bg_exposure.clone()
             lf_bg_exposure.image = lf_bg_list.getImage()
             lf_bg_exposures[band] = lf_bg_exposure
+        lf_var_exposures = {}
+        for band, hf_var_exposure in hf_var_exposures.items():
+            hf_var_exposure.mask = common_mask
+            lf_var_list = self.background.run(hf_var_exposure).background
+            lf_var_exposure = hf_var_exposure.clone()
+            lf_var_exposure.image = lf_var_list.getImage()
+            lf_var_exposures[band] = lf_var_exposure
         lf_backgrounds = self.make_lf_background_lists(
             lf_bg_exposures=lf_bg_exposures, geometry=geometry, hf_backgrounds=hf_backgrounds
         )
+        lf_variance = self.make_lf_background_lists(
+            lf_bg_exposures=lf_var_exposures, geometry=geometry, hf_backgrounds=hf_variance
+        )
         return Struct(
             lf_backgrounds=lf_backgrounds,
+            lf_variance=lf_variance,
             hf_diagnostic_images=hf_bg_exposures,
             lf_diagnostic_images=lf_bg_exposures,
             geometry=geometry,
