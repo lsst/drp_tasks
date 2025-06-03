@@ -21,7 +21,15 @@
 
 from __future__ import annotations
 
-__all__ = ()
+__all__ = (
+    "BinnedTractGeometry",
+    "MeasureTractBackgroundConfig",
+    "MeasureTractBackgroundConnections",
+    "MeasureTractBackgroundTask",
+    "SubtractTractBackgroundConfig",
+    "SubtractTractBackgroundConnections",
+    "SubtractTractBackgroundTask",
+)
 
 import dataclasses
 from collections.abc import Iterable, Mapping
@@ -92,6 +100,10 @@ class BinnedTractGeometry:
         x_slice : `slice`
             Superpixel image slice in the x dimension.
         """
+        assert child_bbox.y.begin % self.superpixel_size.y == 0, "superpixel size evenly divides bboxes"
+        assert child_bbox.x.begin % self.superpixel_size.x == 0, "superpixel size evenly divides bboxes"
+        assert child_bbox.y.end % self.superpixel_size.y == 0, "superpixel size evenly divides bboxes"
+        assert child_bbox.x.end % self.superpixel_size.x == 0, "superpixel size evenly divides bboxes"
         return (
             slice(
                 (child_bbox.y.begin - self.original_bbox.y.begin) // self.superpixel_size.y,
@@ -132,12 +144,6 @@ class MeasureTractBackgroundConnections(PipelineTaskConnections, dimensions=["tr
         storageClass="Background",
         multiple=True,
         dimensions=["patch", "band"],
-    )
-    sky_map = cT.Input(
-        doc="Input definition of geometry/bbox and projection/wcs for warps.",
-        name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
-        storageClass="SkyMap",
-        dimensions=("skymap",),
     )
     hf_diagnostic_images = cT.Output(
         "deep_coadd_hf_background_image",
@@ -232,7 +238,7 @@ class MeasureTractBackgroundTask(PipelineTask):
     The input background's configuration for how to interpolate or approximate
     those bin values is ignored at this stage; we use backgrounds as inputs
     rather than simple binned images because each background bin value is
-    already a robust mean of non-detected pixels, which does at passable job
+    already a robust mean of non-detected pixels, which does a passable job
     at avoiding contamination from sources.
 
     For tracts with very large objects, it is expected that the tract-level
@@ -384,7 +390,7 @@ class MeasureTractBackgroundTask(PipelineTask):
             original_bbox=original_bbox,
             superpixel_size=superpixel_size,
             binned_bbox=binned_bbox,
-            binned_wcs=make_binned_wcs(tract_info.getWcs(), superpixel_size.x, superpixel_size.y),
+            binned_wcs=_make_binned_wcs(tract_info.getWcs(), superpixel_size.x, superpixel_size.y),
         )
 
     def make_hf_background_exposures(
@@ -589,7 +595,7 @@ class SubtractTractBackgroundTask(PipelineTask):
             result.input_coadd_binned.setXY0(
                 Point2I(input_coadd.getX0() // bin_size_x, input_coadd.getY0() // bin_size_y)
             )
-            result.input_coadd_binned.setWcs(make_binned_wcs(input_coadd.getWcs(), bin_size_x, bin_size_y))
+            result.input_coadd_binned.setWcs(_make_binned_wcs(input_coadd.getWcs(), bin_size_x, bin_size_y))
             result.input_coadd_binned.setFilter(input_coadd.getFilter())
         bg_image = lf_background.getImage()
         result.output_coadd = input_coadd.clone()
@@ -600,7 +606,7 @@ class SubtractTractBackgroundTask(PipelineTask):
         return result
 
 
-def make_binned_wcs(original: SkyWcs, bin_size_x: int, bin_size_y: int) -> SkyWcs:
+def _make_binned_wcs(original: SkyWcs, bin_size_x: int, bin_size_y: int) -> SkyWcs:
     """Make a WCS appropriate for a binned version of an image.
 
     Parameters
