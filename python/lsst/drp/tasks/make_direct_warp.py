@@ -825,10 +825,6 @@ class MakeDirectWarpTask(PipelineTask):
                     )
                     return False
 
-            elif visit_summary is not None:
-                # We can only get here by calling `run`, not `runQuantum`.
-                raise RuntimeError("useVisitSummaryPsf=True, but visit_summary is provided. ")
-
         if self.config.doApplyNewBackground:
             detector_inputs.apply_background()
         elif detector_inputs.background_apply:
