@@ -297,6 +297,18 @@ class MakeDirectWarpConfig(
         "PSF model and aperture corrections from the 'calexp' connection.",
         default=True,
     )
+    useVisitSummaryWcs = Field[bool](
+        doc="If True, use the WCS from the "
+        "'visit_summary' connection to make the warp. If False, use the "
+        "WCS from the 'calexp' connection.",
+        default=True,
+    )
+    useVisitSummaryPhotoCalib = Field[bool](
+        doc="If True, use the photometric calibration from the "
+        "'visit_summary' connection to make the warp. If False, use the "
+        "photometric calibration from the 'calexp' connection.",
+        default=True,
+    )
     doSelectPreWarp = Field[bool](
         doc="Select ccds before warping?",
         default=True,
@@ -794,20 +806,22 @@ class MakeDirectWarpTask(PipelineTask):
                 )
                 return False
 
-            if photo_calib := row.getPhotoCalib():
-                input_exposure.setPhotoCalib(photo_calib)
-            else:
-                self.log.info(
-                    "No photometric calibration found in visit summary for detector = %s. Skipping it.",
-                    detector,
-                )
-                return False
+            if self.config.useVisitSummaryPhotoCalib:
+                if photo_calib := row.getPhotoCalib():
+                    input_exposure.setPhotoCalib(photo_calib)
+                else:
+                    self.log.info(
+                        "No photometric calibration found in visit summary for detector = %s. Skipping it.",
+                        detector,
+                    )
+                    return False
 
-            if wcs := row.getWcs():
-                input_exposure.setWcs(wcs)
-            else:
-                self.log.info("No WCS found in visit summary for detector = %s. Skipping it.", detector)
-                return False
+            if self.config.useVisitSummaryWcs:
+                if wcs := row.getWcs():
+                    input_exposure.setWcs(wcs)
+                else:
+                    self.log.info("No WCS found in visit summary for detector = %s. Skipping it.", detector)
+                    return False
 
             if self.config.useVisitSummaryPsf:
                 if psf := row.getPsf():
