@@ -216,7 +216,9 @@ class MakeDirectWarpConnections(
             del self.background_revert_list
         if not config.doApplyNewBackground:
             del self.background_apply_list
-        if not config.doApplyFlatBackgroundRatio:
+        if not config.doApplyFlatBackgroundRatio or (
+            not config.doRevertOldBackground and not config.doApplyNewBackground
+        ):
             del self.background_to_photometric_ratio_list
 
         if not config.doWarpMaskedFraction:
