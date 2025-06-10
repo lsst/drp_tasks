@@ -262,6 +262,8 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
         # down-cast to `0`.
         self.assertTrue((result.sources["visit"] == 2**33).all())
 
+        self.assertEqual(result.exposure.metadata["BUNIT"], "nJy")
+
 
 class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
     """Tests of ``ReprocessVisitImageTask.runQuantum``, which need a test
