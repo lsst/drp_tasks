@@ -193,10 +193,10 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         """
         visit, detector = -np.inf, -np.inf  # Previous visit, detector IDs.
         for _, obsId in enumerate(inputs):
-            with self.subTest(input_number=obsId):
+            with self.subTest(input_number=repr(obsId)):
                 self.assertGreaterEqual(obsId.visit, visit)
             if visit == obsId.visit:
-                with self.subTest(detector_number=obsId.detector):
+                with self.subTest(detector_number=repr(obsId.detector)):
                     self.assertGreaterEqual(obsId.detector, detector)
 
             visit, detector = obsId.visit, obsId.detector
@@ -211,13 +211,13 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         # to the total number of input exposures available.
         max_visit_count = len(self.handleList)
         for cellId, singleCellCoadd in result.multipleCellCoadd.cells.items():
-            with self.subTest(x=cellId.x, y=cellId.y):
+            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
                 self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
             # Check that the aperture correction maps are not None.
-            with self.subTest(x=cellId.x, y=cellId.y):
+            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
                 self.assertTrue(singleCellCoadd.aperture_correction_map is not None)
             # Check that the inputs are sorted.
-            with self.subTest(x=cellId.x, y=cellId.y):
+            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
                 self.checkSortOrder(singleCellCoadd.inputs)
 
     def test_assemble_basic(self):
@@ -271,7 +271,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.runTask()
         max_visit_count = len(self.handleList)
         for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
-            with self.subTest(x=cellId.x, y=cellId.y):
+            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
                 self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
 
     def test_inputs_sorted(self):
