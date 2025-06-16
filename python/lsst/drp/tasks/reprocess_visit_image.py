@@ -148,7 +148,7 @@ class ReprocessVisitImageConfig(
     )
     remove_initial_photo_calib = pexConfig.Field(
         dtype=bool,
-        default=True,
+        default=False,
         doc="Remove an already-applied photometric calibration from the backgrounds?",
     )
     snap_combine = pexConfig.ConfigurableField(
