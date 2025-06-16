@@ -148,7 +148,7 @@ class ReprocessVisitImageConfig(
     )
     remove_initial_photo_calib = pexConfig.Field(
         dtype=bool,
-        default=True,
+        default=False,
         doc="Remove an already-applied photometric calibration from the backgrounds?",
     )
     snap_combine = pexConfig.ConfigurableField(
@@ -514,7 +514,6 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         if self.config.remove_initial_photo_calib:
             # Calibrate the image, so it's on the same units as the background.
             result.exposure.maskedImage = initial_photo_calib.calibrateImage(result.exposure.maskedImage)
-            result.exposure.metadata["BUNIT"] = "nJy"
 
         with lsst.meas.algorithms.backgroundFlatContext(
             result.exposure.maskedImage,
@@ -675,6 +674,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         exposure.maskedImage = photo_calib.calibrateImage(exposure.maskedImage)
         identity = afwImage.PhotoCalib(1.0, photo_calib.getCalibrationErr(), bbox=exposure.getBBox())
         exposure.setPhotoCalib(identity)
+        exposure.metadata["BUNIT"] = "nJy"
         return calibrated_sources_footprints
 
 
