@@ -216,7 +216,9 @@ class MakeDirectWarpConnections(
             del self.background_revert_list
         if not config.doApplyNewBackground:
             del self.background_apply_list
-        if not config.doApplyFlatBackgroundRatio:
+        if not config.doApplyFlatBackgroundRatio or (
+            not config.doRevertOldBackground and not config.doApplyNewBackground
+        ):
             del self.background_to_photometric_ratio_list
 
         if not config.doWarpMaskedFraction:
@@ -293,6 +295,18 @@ class MakeDirectWarpConfig(
         doc="If True, use the PSF model and aperture corrections from the "
         "'visit_summary' connection to make the warp. If False, use the "
         "PSF model and aperture corrections from the 'calexp' connection.",
+        default=True,
+    )
+    useVisitSummaryWcs = Field[bool](
+        doc="If True, use the WCS from the "
+        "'visit_summary' connection to make the warp. If False, use the "
+        "WCS from the 'calexp' connection.",
+        default=True,
+    )
+    useVisitSummaryPhotoCalib = Field[bool](
+        doc="If True, use the photometric calibration from the "
+        "'visit_summary' connection to make the warp. If False, use the "
+        "photometric calibration from the 'calexp' connection.",
         default=True,
     )
     doSelectPreWarp = Field[bool](
@@ -792,20 +806,22 @@ class MakeDirectWarpTask(PipelineTask):
                 )
                 return False
 
-            if photo_calib := row.getPhotoCalib():
-                input_exposure.setPhotoCalib(photo_calib)
-            else:
-                self.log.info(
-                    "No photometric calibration found in visit summary for detector = %s. Skipping it.",
-                    detector,
-                )
-                return False
+            if self.config.useVisitSummaryPhotoCalib:
+                if photo_calib := row.getPhotoCalib():
+                    input_exposure.setPhotoCalib(photo_calib)
+                else:
+                    self.log.info(
+                        "No photometric calibration found in visit summary for detector = %s. Skipping it.",
+                        detector,
+                    )
+                    return False
 
-            if wcs := row.getWcs():
-                input_exposure.setWcs(wcs)
-            else:
-                self.log.info("No WCS found in visit summary for detector = %s. Skipping it.", detector)
-                return False
+            if self.config.useVisitSummaryWcs:
+                if wcs := row.getWcs():
+                    input_exposure.setWcs(wcs)
+                else:
+                    self.log.info("No WCS found in visit summary for detector = %s. Skipping it.", detector)
+                    return False
 
             if self.config.useVisitSummaryPsf:
                 if psf := row.getPsf():
@@ -822,10 +838,6 @@ class MakeDirectWarpTask(PipelineTask):
                         detector,
                     )
                     return False
-
-            elif visit_summary is not None:
-                # We can only get here by calling `run`, not `runQuantum`.
-                raise RuntimeError("useVisitSummaryPsf=True, but visit_summary is provided. ")
 
         if self.config.doApplyNewBackground:
             detector_inputs.apply_background()
