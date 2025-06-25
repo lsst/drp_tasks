@@ -357,7 +357,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
                     "ixy",
                 ]:
                     sourceDict[key] = zeros_like
-                sourceDict["apFlux_12_0_instFluxErr"] = 1e-3 * ones_like
+                sourceDict["apFlux_12_0_instFluxErr"] = 1e-2 * ones_like
                 sourceDict["detect_isPrimary"] = ones_like.astype(bool)
 
                 sourceCat = pd.DataFrame(sourceDict)
@@ -983,7 +983,7 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
                         "ixy",
                     ]:
                         sourceDict[key] = zeros_like
-                    sourceDict["apFlux_12_0_instFluxErr"] = 1e-3 * ones_like
+                    sourceDict["apFlux_12_0_instFluxErr"] = 1e-2 * ones_like
                     sourceDict["detect_isPrimary"] = ones_like.astype(bool)
 
                     sourceCat = pd.DataFrame(sourceDict)
