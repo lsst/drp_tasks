@@ -780,7 +780,7 @@ class MetadetectionShearTask(PipelineTask):
         fake_noise_image = ImageF(cell_coadd.outer.image, True)
         noise = np.median(cell_coadd.outer.variance.array[:, :])
         fake_noise_image.array[:, :] = self.rng.normal(
-            scale=noise,
+            scale=np.sqrt(noise),
             size=fake_noise_image.array.shape,
         )
         return self._make_cell_exposure(
