@@ -37,7 +37,7 @@ from lsst.afw.math import FixedKernel
 from lsst.afw.table import SimpleCatalog
 from lsst.cell_coadds import MultipleCellCoadd, SingleCellCoadd
 from lsst.meas.algorithms import KernelPsf, LoadReferenceObjectsConfig, ReferenceObjectLoader
-from lsst.pex.config import ConfigField, ListField
+from lsst.pex.config import ConfigField, ListField, Field
 from lsst.pipe.base import (
     InputQuantizedConnection,
     NoWorkFound,
@@ -137,6 +137,12 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         # TODO learn how to set in a config file
         # default=["g", "r", "i", "z"],
         default=["r"],
+        optional=False,
+    )
+
+    shape_fitter = Field[str](
+        "Shape measurement fitting algorithm",
+        default="wmom",
         optional=False,
     )
 
@@ -246,11 +252,11 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "wmom_flags",
+                    "%s_flags" % (config.shape_fitter),
                     pa.uint32(),
                     nullable=False,
                     metadata={
-                        "doc": "Overall flags for wmom measurement.",
+                        "doc": "Overall flags for %s measurement." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
@@ -287,147 +293,156 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "admom wmom T (<x^2> + <y^2>) measurement for PSF.",
+                        "doc": "admom %s T (<x^2> + <y^2>) measurement for PSF." % (config.shape_fitter),
                         "unit": "arcseconds squared",
                     },
                 ),
                 # reconvolved PSF measurements
                 pa.field(
-                    "wmom_psf_flags",
+                    "%s_psf_flags" % (config.shape_fitter),
                     pa.uint32(),
                     nullable=False,
                     metadata={
-                        "doc": "Flags for wmom reconvolved PSF measurement.",
+                        "doc": "Flags for %s reconvolved PSF measurement." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_psf_g_1",
+                    "%s_psf_g_1" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom g1 measurement for reconvolved PSF.",
+                        "doc": "%s g1 measurement for reconvolved PSF." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_psf_g_2",
+                    "%s_psf_g_2" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom g2 measurement for reconvolved PSF.",
+                        "doc": "%s g2 measurement for reconvolved PSF." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_psf_T",
+                    "%s_psf_T" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom T (<x^2> + <y^2>) measurement for reconvolved PSF.",
+                        "doc": "%s T (<x^2> + <y^2>) measurement for reconvolved PSF." % (config.shape_fitter),
                         "unit": "arcseconds squared",
                     },
                 ),
                 # Object measurements
                 pa.field(
-                    "wmom_obj_flags",
+                    "%s_obj_flags" % (config.shape_fitter),
                     pa.uint32(),
                     nullable=False,
                     metadata={
-                        "doc": "Flags for wmom object measurement.",
+                        "doc": "Flags for %s object measurement." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_s2n",
+                    "%s_s2n" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom object s2n measurement.",
+                        "doc": "%s object s2n measurement." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_g_1",
+                    "%s_g_1" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom object g1 measurement.",
+                        "doc": "%s object g1 measurement." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_g_2",
+                    "%s_g_2" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom object g2 measurement.",
+                        "doc": "%s object g2 measurement." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_T_flags",
+                    "%s_g_cov_11" % (config.shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov first element (1,1) measurement." % (config.shape_fitter),
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "%s_g_cov_12" % (config.shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov off-diagonal (1,2) element measurement." % (config.shape_fitter),
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "%s_g_cov_21" % (config.shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov off-diagonal (2,1) element measurement." % (config.shape_fitter),
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "%s_g_cov_22" % (config.shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov last element (2,2) measurement." % (config.shape_fitter),
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "%s_T_flags" % (config.shape_fitter),
                     pa.uint32(),
                     nullable=False,
                     metadata={
-                        "doc": "Flags for wmom T measurement for object.",
+                        "doc": "Flags for %s T measurement for object." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "wmom_T",
+                    "%s_T" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom T (<x^2> + <y^2>) measurement for object.",
+                        "doc": "%s T (<x^2> + <y^2>) measurement for object." % (config.shape_fitter),
                         "unit": "arcseconds squared",
                     },
                 ),
                 pa.field(
-                    "wmom_T_err",
+                    "%s_T_err" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom T uncertainty for object.",
+                        "doc": "%s T uncertainty for object." % (config.shape_fitter),
                         "unit": "arcseconds squared",
                     },
                 ),
                 pa.field(
-                    "wmom_T_ratio",
+                    "%s_T_ratio" % (config.shape_fitter),
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "wmom T/Tpsf for object.",
+                        "doc": "%s T/Tpsf for object." % (config.shape_fitter),
                         "unit": "",
                     },
                 ),
-                # pa.field(
-                #     "wmom_band_flux_flags_1",
-                #     pa.uint32(),
-                #     nullable=False,
-                #     metadata={
-                #         "doc": "wmom flux measurement flags for object in filter 1.",
-                #         "unit": "",
-                #     },
-                # ),
-                # pa.field(
-                #     "wmom_band_flux_1",
-                #     pa.float32(),
-                #     nullable=False,
-                #     metadata={
-                #         "doc": "wmom flux for object in filter 1.",
-                #         "unit": "",
-                #     },
-                # ),
-                # pa.field(
-                #     "wmom_band_flux_err_1",
-                #     pa.float32(),
-                #     nullable=False,
-                #     metadata={
-                #         "doc": "wmom flux uncertainty for object in filter 1.",
-                #         "unit": "",
-                #     },
-                # ),
                 pa.field(
                     "shear_bands",
                     pa.string(),
@@ -541,34 +556,34 @@ class MetadetectionShearTask(PipelineTask):
 
         for b in config.required_bands:
             pa_schema = pa_schema.append(
-                            pa.field(
-                                "wmom_band_flux_flags_%s" % (b),
+                            pa.field( 
+                                "%s_band_flux_flags_%s" % (config.shape_fitter, b),
                                 pa.uint32(),
                                 nullable=False,
                                 metadata={
-                                    "doc": "wmom flux measurement flags for object in filter %s." % (b),
+                                    "doc": "%s flux measurement flags for object in filter %s." % (config.shape_fitter, b),
                                     "unit": "",
                                 },
                             ),
                         )
             pa_schema = pa_schema.append(
                             pa.field(
-                                "wmom_band_flux_%s" % (b),
+                                "%s_band_flux_%s" % (config.shape_fitter, b),
                                 pa.float32(),
                                 nullable=False,
                                 metadata={
-                                    "doc": "wmom flux for object in filter %s." % (b),
+                                    "doc": "%s flux for object in filter %s." % (config.shape_fitter, b),
                                     "unit": "",
                                 },
                             ),
                         )
             pa_schema = pa_schema.append(
                             pa.field(
-                                "wmom_band_flux_err_%s" % (b),
+                                "%s_band_flux_err_%s" % (config.shape_fitter, b),
                                 pa.uint32(),
                                 nullable=False,
                                 metadata={
-                                    "doc": "wmom flux uncertainty for object in filter %s." % (b),
+                                    "doc": "%s flux uncertainty for object in filter %s." % (config.shape_fitter, b),
                                     "unit": "",
                                 },
                             ),
@@ -708,7 +723,10 @@ class MetadetectionShearTask(PipelineTask):
             trim_pixels=0,
         )
 
-        mdet_config = get_mdet_config()
+        # updating the config doesn't do anything now, 
+        # but should once override_config is operational
+        update_config = {"meas_type" : self.config.shape_fitter}
+        mdet_config = get_mdet_config(update_config)
 
         res = run_metadetect(
             rng=self.rng,
@@ -721,6 +739,7 @@ class MetadetectionShearTask(PipelineTask):
             meas_type=mdet_config["meas_type"],
             mask_frac=mask_frac,
             bands=self.config.required_bands,
+            fitter=self.config.shape_fitter,
             full_output=True,
         )
 
@@ -837,6 +856,7 @@ def _make_comb_data(
     meas_type,
     mask_frac,
     bands,
+    fitter,
     full_output=False,
 ):
     import esutil as eu
@@ -847,19 +867,20 @@ def _make_comb_data(
         # we will copy out of arrays to these
         ("psfrec_g_1", "f4"),
         ("psfrec_g_2", "f4"),
-        ("wmom_psf_g_1", "f4"),
-        ("wmom_psf_g_2", "f4"),
-        ("wmom_g_1", "f4"),
-        ("wmom_g_2", "f4"),
-        # ("wmom_band_flux_flags_1", "i4"),
-        # ("wmom_band_flux_1", "f4"),
-        # ("wmom_band_flux_err_1", "f4"),
+        ("%s_psf_g_1" % (fitter), "f4"),
+        ("%s_psf_g_2" % (fitter), "f4"),
+        ("%s_g_1" % (fitter), "f4"),
+        ("%s_g_2" % (fitter), "f4"),
+        ("%s_g_cov_11" % (fitter), "f4"),
+        ("%s_g_cov_12" % (fitter), "f4"),
+        ("%s_g_cov_21" % (fitter), "f4"),
+        ("%s_g_cov_22" % (fitter), "f4"),
     ]
 
     for b in bands:
-        copy_dt.append(("wmom_band_flux_flags_%s" % (b), "i4"))
-        copy_dt.append(("wmom_band_flux_%s" % (b), "f4"))
-        copy_dt.append(("wmom_band_flux_err_%s" % (b), "f4"))
+        copy_dt.append(("%s_band_flux_flags_%s" % (fitter, b), "i4"))
+        copy_dt.append(("%s_band_flux_%s" % (fitter, b), "f4"))
+        copy_dt.append(("%s_band_flux_err_%s" % (fitter, b), "f4"))
 
     add_dt = [
         ("id", "u8"),
@@ -886,18 +907,20 @@ def _make_comb_data(
             newdata = eu.numpy_util.add_fields(data, add_dt)
             newdata["psfrec_g_1"] = newdata["psfrec_g"][:, 0]
             newdata["psfrec_g_2"] = newdata["psfrec_g"][:, 1]
-            newdata["wmom_psf_g_1"] = newdata["wmom_psf_g"][:, 0]
-            newdata["wmom_psf_g_2"] = newdata["wmom_psf_g"][:, 1]
-            newdata["wmom_g_1"] = newdata["wmom_g"][:, 0]
-            newdata["wmom_g_2"] = newdata["wmom_g"][:, 1]
-            # newdata["wmom_band_flux_flags_1"] = newdata["wmom_band_flux_flags"]
-            # newdata["wmom_band_flux_1"] = newdata["wmom_band_flux"]
-            # newdata["wmom_band_flux_err_1"] = newdata["wmom_band_flux_err"]
+            newdata["%s_psf_g_1" % (fitter)] = newdata["%s_psf_g" % (fitter)][:, 0]
+            newdata["%s_psf_g_2" % (fitter)] = newdata["%s_psf_g" % (fitter)][:, 1]
+            newdata["%s_g_1" % (fitter)] = newdata["%s_g" % (fitter)][:, 0]
+            newdata["%s_g_2" % (fitter)] = newdata["%s_g" % (fitter)][:, 1]
+
+            newdata["%s_g_cov_11" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 0, 0]
+            newdata["%s_g_cov_12" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 0, 1]
+            newdata["%s_g_cov_21" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 1, 0]
+            newdata["%s_g_cov_22" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 1, 1]
 
             for i, b in enumerate(bands):
-                newdata["wmom_band_flux_flags_%s" % (b)] = newdata["wmom_band_flux_flags"][:, i]
-                newdata["wmom_band_flux_%s" % (b)] = newdata["wmom_band_flux"][:, i]
-                newdata["wmom_band_flux_err_%s" % (b)] = newdata["wmom_band_flux_flags"][:, i]
+                newdata["%s_band_flux_flags_%s" % (fitter, b)] = newdata["%s_band_flux_flags" % (fitter)][:, i]
+                newdata["%s_band_flux_%s" % (fitter, b)] = newdata["%s_band_flux" % (fitter)][:, i]
+                newdata["%s_band_flux_err_%s" % (fitter, b)] = newdata["%s_band_flux_flags" % (fitter)][:, i]
 
             newdata["tract"] = idinfo.tract
             newdata["patch_x"] = idinfo.patch.x
@@ -909,7 +932,7 @@ def _make_comb_data(
                 newdata["shear_type"] = "ns"
             else:
                 newdata["shear_type"] = stype
-
+            
             dlist.append(newdata)
 
     if len(dlist) > 0:
