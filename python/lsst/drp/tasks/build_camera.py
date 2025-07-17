@@ -238,7 +238,7 @@ class BuildCameraFromAstrometryTask(Task):
         """
 
         # Normalize the model.
-        newParams, newTPx, newTPy = self._normalize_model(mapParams, mapTemplate, detectorList, visitList)
+        newParams, newTPx, newTPy = self._prep_model(mapParams, mapTemplate, detectorList, visitList)
 
         if self.config.modelSplitting == "basic":
             # Put all of the camera distortion into the pixels->focal plane
@@ -253,24 +253,30 @@ class BuildCameraFromAstrometryTask(Task):
             # generating a more physically-motivated distortion model.
             pixToFocalPlane, focalPlaneToTangentPlane = self._split_model(newTPx, newTPy, detectorList)
 
+        xScale = int(mapTemplate["BAND/DEVICE/poly"]["XMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["XMin"])
+        yScale = int(mapTemplate["BAND/DEVICE/poly"]["YMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["YMin"])
+
         # Turn the mappings into a Camera object.
         camera = self._translate_to_afw(
-            pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle
+            pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle,
+            xScale, yScale,
         )
 
         return camera
 
-    def _normalize_model(self, mapParams, mapTemplate, detectorList, visitList):
-        """Normalize the camera mappings, such that they correspond to the
-        average visit.
+    def _prep_model(self, mapParams, mapTemplate, detectorList, visitList, normalize=False):
+        """Normalize and recenter the camera mappings, such that they
+        correspond to the average visit.
 
         In order to break degeneracies, `gbdes` sets one visit to have the
         identity for the per-visit part of its model. This visit is thus
         imprinted in the per-detector part of the model. This function
-        normalizes the model such that the parameters correspond instead to the
-        average per-visit behavior. This step assumes that the per-visit part
-        of the model is a first-order polynomial, in which case this conversion
-        can be done without loss of information.
+        normalizes and recenters the model such that the parameters correspond
+        instead to the average per-visit behavior. This step assumes that the
+        per-visit part of the model is a first-order polynomial, in which case
+        this conversion can be done without loss of information. If `normalize`
+        is false, the model is just recentered so that the average offset is
+        zero.
 
         Parameters
         ----------
@@ -318,19 +324,25 @@ class BuildCameraFromAstrometryTask(Task):
         expoArray = np.vstack(visitParams)
 
         expoMean = expoArray.mean(axis=0)
+        if normalize:
+            # Shift the per-device part of the model to correspond with the mean
+            # per-visit behavior.
+            newDeviceArray = np.zeros(deviceArray.shape)
+            nCoeffsDev = deviceArray.shape[1] // 2
+            newDeviceArray[:, :nCoeffsDev] = (
+                deviceArray[:, :nCoeffsDev] * expoMean[1] + deviceArray[:, nCoeffsDev:] * expoMean[2]
+            )
+            newDeviceArray[:, nCoeffsDev:] = (
+                deviceArray[:, :nCoeffsDev] * expoMean[4] + deviceArray[:, nCoeffsDev:] * expoMean[5]
+            )
+            newDeviceArray[:, 0] += expoMean[0]
+            newDeviceArray[:, nCoeffsDev] += expoMean[3]
+        else:
+            # Just recenter the model.
+            newDeviceArray = np.copy(deviceArray)
+            newDeviceArray[:, 0] += expoMean[0]
+            newDeviceArray[:, nCoeffsDev] += expoMean[3]
 
-        # Shift the per-device part of the model to correspond with the mean
-        # per-visit behavior.
-        newDeviceArray = np.zeros(deviceArray.shape)
-        nCoeffsDev = deviceArray.shape[1] // 2
-        newDeviceArray[:, :nCoeffsDev] = (
-            deviceArray[:, :nCoeffsDev] * expoMean[1] + deviceArray[:, nCoeffsDev:] * expoMean[2]
-        )
-        newDeviceArray[:, nCoeffsDev:] = (
-            deviceArray[:, :nCoeffsDev] * expoMean[4] + deviceArray[:, nCoeffsDev:] * expoMean[5]
-        )
-        newDeviceArray[:, 0] += expoMean[0]
-        newDeviceArray[:, nCoeffsDev] += expoMean[3]
 
         # Then get the tangent plane positions from the new device model:
         newTPx = []
@@ -676,7 +688,8 @@ class BuildCameraFromAstrometryTask(Task):
         return polyArray
 
     def _translate_to_afw(
-        self, pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle
+        self, pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle,
+        xScale, yScale
     ):
         """Convert the model parameters to a Camera object.
 
@@ -714,9 +727,9 @@ class BuildCameraFromAstrometryTask(Task):
             tpDegree, focalPlaneToTangentPlane["x"], focalPlaneToTangentPlane["y"]
         )
         # Reverse rotation from input visits and flip x-axis.
-        cosRot = np.cos(-rotationAngle)
-        sinRot = np.sin(-rotationAngle)
-        rotateAndFlipCoeffs = self.make_ast_polymap_coeffs(1, [0, cosRot, -sinRot], [0, -sinRot, cosRot])
+        cosRot = np.cos(rotationAngle)
+        sinRot = np.sin(rotationAngle)
+        rotateAndFlipCoeffs = self.make_ast_polymap_coeffs(1, [0, -cosRot, sinRot], [0, sinRot, cosRot])
 
         ccdZoom = ast.ZoomMap(2, 1 / scaleConvert)
         ccdToSky = ast.PolyMap(
@@ -752,7 +765,8 @@ class BuildCameraFromAstrometryTask(Task):
                 detectorBuilder.append(amp.rebuild())
 
             normCoeffs = self.make_ast_polymap_coeffs(
-                1, [-1.0, 2 / detector.getBBox().getWidth(), 0], [-1.0, 0, 2 / detector.getBBox().getHeight()]
+                #1, [-1.0, 2 / detector.getBBox().getWidth(), 0], [-1.0, 0, 2 / detector.getBBox().getHeight()]
+                1, [-1.0, 2 / xScale, 0], [-1.0, 0, 2 / yScale]
             )
             normMap = ast.PolyMap(
                 normCoeffs,
