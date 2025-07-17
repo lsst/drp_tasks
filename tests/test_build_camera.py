@@ -25,18 +25,20 @@ import unittest
 import astropy.units as u
 import numpy as np
 import yaml
+from scipy.linalg import lstsq
 from scipy.optimize import minimize
 
 import lsst.drp.tasks
 import lsst.drp.tasks.gbdesAstrometricFit
 import lsst.utils
-from lsst.afw.cameraGeom.testUtils import FIELD_ANGLE, PIXELS, CameraWrapper
+from lsst.afw.cameraGeom.testUtils import FIELD_ANGLE, PIXELS
 from lsst.afw.table import ExposureCatalog
 from lsst.drp.tasks.build_camera import (
     BuildCameraFromAstrometryConfig,
     BuildCameraFromAstrometryTask,
     _z_function,
 )
+from lsst.obs.subaru import HyperSuprimeCam
 
 TESTDIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -45,10 +47,12 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
 
     def setUp(self):
 
+        rng = np.random.default_rng(seed=54321)
+
         # The tests will be done with data simulated to look like HSC data.
-        self.camera = CameraWrapper(isLsstLike=False).camera
+        self.camera = HyperSuprimeCam().getCamera()
         self.detectorList = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-        self.visitList = np.arange(10)
+        self.visitList = [1176, 17900, 17930, 17934]
         self.rotationAngle = (270 * u.degree).to(u.radian).value
         self.task = BuildCameraFromAstrometryTask()
 
@@ -65,24 +69,39 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
                 )
                 self.mapParams[key] = polyCoefficients
 
+        # Make semi-random visit maps:
+        for visit in self.visitList:
+            positionOffset = rng.random(2)
+            angleOffset = rng.random() * (2 * np.pi)
+            params = np.array(
+                [
+                    positionOffset[0],
+                    np.cos(angleOffset),
+                    -np.sin(angleOffset),
+                    positionOffset[1],
+                    np.sin(angleOffset),
+                    np.cos(angleOffset),
+                ]
+            )
+            self.mapParams[f"{visit}/poly"] = params
+
         visitSummary = ExposureCatalog.readFits(os.path.join(datadir, "visitSummary_1176.fits"))
         gbdesTask = lsst.drp.tasks.gbdesAstrometricFit.GbdesAstrometricFitTask()
         _, self.mapTemplate = gbdesTask.make_yaml(visitSummary)
+        self.mapTemplate["BAND/DEVICE/poly"]["XMax"] = self.camera[10].getBBox().endX
+        self.mapTemplate["BAND/DEVICE/poly"]["YMax"] = self.camera[10].getBBox().endY
 
-        _, tangentPlaneX, tangentPlaneY = self.task._normalize_model(
-            self.mapParams, self.mapTemplate, self.detectorList, self.visitList
+        recenteredModel = self.task._recenter_model(
+            self.mapParams, self.mapTemplate, self.detectorList, self.camera
         )
-        # There is a rotation and flip between the gbdes camera model and the
-        # afw camera model, which is applied by-hand here.
-        self.originalFieldAngleX = (-tangentPlaneY * u.degree).to(u.radian).value
-        self.originalFieldAngleY = (-tangentPlaneX * u.degree).to(u.radian).value
+        self.originalFieldAngleX = (recenteredModel.newTPx * u.degree).to(u.radian).value
+        self.originalFieldAngleY = (recenteredModel.newTPy * u.degree).to(u.radian).value
 
         bbox = self.camera[self.detectorList[0]].getBBox()
         self.xPix = (self.task.x + 1) * bbox.endX / 2
         self.yPix = (self.task.y + 1) * bbox.endY / 2
 
-    def test_normalize_model(self):
-
+    def test_recenter_model(self):
         deviceParams = []
         for element in self.mapTemplate["BAND/DEVICE"]["Elements"]:
             for detector in self.detectorList:
@@ -118,53 +137,85 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
         origTpX = np.array(origTpX).ravel()
         origTpY = np.array(origTpY).ravel()
 
-        # Get the interim positions with the new device maps:
-        _, newIntX, newIntY = self.task._normalize_model(
-            self.mapParams, self.mapTemplate, self.detectorList, self.visitList
-        )
-
-        # Now fit the per-visit parameters with the constraint that the new
-        # tangent plane positions match the old tangent plane positions, and
-        # then check they are sufficiently close to the old values.
-        newExpoArrayEmp = np.zeros(expoArray.shape)
-        for e, expo in enumerate(expoArray):
-            origMapX = expo[0] + origTpX * expo[1] + origTpY * expo[2]
-            origMapY = expo[3] + origTpX * expo[4] + origTpY * expo[5]
-
-            def min_function(params):
-                tpX = params[0] + params[1] * newIntX + params[2] * newIntY
-                tpY = params[3] + params[4] * newIntX + params[5] * newIntY
-
-                diff = ((origMapX - tpX)) ** 2 + ((origMapY - tpY)) ** 2
-                return diff.sum()
-
-            def jac(params):
-                tpX = params[0] + params[1] * newIntX + params[2] * newIntY
-                tpY = params[3] + params[4] * newIntX + params[5] * newIntY
-                dX = 2 * (origMapX - tpX)
-                dY = 2 * (origMapY - tpY)
-                jacobian = [
-                    -dX.sum(),
-                    -(dX * newIntX).sum(),
-                    -(dX * newIntY).sum(),
-                    -dY.sum(),
-                    -(dY * newIntX).sum(),
-                    -(dY * newIntY).sum(),
-                ]
-                return jacobian
-
-            res = minimize(min_function, expo, method="Newton-CG", jac=jac, options={"xtol": 1e-7})
-            newExpoArrayEmp[e] = res.x
-
-            newMapX = (
-                newExpoArrayEmp[e][0] + newIntX * newExpoArrayEmp[e][1] + newIntY * newExpoArrayEmp[e][2]
+        for method in ["affine", "rigid"]:
+            # Get the interim positions with the new device maps:
+            recenteredModel = self.task._recenter_model(
+                self.mapParams,
+                self.mapTemplate,
+                self.detectorList,
+                self.camera,
+                transform=method,
             )
-            newMapY = (
-                newExpoArrayEmp[e][3] + newIntX * newExpoArrayEmp[e][4] + newIntY * newExpoArrayEmp[e][5]
-            )
+            origTpX, origTpY = recenteredModel.inputCoords
+            newIntX = recenteredModel.newTPx
+            newIntY = recenteredModel.newTPy
 
-            self.assertFloatsAlmostEqual(origMapX, newMapX, atol=1e-12)
-            self.assertFloatsAlmostEqual(origMapY, newMapY, atol=1e-12)
+            # Now fit the per-visit parameters with the constraint that the new
+            # tangent plane positions match the old tangent plane positions,
+            # and then check they are sufficiently close to the old values.
+            newExpoArrayEmp = np.zeros(expoArray.shape)
+            for e, expo in enumerate(expoArray):
+                origMapX = expo[0] + origTpX * expo[1] + origTpY * expo[2]
+                origMapY = expo[3] + origTpX * expo[4] + origTpY * expo[5]
+
+                def min_function(params):
+                    tpX = params[0] + params[1] * newIntX + params[2] * newIntY
+                    tpY = params[3] + params[4] * newIntX + params[5] * newIntY
+
+                    diff = ((origMapX - tpX)) ** 2 + ((origMapY - tpY)) ** 2
+                    return 1000 * diff.sum()
+
+                def jac(params):
+                    tpX = params[0] + params[1] * newIntX + params[2] * newIntY
+                    tpY = params[3] + params[4] * newIntX + params[5] * newIntY
+                    dX = 2 * 1000 * (origMapX - tpX)
+                    dY = 2 * 1000 * (origMapY - tpY)
+                    jacobian = [
+                        -dX.sum(),
+                        -(dX * newIntX).sum(),
+                        -(dX * newIntY).sum(),
+                        -dY.sum(),
+                        -(dY * newIntX).sum(),
+                        -(dY * newIntY).sum(),
+                    ]
+                    return jacobian
+
+                res = minimize(min_function, expo, method="Newton-CG", jac=jac, options={"xtol": 1e-14})
+                newExpoArrayEmp[e] = res.x
+
+                newMapX = (
+                    newExpoArrayEmp[e][0] + newIntX * newExpoArrayEmp[e][1] + newIntY * newExpoArrayEmp[e][2]
+                )
+                newMapY = (
+                    newExpoArrayEmp[e][3] + newIntX * newExpoArrayEmp[e][4] + newIntY * newExpoArrayEmp[e][5]
+                )
+                self.assertFloatsAlmostEqual(origMapX, newMapX, atol=1e-10)
+                self.assertFloatsAlmostEqual(origMapY, newMapY, atol=1e-10)
+
+            baselineCameraTPx, baselineCameraTPy = recenteredModel.targetCoords
+
+            # Check that the average offset between the input camera and the
+            # new camera is close to zero.
+            dX = newIntX - baselineCameraTPx
+            dY = newIntY - baselineCameraTPy
+
+            self.assertAlmostEqual(dX.mean(), 0)
+            self.assertAlmostEqual(dY.mean(), 0)
+
+            # Check that the average rotation the input camera and the new
+            # camera is close to zero.
+            norm = (baselineCameraTPx**2 + baselineCameraTPy**2) ** 0.5 * (newIntX**2 + newIntY**2) ** 0.5
+            cosTheta = (baselineCameraTPx * newIntX + baselineCameraTPy * newIntY) / norm
+            self.assertAlmostEqual(cosTheta.mean(), 1, places=4)
+
+            if method == "affine":
+                # Check that there is no slope on average between input camera
+                # and new camera.
+                A = np.column_stack([np.ones_like(baselineCameraTPx), baselineCameraTPx, baselineCameraTPy])
+                xSolution, *_ = lstsq(A, newIntX)
+                ySolution, *_ = lstsq(A, newIntY)
+                self.assertFloatsAlmostEqual(xSolution, np.array([0, 1, 0]), atol=1e-6)
+                self.assertFloatsAlmostEqual(ySolution, np.array([0, 0, 1]), atol=1e-6)
 
     def test_run_with_basic_model(self):
 
@@ -178,7 +229,6 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
             self.detectorList,
             self.visitList,
             self.camera,
-            self.rotationAngle,
         )
         testX, testY = [], []
         for dev in camera:
@@ -207,7 +257,6 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
             self.detectorList,
             self.visitList,
             self.camera,
-            self.rotationAngle,
         )
 
         testX, testY = [], []

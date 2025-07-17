@@ -2410,11 +2410,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                         if re.fullmatch(detectorTemplate, k):
                             cameraParams[k] = params
         if self.config.saveCameraObject:
-            # Get the average rotation angle of the input visits.
-            rotations = [
-                visTable[0].visitInfo.boresightRotAngle.asRadians() for visTable in visitSummaryTables
-            ]
-            rotationAngle = np.mean(rotations)
             if inputCamera is None:
                 raise RuntimeError(
                     "inputCamera must be provided to _make_outputs in order to build output camera."
@@ -2425,7 +2420,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 exposureInfo.detectors,
                 exposureInfo.visits,
                 inputCamera,
-                rotationAngle,
             )
         else:
             camera = None
@@ -2751,8 +2745,9 @@ class GbdesGlobalAstrometricFitConnections(
     )
     camera = pipeBase.connectionTypes.Output(
         doc="Camera object constructed using the per-detector part of the astrometric model",
-        name="gbdesGlobalAstrometricFitCamera",
+        name="astrometry_camera",
         storageClass="Camera",
+        isCalibration=True,
         dimensions=("instrument", "physical_filter"),
     )
 
@@ -2842,6 +2837,10 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             config=refConfig,
             log=self.log,
         )
+
+        nCores = butlerQC.resources.num_cores
+        self.log.info("Running with nCores = %d", nCores)
+
         if self.config.useColor:
             colorCatalog = inputs.pop("colorCatalog")
         else:
@@ -2853,15 +2852,16 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                 instrumentName=instrumentName,
                 refObjectLoader=refObjectLoader,
                 colorCatalog=colorCatalog,
+                nCores=nCores,
             )
         except pipeBase.AlgorithmError as e:
             error = pipeBase.AnnotatedPartialOutputsError.annotate(e, self, log=self.log)
             # No partial outputs for butler to put
             raise error from e
 
-        for outputRef in outputRefs.outputWcs:
-            visit = outputRef.dataId["visit"]
-            butlerQC.put(output.outputWcss[visit], outputRef)
+        wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
+        for visit, outputWcs in output.outputWcss.items():
+            butlerQC.put(outputWcs, wcsOutputRefDict[visit])
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
         if self.config.saveModelParams:
@@ -2888,6 +2888,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         inputCameraModel=None,
         colorCatalog=None,
         inputCamera=None,
+        nCores=1,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -2913,6 +2914,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             Catalog containing object coordinates and magnitudes.
         inputCamera : `lsst.afw.cameraGeom.Camera`, optional
             Camera to be used as template when constructing new camera.
+        nCores : `int`, optional
+            Number of cores to use during WCS fit.
 
         Returns
         -------
@@ -2996,6 +2999,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             refSysErr=self.config.referenceSystematicError,
             usePM=self.config.fitProperMotion,
             verbose=verbose,
+            num_threads=nCores,
         )
 
         # Add the science and reference sources
