@@ -1950,11 +1950,18 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                         if re.fullmatch(detectorTemplate, k):
                             cameraParams[k] = params
         if self.config.saveCameraObject:
-            # Get the average rotation angle of the input visits.
-            rotations = [
-                visTable[0].visitInfo.boresightRotAngle.asRadians() for visTable in visitSummaryTables
-            ]
-            rotationAngle = np.mean(rotations)
+            ## Get the average rotation angle of the input visits.
+            #rotations = [
+            #    visTable[0].visitInfo.boresightRotAngle.asRadians() for visTable in visitSummaryTables
+            #]
+            #rotationAngle = np.mean(rotations)
+            for v, visitSummary in enumerate(visitSummaryTables):
+                visit = visitSummary[0]["visit"]
+
+                visitMap = wcsf.mapCollection.orderAtoms(f"{visit}")[0]
+                visitMapType = wcsf.mapCollection.getMapType(visitMap)
+                if (visitMapType == "Identity"):
+                    rotationAngle = visitSummary[0].visitInfo.boresightRotAngle.asRadians()
             if inputCamera is None:
                 raise RuntimeError(
                     "inputCamera must be provided to _make_outputs in order to build output camera."
@@ -2366,6 +2373,10 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             config=refConfig,
             log=self.log,
         )
+
+        nCores = butlerQC.resources.num_cores
+        self.log.info("Running with nCores = %d", nCores)
+
         if self.config.useColor:
             colorCatalog = inputs.pop("colorCatalog")
         else:
@@ -2376,11 +2387,12 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             instrumentName=instrumentName,
             refObjectLoader=refObjectLoader,
             colorCatalog=colorCatalog,
+            nCores=nCores,
         )
 
-        for outputRef in outputRefs.outputWcs:
-            visit = outputRef.dataId["visit"]
-            butlerQC.put(output.outputWcss[visit], outputRef)
+        wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
+        for visit, outputWcs in output.outputWcss.items():
+            butlerQC.put(outputWcs, wcsOutputRefDict[visit])
         butlerQC.put(output.outputCatalog, outputRefs.outputCatalog)
         butlerQC.put(output.starCatalog, outputRefs.starCatalog)
         if self.config.saveModelParams:
@@ -2407,6 +2419,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         inputCameraModel=None,
         colorCatalog=None,
         inputCamera=None,
+        nCores=1,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -2432,6 +2445,8 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             Catalog containing object coordinates and magnitudes.
         inputCamera : `lsst.afw.cameraGeom.Camera`, optional
             Camera to be used as template when constructing new camera.
+        nCores : `int`, optional
+            Number of cores to use during WCS fit.
 
         Returns
         -------
@@ -2515,6 +2530,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             refSysErr=self.config.referenceSystematicError,
             usePM=self.config.fitProperMotion,
             verbose=verbose,
+            num_threads=nCores,
         )
 
         # Add the science and reference sources
