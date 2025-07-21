@@ -185,7 +185,7 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
             type="U",
             doc="Detector this source appeared on.",
         )
-
+        afwTable.CoordKey.addErrorFields(schema)
         self.schema = schema
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
