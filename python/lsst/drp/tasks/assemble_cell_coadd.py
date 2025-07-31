@@ -450,11 +450,14 @@ class AssembleCellCoaddTask(PipelineTask):
             )
 
         artifactMasks = kwargs.get("artifactMasks", [None] * len(inputWarps))
-        visitSummaryList = kwargs.get("visitSummaryList", [None] * len(inputWarps))
+        visitSummaryList = kwargs.get("visitSummaryList", [])
+        visitSummaryRefDict = {
+            visitSummaryRef.dataId: visitSummaryRef for visitSummaryRef in visitSummaryList
+        }
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for warpRef, artifactMaskRef, visitSummaryRef in zip(inputWarps, artifactMasks, visitSummaryList):
+        for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
             warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
 
             # Pre-process the warp before coadding.
@@ -503,8 +506,7 @@ class AssembleCellCoaddTask(PipelineTask):
             weights: Mapping[int, float] = {}  # Mapping from detector to weight.
             full_ccd_table = warp.getInfo().getCoaddInputs().ccds
 
-            if visitSummaryRef:
-                assert visitSummaryRef.dataId["visit"] == warpRef.dataId["visit"]
+            if visitSummaryRef := visitSummaryRefDict.get(warpRef.dataId):
                 visitSummary = visitSummaryRef.get()
                 for detector in full_ccd_table["ccd"]:
                     visitSummaryRow = visitSummary.find(detector)
@@ -515,6 +517,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     weights[detector] = 1.0 / mean_variance
                 del visitSummary
             else:
+                self.log.debug("No visit summary found for %s; using warp-based weights", warpRef.dataId)
                 weight = self._compute_weight(warp, statsCtrl)
                 if not np.isfinite(weight):
                     self.log.warn("Non-finite weight for %s: skipping", warpRef.dataId)
