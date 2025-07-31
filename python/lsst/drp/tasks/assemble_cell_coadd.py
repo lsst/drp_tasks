@@ -452,7 +452,7 @@ class AssembleCellCoaddTask(PipelineTask):
         artifactMasks = kwargs.get("artifactMasks", [None] * len(inputWarps))
         visitSummaryList = kwargs.get("visitSummaryList", [])
         visitSummaryRefDict = {
-            visitSummaryRef.dataId: visitSummaryRef for visitSummaryRef in visitSummaryList
+            visitSummaryRef.dataId["visit"]: visitSummaryRef for visitSummaryRef in visitSummaryList
         }
 
         # Read in one warp at a time, and accumulate it in all the cells that
@@ -506,7 +506,7 @@ class AssembleCellCoaddTask(PipelineTask):
             weights: Mapping[int, float] = {}  # Mapping from detector to weight.
             full_ccd_table = warp.getInfo().getCoaddInputs().ccds
 
-            if visitSummaryRef := visitSummaryRefDict.get(warpRef.dataId):
+            if visitSummaryRef := visitSummaryRefDict.get(warpRef.dataId["visit"]):
                 visitSummary = visitSummaryRef.get()
                 for detector in full_ccd_table["ccd"]:
                     visitSummaryRow = visitSummary.find(detector)
