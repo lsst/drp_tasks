@@ -697,6 +697,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             log=self.log,
         )
 
+        nCores = butlerQC.resources.num_cores
+        self.log.info("Running with nCores = %d", nCores)
+
         if self.config.useColor:
             colorCatalog = inputs.pop("colorCatalog")
         else:
@@ -707,6 +710,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             instrumentName=instrumentName,
             refObjectLoader=refObjectLoader,
             colorCatalog=colorCatalog,
+            nCores=nCores,
         )
 
         wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
@@ -733,6 +737,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         inputCameraModel=None,
         colorCatalog=None,
         inputCamera=None,
+        nCores=1,
     ):
         """Run the WCS fit for a given set of visits
 
@@ -756,6 +761,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             Catalog containing object coordinates and magnitudes.
         inputCamera : `lsst.afw.cameraGeom.Camera`, optional
             Camera to be used as template when constructing new camera.
+        nCores : `int`, optional
+            Number of cores to use during WCS fit.
 
         Returns
         -------
@@ -858,6 +865,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             usePM=self.config.fitProperMotion,
             verbose=verbose,
             fixMaps=fixMaps,
+            num_threads=nCores,
         )
 
         # Add the science and reference sources
