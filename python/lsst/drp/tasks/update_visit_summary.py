@@ -27,15 +27,18 @@ __all__ = (
     "UpdateVisitSummaryTask",
     "PossiblyMultipleInput",
     "PerTractInput",
+    "PerHealpixInput",
     "GlobalInput",
 )
 
 import dataclasses
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 import astropy.table
+import numpy as np
 
 import lsst.pipe.base.connectionTypes as cT
 from lsst.afw.geom import SkyWcs
@@ -44,7 +47,7 @@ from lsst.afw.math import BackgroundList
 from lsst.afw.table import ExposureCatalog, ExposureRecord, SchemaMapper
 from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
 from lsst.geom import Angle, Box2I, SpherePoint, degrees
-from lsst.pex.config import ChoiceField, ConfigurableField
+from lsst.pex.config import ChoiceField, ConfigurableField, Field
 from lsst.pipe.base import (
     InputQuantizedConnection,
     InvalidQuantumError,
@@ -58,6 +61,7 @@ from lsst.pipe.base import (
 from lsst.pipe.tasks.computeExposureSummaryStats import ComputeExposureSummaryStatsTask
 from lsst.skymap import BaseSkyMap, TractInfo
 from lsst.skymap.detail import makeSkyPolygonFromBBox
+from lsst.sphgeom import HealpixPixelization
 
 
 def compute_center_for_detector_record(
@@ -90,6 +94,26 @@ def compute_center_for_detector_record(
             return None
     region = makeSkyPolygonFromBBox(bbox, wcs)
     return SpherePoint(region.getCentroid())
+
+
+def _validate_wcs_provider(name: str) -> bool:
+    """A helper function to validate the WCS provider at config time.
+
+    Parameters
+    ----------
+    name : str
+        The source or dimension of the source of the WCS.
+
+    Returns
+    -------
+    is_valid : bool
+        Whether the provided source is valid.
+    """
+    # Check if ``name`` is a healpix dimension.
+    match_healpix = re.match(re.compile(r"healpix\d+"), name)
+    # Check if ``name`` is one of the other source options.
+    match_other = name in ["input_summary", "global", "tract"]
+    return match_healpix or match_other
 
 
 class PossiblyMultipleInput(ABC):
@@ -207,6 +231,96 @@ class PerTractInput(PossiblyMultipleInput):
 
 
 @dataclasses.dataclass
+class PerHealpixInput(PossiblyMultipleInput):
+    """Wrapper class for input `~lsst.afw.table.ExposureCatalog` datasets
+    that are per-healpix pixel.
+
+    This selects the best pixel based on which one contains the detector
+    centroid. Since the pixel regions are ConvexPolygons that do not perfectly
+    describe the pixel borders, in case of ambiguity, the pixel is chosen via
+    the minimum distance (on the sky) from the detector's centroid to the pixel
+    centroid.
+    """
+
+    catalogs_by_pixel: list[int, tuple[int, SpherePoint, ExposureCatalog]]
+    """List of tuples of catalogs and the pixels they correspond to
+    (`list` [`tuple` [`int`, `lsst.geom.SpherePoint`,
+        `lsst.afw.table.ExposureCatalog`]]).
+    """
+
+    @classmethod
+    def load(
+        cls,
+        butler: QuantumContext | Butler,
+        refs: Iterable[DatasetRef],
+    ) -> PerHealpixInput:
+        """Load and wrap input catalogs.
+
+        Parameters
+        ----------
+        butler : `lsst.pipe.base.QuantumContext`
+            Butler proxy used in `~lsst.pipe.base.PipelineTask.runQuantum`.
+        refs : `~collections.abc.Iterable` [`lsst.daf.butler.DatasetRef`]
+            References to the catalog datasets to load.
+
+        Returns
+        -------
+        wrapper : `PerHealpixInput`
+            Wrapper object for the loaded catalogs.
+        """
+        catalogs_by_pixel = []
+        pixelization = HealpixPixelization(3)
+        for ref in refs:
+            pixel_id = ref.dataId["healpix3"]
+            pixel_region = pixelization.pixel(pixel_id)
+            catalogs_by_pixel.append(
+                (
+                    pixel_id,
+                    pixel_region,
+                    butler.get(ref),
+                )
+            )
+        return cls(catalogs_by_pixel)
+
+    def best_for_detector(
+        self,
+        detector_id: int,
+        center: SpherePoint | None = None,
+        bbox: Box2I | None = None,
+    ) -> tuple[int, ExposureRecord | None]:
+        # Docstring inherited.
+        best_result: tuple[int, ExposureRecord | None] = (-1, None)
+        inPixel = []
+        distances = []
+        results = []
+        for pixel_id, pixel_region, catalog in self.catalogs_by_pixel:
+            record = catalog.find(detector_id)
+            if record is None:
+                continue
+            if center is None:
+                center_for_record = compute_center_for_detector_record(record, bbox=bbox)
+                if center_for_record is None:
+                    continue
+            else:
+                center_for_record = center
+
+            inPixel.append(pixel_region.contains(center_for_record.getVector()))
+            distances.append(SpherePoint(pixel_region.getCentroid()).separation(center_for_record))
+            results.append((pixel_id, record))
+
+        inPixel = np.array(inPixel)
+        results = np.array(results)
+        distances = np.array(distances)
+        if inPixel.sum() == 1:
+            best_result = results[inPixel][0]
+        elif inPixel.sum() == 0:
+            best_result = results[distances.argmin()]
+        else:
+            best_result = results[inPixel][distances[inPixel].argmin()]
+        return best_result
+
+
+@dataclasses.dataclass
 class GlobalInput(PossiblyMultipleInput):
     """Wrapper class for input `~lsst.afw.table.ExposureCatalog` datasets
     that are not per-tract.
@@ -307,6 +421,14 @@ class UpdateVisitSummaryConnections(
         multiple=True,
         deferGraphConstraint=True,
     )
+    wcs_overrides_skypix = cT.Input(
+        doc="Per-skypix pixel visit-level catalog of updated astrometric calibration objects to use.",
+        name="gbdesHealpix3AstrometricFitSkyWcsCatalog",
+        dimensions=("instrument", "visit", "healpix3"),
+        storageClass="ExposureCatalog",
+        multiple=True,
+        deferGraphConstraint=True,
+    )
     wcs_overrides_global = cT.Input(
         doc="Global visit-level catalog of updated astrometric calibration objects to use.",
         name="{skyWcsName}SkyWcsCatalog",
@@ -350,10 +472,19 @@ class UpdateVisitSummaryConnections(
             case "input_summary":
                 self.inputs.remove("wcs_overrides_tract")
                 self.inputs.remove("wcs_overrides_global")
+                self.inputs.remove("wcs_overrides_skypix")
             case "tract":
                 self.inputs.remove("wcs_overrides_global")
+                self.inputs.remove("wcs_overrides_skypix")
             case "global":
                 self.inputs.remove("wcs_overrides_tract")
+                self.inputs.remove("wcs_overrides_skypix")
+            case x if "healpix" in x:
+                self.inputs.remove("wcs_overrides_tract")
+                self.inputs.remove("wcs_overrides_global")
+                self.wcs_overrides_skypix = dataclasses.replace(
+                    self.wcs_overrides_skypix, dimensions=("instrument", "visit", self.config.wcs_provider)
+                )
             case bad:
                 raise ValueError(f"Invalid value wcs_provider={bad!r}; config was not validated.")
         match self.config.photo_calib_provider:
@@ -395,32 +526,31 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
         doc="Subtask that computes summary statistics from Exposure components.",
         target=ComputeExposureSummaryStatsTask,
     )
-    wcs_provider = ChoiceField(
-        doc="Which connection and behavior to use when applying WCS overrides.",
+    wcs_provider = Field(
+        doc=(
+            "Which connection and behavior to use when applying WCS overrides."
+            "The string should be one of the following:\n",
+            "- input_summary: Propagate the WCS from the input visit summary "
+            "catalog and do not recompute WCS-based summary statistics.\n"
+            "- tract: Use the 'wcs_overrides_tract' connection to load an "
+            "`ExposureCatalog` with {visit, tract} dimensions and per-"
+            "detector rows, and recommpute WCS-based summary statistics.\n"
+            "- global: Use the 'wcs_overrides_global' connection to load an "
+            "`ExposureCatalog` with {visit} dimensions and per-detector rows,"
+            " and recommpute WCS-based summary statistics.\n"
+            "- healpixN: Use the 'wcs_overrides_skypix' connection to load an "
+            "`ExposureCatalog` with {visit, healpixN} dimensions and per-"
+            "detector rows, and recommpute WCS-based summary statistics.",
+        ),
+        # If needed, we could add options here to propagate the WCS from
+        # the input exposures and/or transfer WCS-based summary statistics
+        # from them as well.  Right now there's no use case for that, since
+        # the input visit summary is always produced after the last time we
+        # write a new Exposure.
         dtype=str,
-        allowed={
-            "input_summary": (
-                "Propagate the WCS from the input visit summary catalog "
-                "and do not recompute WCS-based summary statistics."
-            ),
-            "tract": {
-                "Use the 'wcs_overrides_tract' connection to load an "
-                "`ExposureCatalog` with {visit, tract} dimensions and per-"
-                "detector rows, and recommpute WCS-based summary statistics."
-            },
-            "global": {
-                "Use the 'wcs_overrides_global' connection to load an "
-                "`ExposureCatalog` with {visit} dimensions and per-"
-                "detector rows, and recommpute WCS-based summary statistics."
-            },
-            # If needed, we could add options here to propagate the WCS from
-            # the input exposures and/or transfer WCS-based summary statistics
-            # from them as well.  Right now there's no use case for that, since
-            # the input visit summary is always produced after the last time we
-            # write a new Exposure.
-        },
         default="input_summary",
         optional=False,
+        check=_validate_wcs_provider,
     )
     photo_calib_provider = ChoiceField(
         doc="Which connection and behavior to use when applying photometric calibration overrides.",
@@ -511,6 +641,8 @@ class UpdateVisitSummaryTask(PipelineTask):
         self.schema = self.schema_mapper.getOutputSchema()
         if self.config.wcs_provider == "tract":
             self.schema.addField("wcsTractId", type="L", doc="ID of the tract that provided the WCS.")
+        elif "healpix" in self.config.wcs_provider:
+            self.schema.addField("wcsSkypixId", type="L", doc="ID of the skypix pixel that provided the WCS.")
         if self.config.photo_calib_provider == "tract":
             self.schema.addField(
                 "photoCalibTractId",
@@ -541,6 +673,10 @@ class UpdateVisitSummaryTask(PipelineTask):
                 del inputRefs.wcs_overrides_global
             case "input_summary":
                 inputs["wcs_overrides"] = None
+            case x if "healpix" in x:
+                # TODO: match healpix of arbitrary int?
+                inputs["wcs_overrides"] = PerHealpixInput.load(butlerQC, inputRefs.wcs_overrides_skypix)
+                del inputRefs.wcs_overrides_skypix
         match self.config.photo_calib_provider:
             case "tract":
                 inputs["photo_calib_overrides"] = PerTractInput.load(
@@ -680,13 +816,15 @@ class UpdateVisitSummaryTask(PipelineTask):
             bbox = exposure.getBBox()
 
             if wcs_overrides:
-                wcs_tract, wcs_record = wcs_overrides.best_for_detector(detector_id, bbox=bbox)
+                wcs_region, wcs_record = wcs_overrides.best_for_detector(detector_id, bbox=bbox)
                 if wcs_record is not None:
                     wcs = wcs_record.getWcs()
                 else:
                     wcs = None
                 if self.config.wcs_provider == "tract":
-                    output_record["wcsTractId"] = wcs_tract
+                    output_record["wcsTractId"] = wcs_region
+                elif "healpix" in self.config.wcs_provider:
+                    output_record["wcsSkypixId"] = wcs_region
                 output_record.setWcs(wcs)
                 self.compute_summary_stats.update_wcs_stats(
                     summary_stats, wcs, bbox, output_record.getVisitInfo()
