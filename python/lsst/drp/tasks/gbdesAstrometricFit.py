@@ -19,6 +19,7 @@
 # the GNU General Public License along with this program.  If not,
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
+import dataclasses
 import re
 
 import astropy.coordinates
@@ -308,7 +309,11 @@ def _get_instruments(inputVisitSummaries):
 
 
 class GbdesAstrometricFitConnections(
-    pipeBase.PipelineTaskConnections, dimensions=("skymap", "tract", "instrument", "physical_filter")
+    pipeBase.PipelineTaskConnections,
+    dimensions=("skymap", "tract", "instrument", "physical_filter"),
+    defaultTemplates={
+        "outputName": "gbdesAstrometricFit",
+    },
 ):
     """Middleware input/output connections for task data."""
 
@@ -364,7 +369,7 @@ class GbdesAstrometricFitConnections(
             " These catalogs only contain entries for detectors with an output, and use"
             " the detector id for the catalog id, sorted on id for fast lookups of a detector."
         ),
-        name="gbdesAstrometricFitSkyWcsCatalog",
+        name="{outputName}SkyWcsCatalog",
         storageClass="ExposureCatalog",
         dimensions=("instrument", "visit", "skymap", "tract"),
         multiple=True,
@@ -374,7 +379,7 @@ class GbdesAstrometricFitConnections(
             "Catalog of sources used in fit, along with residuals in pixel coordinates and tangent "
             "plane coordinates and chisq values."
         ),
-        name="gbdesAstrometricFit_fitStars",
+        name="{outputName}_fitStars",
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
@@ -383,31 +388,31 @@ class GbdesAstrometricFitConnections(
             "Catalog of best-fit object positions. Also includes the fit proper motion and parallax if "
             "fitProperMotion is True."
         ),
-        name="gbdesAstrometricFit_starCatalog",
+        name="{outputName}_starCatalog",
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     modelParams = pipeBase.connectionTypes.Output(
         doc="WCS parameters and covariance.",
-        name="gbdesAstrometricFit_modelParams",
+        name="{outputName}_modelParams",
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     outputCameraModel = pipeBase.connectionTypes.Output(
         doc="Camera parameters to use for 'device' part of model",
-        name="gbdesAstrometricFit_cameraModel",
+        name="{outputName}_cameraModel",
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     camera = pipeBase.connectionTypes.Output(
         doc="Camera object constructed using the per-detector part of the astrometric model",
-        name="gbdesAstrometricFitCamera",
+        name="{outputName}Camera",
         storageClass="Camera",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
     dcrCoefficients = pipeBase.connectionTypes.Output(
         doc="Per-visit coefficients for DCR correction.",
-        name="gbdesAstrometricFit_dcrCoefficients",
+        name="{outputName}_dcrCoefficients",
         storageClass="ArrowNumpyDict",
         dimensions=("instrument", "skymap", "tract", "physical_filter"),
     )
@@ -417,6 +422,33 @@ class GbdesAstrometricFitConnections(
 
     def __init__(self, *, config=None):
         super().__init__(config=config)
+
+        if self.config.healpix is not None:
+            self.dimensions.remove("tract")
+            self.dimensions.remove("skymap")
+            healpixName = f"healpix{self.config.healpix}"
+            self.dimensions.add(healpixName)
+            self.outputWcs = dataclasses.replace(
+                self.outputWcs, dimensions=("instrument", "visit", healpixName)
+            )
+            self.outputCatalog = dataclasses.replace(
+                self.outputCatalog, dimensions=("instrument", "physical_filter", healpixName)
+            )
+            self.starCatalog = dataclasses.replace(
+                self.starCatalog, dimensions=("instrument", "physical_filter", healpixName)
+            )
+            self.modelParams = dataclasses.replace(
+                self.modelParams, dimensions=("instrument", "physical_filter", healpixName)
+            )
+            self.outputCameraModel = dataclasses.replace(
+                self.outputCameraModel, dimensions=("instrument", "physical_filter", healpixName)
+            )
+            self.camera = dataclasses.replace(
+                self.camera, dimensions=("instrument", "physical_filter", healpixName)
+            )
+            self.dcrCoefficients = dataclasses.replace(
+                self.dcrCoefficients, dimensions=("instrument", "physical_filter", healpixName)
+            )
 
         if not self.config.useColor:
             self.inputs.remove("colorCatalog")
@@ -582,6 +614,13 @@ class GbdesAstrometricFitConfig(
         dtype=float,
         doc="Minimum fraction of clipped sources that triggers a new fit iteration.",
         default=0.0,
+    )
+    healpix = pexConfig.Field(
+        dtype=int,
+        doc="Run using all visits overlapping a healpix pixel with this order instead of a tract. Order 3 "
+        "corresponds to pixels with angular size of 7.329 degrees.",
+        optional=True,
+        default=None,
     )
 
     def setDefaults(self):
