@@ -59,7 +59,7 @@ from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 
 @dataclasses.dataclass
@@ -75,7 +75,7 @@ class WarpInputs:
     artifactMasks: afwImage.Mask | None = None
     """artifact masks"""
 
-    noise_warps: list[afwImage.MaskedImage] = []
+    noise_warps: Sequence[afwImage.MaskedImage] = ()
     """Noise warps"""
 
     @property
