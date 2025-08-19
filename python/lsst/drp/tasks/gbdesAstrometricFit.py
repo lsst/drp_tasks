@@ -726,6 +726,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             butlerQC.put(output.camera, outputRefs.camera)
         if self.config.useColor:
             butlerQC.put(output.colorParams, outputRefs.dcrCoefficients)
+        if output.partialOutputs:
+            e = RuntimeError("Some visits were dropped because data was insufficient to fit model.")
+            error = pipeBase.AnnotatedPartialOutputsError.annotate(e, self, log=self.log)
+            raise error from e
 
     def run(
         self,
@@ -876,20 +880,21 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         # There must be at least as many sources per visit as the number of
         # free parameters in the per-visit mapping. Set minFitExposures to be
-        # the number of free parameters, so that visits with fewer visits are
-        # dropped.
+        # the number of free parameters divided by the fraction of non-reserved
+        # sources, so that visits with fewer sources are dropped.
         nCoeffVisitModel = _nCoeffsFromDegree(self.config.exposurePolyOrder)
+        minFitExposures = int(np.ceil(nCoeffVisitModel / (1 - self.config.fitReserveFraction)))
         # Do the WCS fit
         wcsf.fit(
             reserveFraction=self.config.fitReserveFraction,
             randomNumberSeed=self.config.fitReserveRandomSeed,
-            minFitExposures=nCoeffVisitModel,
+            minFitExposures=minFitExposures,
             clipThresh=self.config.clipThresh,
             clipFraction=self.config.clipFraction,
         )
         self.log.info("WCS fitting done")
 
-        outputWcss, cameraParams, colorParams, camera = self._make_outputs(
+        outputWcss, cameraParams, colorParams, camera, partialOutputs = self._make_outputs(
             wcsf,
             inputVisitSummaries,
             exposureInfo,
@@ -913,6 +918,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             cameraModelParams=cameraParams,
             colorParams=colorParams,
             camera=camera,
+            partialOutputs=partialOutputs,
         )
 
     def _prep_sky(self, inputVisitSummaries, epoch, fieldName="Field"):
@@ -1946,6 +1952,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         catalogs = {}
         colorFits = {}
+        partialOutputs = False
         for v, visitSummary in enumerate(visitSummaryTables):
             visit = visitSummary[0]["visit"]
 
@@ -1956,7 +1963,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             visitMap = visitMaps[0]
             visitMapType = wcsf.mapCollection.getMapType(visitMap)
             if (visitMap not in mapParams) and (visitMapType != "Identity"):
-                self.log.warning("Visit %d was dropped because of an insufficient number of sources.", visit)
+                self.log.warning("Visit %d was dropped because of an insufficient amount of data.", visit)
+                partialOutputs = True
                 continue
 
             catalog = lsst.afw.table.ExposureCatalog(schema)
@@ -2024,7 +2032,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             colorDec = np.array([colorFits[vis][1] for vis in colorVisits])
             colorFits = {"visit": colorVisits, "raCoefficient": colorRA, "decCoefficient": colorDec}
 
-        return catalogs, cameraParams, colorFits, camera
+        return catalogs, cameraParams, colorFits, camera, partialOutputs
 
     def _compute_model_params(self, wcsf):
         """Get the WCS model parameters and covariance and convert to a
@@ -2344,6 +2352,10 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             butlerQC.put(output.camera, outputRefs.camera)
         if self.config.useColor:
             butlerQC.put(output.colorParams, outputRefs.dcrCoefficients)
+        if output.partialOutputs:
+            e = RuntimeError("Some visits were dropped because data was insufficient to fit model.")
+            error = pipeBase.AnnotatedPartialOutputsError.annotate(e, self, log=self.log)
+            raise error from e
 
     def run(
         self,
@@ -2484,7 +2496,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         )
         self.log.info("WCS fitting done")
 
-        outputWcss, cameraParams, colorParams, camera = self._make_outputs(
+        outputWcss, cameraParams, colorParams, camera, partialOutputs = self._make_outputs(
             wcsf,
             inputVisitSummaries,
             exposureInfo,
@@ -2508,6 +2520,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             cameraModelParams=cameraParams,
             colorParams=colorParams,
             camera=camera,
+            partialOutputs=partialOutputs,
         )
 
     def _prep_sky(self, inputVisitSummaries):
