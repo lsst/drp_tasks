@@ -332,7 +332,7 @@ class AssembleCellCoaddTask(PipelineTask):
             inputs[ref.dataId].artifactMasks = butlerQC.get(ref)
         for ref in getattr(inputRefs, "maskfracWarps", []):
             inputs[ref.dataId].maskfrac = butlerQC.get(ref)
-        for n in self.config.num_noise_realisations:
+        for n in range(self.config.num_noise_realisations):
             for ref in getattr(inputRefs, f"noise{n}_warps"):
                 inputs[ref.dataId].noise_warps.append(butlerQC.get(ref))
 
@@ -521,7 +521,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         artifactMasks = kwargs.get("artifactMasks", [None] * len(inputs))
         noise_warps = {}
-        for n in range(len(self.config.num_noise_realizations)):
+        for n in range(self.config.num_noise_realizations):
             noise_warps[n] = kwargs.get(f"noise{n}_warp", [None] * len(inputs))
 
         # visit_summary do not have (tract, patch, band, skymap) dimensions.
@@ -699,7 +699,7 @@ class AssembleCellCoaddTask(PipelineTask):
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
             cell_maskfrac_image = afwImage.ImageF(cellInfo.outer_bbox)
             cell_noise_images = [
-                afwImage.MaskedImageF(cellInfo.outer_bbox) for n in self.config.num_noise_realizations
+                afwImage.MaskedImageF(cellInfo.outer_bbox) for n in range(self.config.num_noise_realizations)
             ]
             psf_masked_image = afwImage.MaskedImageF(psf_bbox_gc[cellInfo.index])
 
