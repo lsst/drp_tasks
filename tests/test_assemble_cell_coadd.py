@@ -31,7 +31,7 @@ from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
-from lsst.drp.tasks.assemble_cell_coadd import AssembleCellCoaddConfig, AssembleCellCoaddTask
+from lsst.drp.tasks.assemble_cell_coadd import AssembleCellCoaddConfig, AssembleCellCoaddTask, WarpInputs
 
 if TYPE_CHECKING:
     from lsst.cell_coadds import ObservationIdentifiers
@@ -83,8 +83,14 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
             identifiers=pipeBase.Struct(skymap=None, tract=0, patch=42, band="i"),
         )
 
+        inputs = {}
+        for warpInput in warpRefList:
+            inputs[warpInput.dataId] = WarpInputs(
+                warp=warpInput,
+            )
+
         retStruct = self.run(
-            warpRefList,
+            inputs,
             mockSkyInfo,
             visitSummaryList=visitSummaryList,
         )
