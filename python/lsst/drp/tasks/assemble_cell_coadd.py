@@ -580,7 +580,8 @@ class AssembleCellCoaddTask(PipelineTask):
             # weight per warp and not bother with per-detector weights.
             full_ccd_table = warp.getInfo().getCoaddInputs().ccds
             weights: Mapping[int, float] = dict.fromkeys(
-                full_ccd_table["ccd"]
+                full_ccd_table["ccd"],
+                0.0,
             )  # Mapping from detector to weight.
 
             if visitSummaryRef := visitSummaryRefDict.get(warpInput.dataId["visit"]):
