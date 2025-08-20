@@ -487,7 +487,7 @@ class AssembleCellCoaddTask(PipelineTask):
         warp_stacker_gc = self._construct_grid_container(skyInfo, statsCtrl)
         maskfrac_stacker_gc = self._construct_grid_container(skyInfo, statsCtrl)
         noise_stacker_gc_list = [
-            self._construct_ap_corr_grid_container(skyInfo=statsCtrl)
+            self._construct_grid_container(skyInfo, statsCtrl)
             for n in range(self.config.num_noise_realizations)
         ]
         psf_stacker_gc = GridContainer[AccumulatorMeanStack](warp_stacker_gc.shape)
