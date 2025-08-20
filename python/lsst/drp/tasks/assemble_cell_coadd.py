@@ -332,7 +332,7 @@ class AssembleCellCoaddTask(PipelineTask):
             inputs[ref.dataId].artifactMasks = butlerQC.get(ref)
         for ref in getattr(inputRefs, "maskfracWarps", []):
             inputs[ref.dataId].maskfrac = butlerQC.get(ref)
-        for n in range(self.config.num_noise_realisations):
+        for n in range(self.config.num_noise_realizations):
             for ref in getattr(inputRefs, f"noise{n}_warps"):
                 inputs[ref.dataId].noise_warps.append(butlerQC.get(ref))
 
