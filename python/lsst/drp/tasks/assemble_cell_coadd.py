@@ -721,7 +721,7 @@ class AssembleCellCoaddTask(PipelineTask):
             if self.config.do_interpolate_coadd:
                 self.interpolate_coadd.run(cell_masked_image, planeName="NO_DATA")
                 for noise_image in cell_noise_images:
-                    self.interpolated_coadd.run(noise_image, planeName="NO_DATA")
+                    self.interpolate_coadd.run(noise_image, planeName="NO_DATA")
                 # The variance must be positive; work around for DM-3201.
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
