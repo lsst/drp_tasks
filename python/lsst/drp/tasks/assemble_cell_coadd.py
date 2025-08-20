@@ -155,7 +155,7 @@ class AssembleCellCoaddConnections(
         for n in range(config.num_noise_realizations):
             noise_warps = Input(
                 doc="Input noise warps",
-                name=f"{config.connections.coaddType}calexp_noise{n}_descwarp",
+                name=f"{config.connections.inputWarpName}Coadd_directWarp_noise{n}",
                 storageClass="MaskedImageF",
                 dimensions=("tract", "patch", "skymap", "visit", "instrument"),
                 deferLoad=True,
