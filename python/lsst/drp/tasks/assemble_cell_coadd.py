@@ -532,7 +532,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for warpInput in inputs:
+        for _, warpInput in inputs.items():
             warp = warpInput.warp.get(parameters={"bbox": skyInfo.bbox})
 
             # Pre-process the warp before coadding.
