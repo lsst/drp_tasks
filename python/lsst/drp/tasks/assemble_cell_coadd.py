@@ -97,14 +97,14 @@ class AssembleCellCoaddConnections(
         multiple=True,
     )
 
-    maskfracWarps = Input(
-        doc="Mask fraction warps",
-        name="{inputWarpName}Coadd_maskfrac",
-        storageClass="ImageF",
-        dimensions=("tract", "patch", "skymap", "visit", "instrument"),
-        deferLoad=True,
-        multiple=True,
-    )
+    # maskfracWarps = Input(
+    #     doc="Mask fraction warps",
+    #     name="{inputWarpName}Coadd_maskfrac",
+    #     storageClass="ImageF",
+    #     dimensions=("tract", "patch", "skymap", "visit", "instrument"),
+    #     deferLoad=True,
+    #     multiple=True,
+    # )
 
     artifactMasks = Input(
         doc="Artifact masks to be applied to the input warps",
