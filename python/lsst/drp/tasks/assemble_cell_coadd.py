@@ -326,7 +326,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         inputs: Mapping[DataCoordinate, WarpInputs] = {}
         for handle in butlerQC.get(inputRefs.inputWarps):
-            inputs[handle.dataId] = WarpInputs(warp=handle)
+            inputs[handle.dataId] = WarpInputs(warp=handle, noise_warps=[])
 
         for ref in getattr(inputRefs, "artifactMasks", []):
             inputs[ref.dataId].artifactMasks = butlerQC.get(ref)
