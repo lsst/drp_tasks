@@ -75,7 +75,7 @@ class WarpInputs:
     artifactMasks: afwImage.Mask | None = None
     """artifact masks"""
 
-    noise_warps: list[afwImage.MaskedImage] = []
+    noise_warps: Sequence[afwImage.MaskedImage] = ()
     """Noise warps"""
 
     @property
