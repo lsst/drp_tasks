@@ -730,7 +730,7 @@ class AssembleCellCoaddTask(PipelineTask):
             image_planes = OwnedImagePlanes.from_masked_image(
                 masked_image=cell_masked_image,
                 mask_fractions=cell_maskfrac_image,
-                noise_realizations=cell_noise_images,
+                noise_realizations=[noise_image.image for noise_image in cell_noise_images],
             )
             identifiers = CellIdentifiers(
                 cell=cellInfo.index,
