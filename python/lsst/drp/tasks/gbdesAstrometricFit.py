@@ -2085,6 +2085,14 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         xscale = int(mapTemplate["BAND/DEVICE/poly"]["XMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["XMin"])
         yscale = int(mapTemplate["BAND/DEVICE/poly"]["YMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["YMin"])
 
+        # Make dictionary of bboxes for each detector.
+        detectorBBoxes = {}
+        for detector in exposureInfo.detectors:
+            for visitSummary in visitSummaryTables:
+                if detInfo := visitSummary.find(detector):
+                    detectorBBoxes[detector] = detInfo.getBBox()
+                    break
+
         catalogs = {}
         colorFits = {}
         partialOutputs = False
@@ -2162,6 +2170,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 )
 
                 catalog[d].setId(detector)
+                catalog[d].setBBox(detectorBBoxes[detector])
                 catalog[d].setWcs(outWCS)
             catalog.sort()
             catalogs[visit] = catalog
