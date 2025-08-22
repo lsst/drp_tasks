@@ -1,6 +1,8 @@
 
 import numpy as np
+from scipy import ndimage
 from scipy.optimize import least_squares
+from scipy.signal.windows import hann
 
 import lsst.afw.detection as afwDet
 import lsst.afw.geom as afwGeom
@@ -92,14 +94,43 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
         "Support for using transmission curves is to be added in DM-13668.",
         dtype=float,
     )
+    minimumSNR = pexConfig.Field(
+        doc="Bandwidth of the physical filter, in nm."
+        "Required if transmission curves aren't used."
+        "Support for using transmission curves is to be added in DM-13668.",
+        dtype=float,
+        default=30,
+    )
+    maximumSNR = pexConfig.Field(
+        doc="Bandwidth of the physical filter, in nm."
+        "Required if transmission curves aren't used."
+        "Support for using transmission curves is to be added in DM-13668.",
+        dtype=float,
+        default=1000,
+    )
+    minimumModelFraction = pexConfig.Field(
+        doc="Bandwidth of the physical filter, in nm."
+        "Required if transmission curves aren't used."
+        "Support for using transmission curves is to be added in DM-13668.",
+        dtype=float,
+        default=0.15,
+    )
+    maximumModelFraction = pexConfig.Field(
+        doc="Bandwidth of the physical filter, in nm."
+        "Required if transmission curves aren't used."
+        "Support for using transmission curves is to be added in DM-13668.",
+        dtype=float,
+        default=0.7,
+    )
     footprintSize = pexConfig.Field(
         dtype=int,
         doc="Size of the footprints to calculate the DCR correctionin around objects.",
         default=35,
     )
-    centroider = pexConfig.ConfigurableField(
-        target=measBase.SdssCentroidAlgorithm,
-        doc="Subtask for finding glint trails, usually caused by satellites or debris."
+    taperFootprint = pexConfig.Field(
+        dtype=bool,
+        doc="Weight the PSF model by a Blackman-Harris window function to reduce edge artifacts.",
+        default=True,
     )
 
 
@@ -243,7 +274,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     dcrFpLookupTable[recId][visit] = lookupTableSingle[recId]['subfilterPsf']
                     cutoutLookupTable[recId][visit] = lookupTableSingle[recId]['cutout']
                     recordVisitCount[recId] += 1
-        modelExposure, residual = calculateTemplateResidual(templateCoadd, dcrFpLookupTable, cutoutLookupTable)
+        modelExposure, residual = calculateTemplateResidual(templateCoadd,
+                                                            dcrFpLookupTable,
+                                                            cutoutLookupTable)
 
     def make_warp_footprints(self, catalog, warp):
         dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
@@ -255,8 +288,14 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         fp_ctrl = afwDet.HeavyFootprintCtrl()
         lookupTable = {}
         boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
+        if self.config.taperFootprint:
+            windowFunction = np.outer(hann(self.config.footprintSize), hann(self.config.footprintSize))
+            windowFunction /= np.max(windowFunction)
+        else:
+            windowFunction = np.ones((self.config.footprintSize, self.config.footprintSize))
         coreBoxSize = geom.Extent2I(self.config.footprintSize//2, self.config.footprintSize//2)
         for subfilter, shift in enumerate(dcrShift):
+            windowFunction_shift = ndimage.shift(windowFunction, shift)
             # instantiate the catalog, and define the centroid
             cat = self.initialize_dcr_catalog()
             # Next define footprints
@@ -285,12 +324,15 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     cutout['base_SdssCentroid_y'] = yc
                     foot = afwDet.Footprint(spans)
                     foot.addPeak(xc, yc, flux)
-                    cutout.setFootprint(afwDet.HeavyFootprintF(foot, warp.maskedImage, fp_ctrl))
+                    cutout_mi = warp[bbox].maskedImage.clone()
+                    cutout_mi.image.array *= windowFunction
+                    cutout.setFootprint(afwDet.HeavyFootprintF(foot, cutout_mi, fp_ctrl))
                     lookupTable[record.getId()] = {}
                     lookupTable[record.getId()]['cutout'] = cutout
                     lookupTable[record.getId()]['subfilterPsf'] = []
                 else:
-                    # Catch any records that were removed in an earlier iteration
+                    # Catch any records that were removed in an earlier 
+                    # iteration
                     if lookupTable[record.getId()] is None:
                         continue
                 # shift format is numpy (y,x)
@@ -304,11 +346,14 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 src['base_SdssCentroid_y'] = yc
                 foot = afwDet.Footprint(spans)
                 foot.addPeak(xc, yc, subFlux)
-                # Note, we don't just use afwImage.ImageF(warp.psf.computeImage(geom.Point2D(xc, yc)), deep=True)
+                # Note, we don't just use 
+                # afwImage.ImageF(warp.psf.computeImage(geom.Point2D(xc, yc)),
+                #                 deep=True)
                 # because we need the shifted bbox
                 bbox2 = bbox.clippedTo(warp.psf.computeImageBBox(geom.Point2D(xc, yc)))
                 psf_img = afwImage.ImageF(bbox)
                 psf_img[bbox2].array[:, :] = warp.psf.computeImage(geom.Point2D(xc, yc))[bbox2].array
+                psf_img.array *= windowFunction_shift
                 psf_mask = afwImage.Mask(bbox)
                 psf_variance = afwImage.ImageF(bbox)
                 psf_mimage = afwImage.MaskedImageF(psf_img, psf_mask, psf_variance)
@@ -322,10 +367,28 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             if lookupTable[recId] is not None:
                 image_fp = lookupTable[recId]['cutout']
                 psf_fps = lookupTable[recId]['subfilterPsf']
-                scales = minimize_footprint_residuals(image_fp, psf_fps)
+                scales = self.minimize_footprint_residuals(image_fp, psf_fps)
                 for psf_fp, scale in zip(psf_fps, scales):
                     psf_fp['modelFlux'] = scale
         return(lookupTable)
+
+    def minimize_footprint_residuals(self, image_fp, psf_fps):
+        scales0 = [image_fp['modelFlux']*psf_fp['modelFlux'] for psf_fp in psf_fps]
+        nSubfilters = len(psf_fps)
+        img = image_fp.getFootprint().extractImage().array
+        psf_arrays = [psf.getFootprint().extractImage().array for psf in psf_fps]
+
+        def minimize_residual(scales):
+            residual = img.copy()
+            for psf, scale in zip(psf_arrays, scales):
+                residual -= scale*psf
+            return np.std(residual)
+        minFluxFit = self.config.minimumModelFraction*image_fp['modelFlux']
+        maxFluxFit = self.config.maximumModelFraction*image_fp['modelFlux']
+        scaleFit = least_squares(minimize_residual, scales0,
+                                 bounds=[[minFluxFit]*nSubfilters, [maxFluxFit]*nSubfilters])
+        scales = [scale/image_fp['modelFlux'] for scale in scaleFit.x]
+        return scales
 
     def initialize_dcr_catalog(self):
         cat = afwTable.SourceCatalog(self.schema)
@@ -333,9 +396,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         return cat
 
     def filter_object_catalog(self, objectCat):
-        # Only include bright enough objects
+        # Only include moderately bright objects
+        # Faint objects won't have enough signal to fit DCR,
+        # and bright objects will saturate the model in the bounding box
+        # and create unwanted artifacts.
         snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
-        refCat = objectCat[snr > 30].copy(deep=True)
+        refCat = objectCat[(snr > self.config.minimumSNR) & (snr < self.config.maximumSNR)].copy(deep=True)
         # Exclude flagged objects that probably won't compute
         refCat = refCat[~refCat['base_SdssCentroid_flag']].copy(deep=True)
         refCat = refCat[~refCat['base_SdssShape_flag']].copy(deep=True)
@@ -344,22 +410,6 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # Do not included deblended parents, only the children
         refCat = refCat[refCat['parent'] > 0].copy(deep=True)
         return refCat
-
-
-def minimize_footprint_residuals(image_fp, psf_fps):
-    scales0 = [image_fp['modelFlux']*psf_fp['modelFlux'] for psf_fp in psf_fps]
-    nSubfilters = len(psf_fps)
-    img = image_fp.getFootprint().extractImage().array
-    psf_arrays = [psf.getFootprint().extractImage().array for psf in psf_fps]
-
-    def minimize_residual(scales):
-        residual = img.copy()
-        for psf, scale in zip(psf_arrays, scales):
-            residual -= scale*psf
-        return np.std(residual)
-    scales = least_squares(minimize_residual, scales0, bounds=[[0.15*image_fp['modelFlux']]*nSubfilters, [0.7*image_fp['modelFlux']]*nSubfilters]).x
-    scales = [scale/image_fp['modelFlux'] for scale in scales]
-    return scales
 
 
 def fit_footprints(model, image):
