@@ -274,6 +274,15 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     dcrFpLookupTable[recId][visit] = lookupTableSingle[recId]['subfilterPsf']
                     cutoutLookupTable[recId][visit] = lookupTableSingle[recId]['cutout']
                     recordVisitCount[recId] += 1
+        # Drop any records that were removed from all visits
+        badRecords = [recordVisitCount[record.getId()] == 0 for record in refCat]
+        if np.any(badRecords):
+            for badRec in refCat:
+                recId = badRec.getId()
+                dcrFpLookupTable.pop(recId)
+                cutoutLookupTable.pop(recId)
+                recordVisitCount.pop(recId)
+            refCat = refCat[~badRecords].copy(deep=True)
         modelExposure, residual = calculateTemplateResidual(templateCoadd,
                                                             dcrFpLookupTable,
                                                             cutoutLookupTable)
@@ -315,9 +324,15 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     flux = fit_footprints(base_psf, cutout_arr)
                     if not np.isfinite(flux):
                         lookupTable[record.getId()] = None
-                        continue                    
+                        continue
+                    deltaFlux = 2*abs(flux - record.getCalibInstFlux())/(flux + record.getCalibInstFlux())
+                    if deltaFlux > .5:
+                        # If the fit flux is much brighter than the calibration
+                        # flux, skip the source since it is more likely to
+                        # create artifacts.
+                        lookupTable[record.getId()] = None
+                        continue
                     cutout = image_footprints.addNew()
-                    # flux = record.getCalibInstFlux()
                     cutout.setId(record.getId())
                     cutout["modelFlux"] = flux
                     cutout['base_SdssCentroid_x'] = xc
@@ -401,15 +416,26 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # and bright objects will saturate the model in the bounding box
         # and create unwanted artifacts.
         snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
-        refCat = objectCat[(snr > self.config.minimumSNR) & (snr < self.config.maximumSNR)].copy(deep=True)
+        goodSnr = snr > self.config.minimumSNR
+        refCat = objectCat[snr > self.config.minimumSNR].copy(deep=True)
         # Exclude flagged objects that probably won't compute
         refCat = refCat[~refCat['base_SdssCentroid_flag']].copy(deep=True)
+        goodCentroid = ~refCat['base_SdssCentroid_flag']
         refCat = refCat[~refCat['base_SdssShape_flag']].copy(deep=True)
+        goodShape = ~refCat['base_SdssShape_flag']
         # Exclude extended objects
         refCat = refCat[refCat['base_ClassificationSizeExtendedness_value'] < 0.8].copy(deep=True)
+        goodExtendedness = refCat['base_ClassificationSizeExtendedness_value'] < 0.5
         # Do not included deblended parents, only the children
         refCat = refCat[refCat['parent'] > 0].copy(deep=True)
-        return refCat
+        notParent = refCat['parent'] > 0
+        # The source needs to fit in the defined footprint.
+        # If it's larger, it's either trailed, extended, or just very bright
+        # None of those cases will be fit well by the DCR model
+        maxFootprintArea = (self.config.footprintSize - self.configfootprintBufferSize)**2
+        goodArea = refCat['base_FootprintArea_value'] < maxFootprintArea
+        srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
+        return refCat[srcUse].copy(deep=True)
 
 
 def fit_footprints(model, image):
