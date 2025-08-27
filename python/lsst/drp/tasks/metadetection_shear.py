@@ -723,10 +723,9 @@ class MetadetectionShearTask(PipelineTask):
             trim_pixels=0,
         )
 
-        # updating the config doesn't do anything now, 
-        # but should once override_config is operational
         update_config = {"meas_type" : self.config.shape_fitter}
         mdet_config = get_mdet_config(update_config)
+        mdet_config['metacal']['types']=['noshear', '1p', '1m', '2p', '2m']
 
         res = run_metadetect(
             rng=self.rng,
