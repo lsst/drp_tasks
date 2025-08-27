@@ -580,7 +580,7 @@ class MetadetectionShearTask(PipelineTask):
             pa_schema = pa_schema.append(
                             pa.field(
                                 "%s_band_flux_err_%s" % (config.shape_fitter, b),
-                                pa.uint32(),
+                                pa.float32(),
                                 nullable=False,
                                 metadata={
                                     "doc": "%s flux uncertainty for object in filter %s." % (config.shape_fitter, b),
