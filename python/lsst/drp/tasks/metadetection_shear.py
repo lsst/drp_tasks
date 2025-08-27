@@ -775,20 +775,20 @@ class MetadetectionShearTask(PipelineTask):
         )
 
     def _make_noise_exposure(self, cell_coadd: SingleCellCoadd, index: int) -> ExposureF:
-        # TODO: cell coadds will have real noise realization
-        fake_noise_image = ImageF(cell_coadd.outer.image, True)
-        noise = np.median(cell_coadd.outer.variance.array[:, :])
-        fake_noise_image.array[:, :] = self.rng.normal(
-            scale=np.sqrt(noise),
-            size=fake_noise_image.array.shape,
-        )
-        return self._make_cell_exposure(
-            fake_noise_image,
-            cell_coadd,
-        )
-        # return self._make_cell_exposure(
-        #     cell_coadd.outer.noise_realizations[index], cell_coadd,
-        # )
+    	# TODO: cell coadds will have real noise realization
+    	# fake_noise_image = ImageF(cell_coadd.outer.image, True)
+    	# noise = np.median(cell_coadd.outer.variance.array[:, :])
+    	# fake_noise_image.array[:, :] = self.rng.normal(
+    	#     scale=np.sqrt(noise),
+    	#     size=fake_noise_image.array.shape,
+    	# )
+    	# return self._make_cell_exposure(
+    	#     fake_noise_image,
+    	#     cell_coadd,
+    	# )
+    	return self._make_cell_exposure(
+    		cell_coadd.outer.noise_realizations[index], cell_coadd,
+    	)
 
     def _make_mfrac_exposure(self, cell_coadd: SingleCellCoadd) -> ExposureF:
         # TODO: cell coadds will have a real mfrac image
@@ -916,6 +916,7 @@ def _make_comb_data(
             newdata["%s_g_cov_21" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 1, 0]
             newdata["%s_g_cov_22" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 1, 1]
 
+            # To-do make compatible with a single band
             for i, b in enumerate(bands):
                 newdata["%s_band_flux_flags_%s" % (fitter, b)] = newdata["%s_band_flux_flags" % (fitter)][:, i]
                 newdata["%s_band_flux_%s" % (fitter, b)] = newdata["%s_band_flux" % (fitter)][:, i]
