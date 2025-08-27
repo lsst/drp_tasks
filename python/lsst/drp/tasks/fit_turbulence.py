@@ -30,7 +30,8 @@ import matplotlib.pyplot as plt
 
 
 class GaussianProcessesTurbulenceFitConnections(
-    pipeBase.PipelineTaskConnections, dimensions=("instrument", "visit", "skymap", "tract"),
+    pipeBase.PipelineTaskConnections,
+    dimensions=("instrument", "visit", "skymap", "tract"),
     defaultTemplates={
         "inputName": "gbdesAstrometricFit",
     },
@@ -61,7 +62,7 @@ class GaussianProcessesTurbulenceFitConnections(
         dimensions=("instrument", "visit"),
         deferLoad=True,
     )
-    # outputWcs -> same dimensions as inputWcs, but with GP map added
+    # outputWcs -> same dimensions as inputWcs, but with GP map added, can't make this for now.
     outputSources = pipeBase.connectionTypes.Output(
         doc="Source table in parquet format with sky positions corrected for turbulence.",
         name="gp_calibrated_star",
@@ -80,16 +81,18 @@ class GaussianProcessesTurbulenceFitConfig(
     )
     initCorrelationLength = pexConfig.ListField(
         dtype=float,
-        doc=("These are the initial parameters for fiting the anisotropic correlation length. p0[0] is the "
-             "equivalent of the isotropic correlation length, and p0[1]/p0[2] are ellipticity parameters and "
-             "are mathematically equivalent to e1/e2 in weak-lensing. p0[1]/p0[2] must be in the range "
-             "[-1,1], where 0 means the correlation is isotropic."),
+        doc=(
+            "These are the initial parameters for fiting the anisotropic correlation length. p0[0] is the "
+            "equivalent of the isotropic correlation length, and p0[1]/p0[2] are ellipticity parameters and "
+            "are mathematically equivalent to e1/e2 in weak-lensing. p0[1]/p0[2] must be in the range "
+            "[-1,1], where 0 means the correlation is isotropic."
+        ),
         default=[1, -0.2, -0.2],
     )
     correlationSeparationMin = pexConfig.Field(
         dtype=float,
         doc="Minimum distance separation in arcsec in the computation of the 2-point correlation function.",
-        default=0.,
+        default=0.0,
     )
     correlationSeparationMax = pexConfig.Field(
         dtype=float,
@@ -106,114 +109,182 @@ class GaussianProcessesTurbulenceFitConfig(
         doc="Pixel size in arcseconds.",
         default=0.2,
     )
-    
+    doValidation = pexConfig.Field(
+        dtype=bool, doc="Validate gaussian processes results using test data.", default=False
+    )
+
 
 class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
-    """TODO: Run GP on astrometric residuals (assuming they are due to turbulence)
-    """
+    """TODO: Run GP on astrometric residuals (assuming they are due to turbulence)"""
 
     ConfigClass = GaussianProcessesTurbulenceFitConfig
     _DefaultName = "gaussianProcessesTurbulenceFit"
 
     def run(self, inputWcs, inputPositions, inputSources):
 
+        visit = str(inputWcs[0]["visit"])
 
-        visit = str(inputWcs[0]['visit'])
+        visitPositions = inputPositions[inputPositions["exposureName"] == visit]
 
-        visitPositions = inputPositions[inputPositions['exposureName'] == visit]
-
-        x = visitPositions['xworld']
-        y = visitPositions['yworld']
-        dx = visitPositions['xresw']
-        dy = visitPositions['yresw']
-        residError = (visitPositions['sigpix']*self.config.pixelSize*u.arcsec).to(u.mas).value
+        x = visitPositions["xworld"]
+        y = visitPositions["yworld"]
+        dx = visitPositions["xresw"]
+        dy = visitPositions["yresw"]
+        residError = (visitPositions["sigpix"] * self.config.pixelSize * u.arcsec).to(u.mas).value
 
         gpx, gpy, trainInd, testInd = self.runGP(x, y, dx, dy, residError)
 
-        #self.evaluate(gpx, gpy, trainInd, testInd, x, y, dx, dy, residError)
-        import ipdb; ipdb.set_trace()
-        sourceCatalog = inputSources.get(parameters={'columns': ['x', 'y', 'detector']})
+        self.evaluate(gpx, gpy, trainInd, testInd, x, y, dx, dy, residError)
+
+        sourceCatalog = inputSources.get(parameters={"columns": ["x", "y", "detector"]})
 
         predictedCatalog = self.predict(gpx, gpy, inputWcs, sourceCatalog)
 
-        return pipeBase.Struct(
-            outputSources=predictedCatalog
-        )
-    
+        return pipeBase.Struct(outputSources=predictedCatalog)
+
     def runGP(self, x, y, dx, dy, residError):
-        """TODO
-        """
+        """TODO"""
         # Set up the Gaussian Processes.
-        
-        gpx = treegp.GPInterpolation(kernel=self.config.initKernel,
-                                     optimizer='anisotropic',
-                                     normalize=True,
-                                     nbins=21,
-                                     min_sep=self.config.correlationSeparationMin,
-                                     max_sep=self.config.correlationSeparationMax,
-                                     p0=self.config.initCorrelationLength)
+
+        gpx = treegp.GPInterpolation(
+            kernel=self.config.initKernel,
+            optimizer="anisotropic",
+            normalize=True,
+            nbins=21,
+            min_sep=self.config.correlationSeparationMin,
+            max_sep=self.config.correlationSeparationMax,
+            p0=self.config.initCorrelationLength,
+        )
 
         coord = np.array([x, y]).T
         rng = np.random.default_rng(1234)
         nPoints = len(coord)
-        nTrain = max([nPoints, self.config.maxTrainingPoints])
+        nTrain = min([nPoints, self.config.maxTrainingPoints])
         perm = rng.permutation(np.arange(nPoints))
         trainInds = perm[:nTrain]
         testInds = perm[nTrain:]
 
         # Predict on du:
-        gpx.initialize(coord[trainInds], dx, y_err=residError)
+        gpx.initialize(coord[trainInds], dx[trainInds], y_err=residError[trainInds])
         gpx.solve()
 
         # Predict on du:
-        gpy = treegp.GPInterpolation(kernel=self.config.initKernel,
-                                     optimizer='anisotropic',
-                                     normalize=True,
-                                     nbins=21,
-                                     min_sep=self.config.correlationSeparationMin,
-                                     max_sep=self.config.correlationSeparationMax,
-                                     p0=self.config.initCorrelationLength)
+        gpy = treegp.GPInterpolation(
+            kernel=self.config.initKernel,
+            optimizer="anisotropic",
+            normalize=True,
+            nbins=21,
+            min_sep=self.config.correlationSeparationMin,
+            max_sep=self.config.correlationSeparationMax,
+            p0=self.config.initCorrelationLength,
+        )
 
-        gpy.initialize(coord[trainInds], dy, y_err=residError)
+        gpy.initialize(coord[trainInds], dy[trainInds], y_err=residError[trainInds])
         gpy.solve()
 
         return gpx, gpy, trainInds, testInds
-    
+
     def predict(self, gpx, gpy, inputWcs, sourceCatalog):
-        """TODO
-        """
+        """TODO"""
         correctedCoordinates = np.zeros((len(sourceCatalog), 2))
 
         for detector in tqdm(inputWcs):
-            detId = detector['id']
+            detId = detector["id"]
             detWCS = detector.wcs
-            detInd = sourceCatalog['detector'] == detId
+            detInd = sourceCatalog["detector"] == detId
             detectorSources = sourceCatalog[detInd]
 
-            initialSky = detWCS.pixelToSkyArray(detectorSources['x'], detectorSources['y'])
-            mapToTangent = detWCS.getFrameDict().getMapping("SKY", "IWC")
-            tangentPlaneCoords = mapToTangent.applyForward(np.array(initialSky)).T
+            initialSky = detWCS.pixelToSkyArray(detectorSources["x"], detectorSources["y"])
+            tangentPlaneToSky = detWCS.getFrameDict().getMapping("IWC", "SKY")
+            tangentPlaneCoords = tangentPlaneToSky.applyInverse(np.array(initialSky)).T
 
             xPrediction = gpx.predict(tangentPlaneCoords)
             yPrediction = gpy.predict(tangentPlaneCoords)
 
-            correctedCoordinates[detInd, 0] = tangentPlaneCoords[0] - xPrediction
-            correctedCoordinates[detInd, 1] = tangentPlaneCoords[1] - yPrediction
+            correctedTangentPlaneX = tangentPlaneCoords[:, 0] - xPrediction
+            correctedTangentPlaneY = tangentPlaneCoords[:, 1] - yPrediction
+            correctedSkyCoords = tangentPlaneToSky.applyForward(
+                np.array([correctedTangentPlaneX, correctedTangentPlaneY])
+            )
+            correctedCoordinates[detInd] = correctedSkyCoords.T
 
         return correctedCoordinates
 
-    def plot_visit(self, x, y, dx, dy, residualLimit):
+    def plot_visit(self, x, y, dx, dy, predx, predy):
 
-        fig, subs = plt.subplots(1, 3)
-        subs[0].scatter(x, y, c=dx, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1)
-        subs[1].scatter(x, y, c=dy, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1)
-        
-        subs[0].set_aspect("equal")
-        subs[1].set_aspect("equal")
-        subs[0].set_xlabel('x (degree)')
-        subs[0].set_xlabel('y (degree)')
-        subs[0].set_ylabel('y (degree)')
+        xie, xib, logr = treegp.comp_eb_treecorr(x, y, dx, dy, rmin=20 / 3600, rmax=0.6, dlogr=0.3)
+        xie_resid, xib_resid, logr_resid = treegp.comp_eb_treecorr(
+            x, y, dx - predx, dy - predy, rmin=20 / 3600, rmax=0.6, dlogr=0.3
+        )
 
+        residualLimit = np.nanstd(dx)
+
+        fig, subs = plt.subplot_mosaic(
+            [["dx", "predx", "residx", "eb"], ["dy", "predy", "residy", "eb"]],
+            figsize=(15, 8),
+            layout="constrained",
+        )
+        plt.subplots_adjust(wspace=0.3, right=0.99, left=0.05)
+        im = subs["dx"].scatter(x, y, c=dx, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1)
+        subs["dy"].scatter(x, y, c=dy, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1)
+
+        subs["predx"].scatter(
+            x, y, c=predx, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1
+        )
+        subs["predy"].scatter(
+            x, y, c=predy, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1
+        )
+
+        subs["residx"].scatter(
+            x, y, c=dx - predx, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1
+        )
+        subs["residy"].scatter(
+            x, y, c=dy - predy, vmin=-residualLimit, vmax=residualLimit, cmap=plt.cm.seismic, s=1
+        )
+
+        cb = fig.colorbar(
+            im, ax=[subs["dx"], subs["dy"], subs["predx"], subs["predy"], subs["residx"], subs["residy"]]
+        )
+
+        subs["eb"].scatter(np.exp(logr) * 60, xie, c="b", label="E-mode")
+        subs["eb"].scatter(np.exp(logr) * 60, xib, c="r", label="B-mode")
+
+        subs["eb"].scatter(
+            np.exp(logr_resid) * 60, xie_resid, c="b", marker="+", label="E-mode after GP correction"
+        )
+        subs["eb"].scatter(
+            np.exp(logr_resid) * 60, xib_resid, c="r", marker="+", label="B-mode after GP correction"
+        )
+        subs["eb"].legend()
+        subs["eb"].grid(True)
+
+        subs["dx"].set_aspect("equal")
+        subs["dy"].set_aspect("equal")
+        subs["predx"].set_aspect("equal")
+        subs["predy"].set_aspect("equal")
+        subs["residx"].set_aspect("equal")
+        subs["residy"].set_aspect("equal")
+        subs["dy"].set_xlabel("x (degree)")
+        subs["predy"].set_xlabel("x (degree)")
+        subs["residy"].set_xlabel("x (degree)")
+        subs["dy"].set_ylabel("y (degree)")
+        subs["dx"].set_ylabel("y (degree)")
+
+        subs["dx"].set_title(r"$\delta$x")
+        subs["predx"].set_title("GP prediction")
+        subs["residx"].set_title("Residual")
+
+        subs["dy"].set_title(r"$\delta$y")
+        subs["predy"].set_title("GP prediction")
+        subs["residy"].set_title("Residual")
+
+        cb.set_label("mas")
+
+        subs["eb"].set_title("E and B modes")
+        subs["eb"].set_ylabel(r"$\xi_{E/B}$ (mas$^2$)")
+        subs["eb"].set_xlabel(r"$\Delta \theta$ (arcmin)")
+
+        return fig
 
     def evaluate(self, gpx, gpy, trainInd, testInd, x, y, dx, dy, residError):
         """Will do eb correlation before and after here, and validate
@@ -222,19 +293,52 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
         Just copied some stuff over here for now.
         """
 
-        RESDIUAL_LIM = np.nanstd(dx)
+        coord = np.array([x, y]).T
 
+        # Calculate E/B modes before and after Gaussian Processes correction.
+        xPredict = gpx.predict(coord[trainInd])
+        yPredict = gpy.predict(coord[trainInd])
+        xie, xib, logr = treegp.comp_eb_treecorr(
+            x[trainInd], y[trainInd], dx[trainInd], dy[trainInd], rmin=20 / 3600, rmax=0.6, dlogr=0.3
+        )
+        start, stop = np.searchsorted(np.exp(logr), [0, 15])
+        meanE = np.mean(xie[start:stop])
+        meanB = np.mean(xib[start:stop])
+        self.log.info(
+            "Original average correlation level over 0-15 arcminutes: E-mode=%0.2f, B-mode=%0.2f",
+            meanE,
+            meanB,
+        )
 
-        xie, xib, logr = treegp.comp_eb_treecorr(u, v, du, dv, rmin=20/3600, rmax=0.6, dlogr=0.3)
+        xie_resid, xib_resid, logr = treegp.comp_eb_treecorr(
+            x[trainInd],
+            y[trainInd],
+            dx[trainInd] - xPredict,
+            dy[trainInd] - yPredict,
+            rmin=20 / 3600,
+            rmax=0.6,
+            dlogr=0.3,
+        )
+        start, stop = np.searchsorted(np.exp(logr), [0, 15])
+        meanE_resid = np.mean(xie_resid[start:stop])
+        meanB_resid = np.mean(xib_resid[start:stop])
+        self.log.info(
+            "Correlation level after GP correction over 0-15 arcminutes: E-mode=%0.2f, B-mode=%0.2f",
+            meanE_resid,
+            meanB_resid,
+        )
 
-        MAXEB = max([np.max(xie), np.max(xib)])
-        MINEB = min([np.min(xie), np.min(xib)])
-        MAXEB += MAXEB * 0.1
-        MINEB -= MINEB * 0.1
-
-        self.MAXEB = MAXEB
-        self.MINEB = MINEB
-
-        self.point_size = 1
-        self.RESDIUAL_LIM = np.nanstd(self.dic['dx']) * DX_TO_DU_UNITS
-        
+        # Predict on all test data and make a plot.
+        if self.config.doValidation:
+            chunkSize = 5000
+            nChunks = np.ceil(len(testInd) / chunkSize).astype(int)
+            xPredict = np.zeros(len(testInd))
+            yPredict = np.zeros(len(testInd))
+            for i in tqdm(range(nChunks)):
+                ind = testInd[chunkSize * i : chunkSize * (i + 1)]
+                xPredict[chunkSize * i : chunkSize * (i + 1)] = gpx.predict(coord[ind])
+                yPredict[chunkSize * i : chunkSize * (i + 1)] = gpy.predict(coord[ind])
+            fig = self.plot_visit(x[testInd], y[testInd], dx[testInd], dy[testInd], xPredict, yPredict)
+            # I don't really want to make an official output figure. We can
+            # just save the figure locally for development work.
+            # fig.savefig(Fill in something here)
