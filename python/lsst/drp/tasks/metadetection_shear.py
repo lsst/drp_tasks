@@ -920,7 +920,7 @@ def _make_comb_data(
             for i, b in enumerate(bands):
                 newdata["%s_band_flux_flags_%s" % (fitter, b)] = newdata["%s_band_flux_flags" % (fitter)][:, i]
                 newdata["%s_band_flux_%s" % (fitter, b)] = newdata["%s_band_flux" % (fitter)][:, i]
-                newdata["%s_band_flux_err_%s" % (fitter, b)] = newdata["%s_band_flux_flags" % (fitter)][:, i]
+                newdata["%s_band_flux_err_%s" % (fitter, b)] = newdata["%s_band_flux_err" % (fitter)][:, i]
 
             newdata["tract"] = idinfo.tract
             newdata["patch_x"] = idinfo.patch.x
