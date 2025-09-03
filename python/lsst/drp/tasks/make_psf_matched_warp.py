@@ -231,7 +231,7 @@ class MakePsfMatchedWarpTask(PipelineTask):
             try:
                 temp_psf_matched = self.psfMatch.run(temp_warp, modelPsf).psfMatchedExposure
             except (WarpedPsfTransformTooBigError, PsfComputeShapeError) as e:
-                error = AnnotatedPartialOutputsError(
+                error = AnnotatedPartialOutputsError.annotate(
                     e,
                     self,
                     temp_warp,
