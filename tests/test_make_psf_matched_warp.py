@@ -29,19 +29,34 @@ from test_make_direct_warp import MakeWarpTestCase
 
 import lsst.afw.cameraGeom.testUtils
 import lsst.afw.image
+import lsst.pipe.base
 import lsst.utils.tests
 from lsst.drp.tasks.make_direct_warp import MakeDirectWarpTask, WarpDetectorInputs
 from lsst.drp.tasks.make_psf_matched_warp import MakePsfMatchedWarpTask
+from lsst.ip.diffim import (
+    ModelPsfMatchConfig,
+    ModelPsfMatchTask,
+    WarpedPsfTransformTooBigError,
+)
 from lsst.pipe.base import InMemoryDatasetHandle
 
 
-class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
-    def test_makeWarp(self):
-        """Test basic MakePsfMatchedWarpTask
+class MockPsfMatchConfig(ModelPsfMatchConfig):
+    pass
 
-        This constructs a direct_warp using `MakeDirectWarpTask` and then
-        runs `MakePsfMatchedWarpTask` on it.
-        """
+
+class MockPsfMatchTask(ModelPsfMatchTask):
+    ConfigClass = MockPsfMatchConfig
+
+    def __init__(*args, **kwargs):
+        pass
+
+    def run(self, *args, **kwargs):
+        raise WarpedPsfTransformTooBigError("Mock error")
+
+
+class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
+    def _make_warp(self):
         dataRef = InMemoryDatasetHandle(self.exposure.clone(), dataId=self.dataId)
         makeWarpConfig = copy.copy(self.config)
 
@@ -51,8 +66,15 @@ class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
         }
         result = makeWarp.run(warp_detector_inputs, sky_info=self.skyInfo, visit_summary=None)
 
-        warp = result.warp
+        return result.warp
 
+    def test_makeWarp(self):
+        """Test basic MakePsfMatchedWarpTask
+
+        This constructs a direct_warp using `MakeDirectWarpTask` and then
+        runs `MakePsfMatchedWarpTask` on it.
+        """
+        warp = self._make_warp()
         config = MakePsfMatchedWarpTask.ConfigClass()
         makePsfMatchedWarp = MakePsfMatchedWarpTask(config=config)
         result = makePsfMatchedWarp.run(
@@ -68,6 +90,20 @@ class MakePsfMatchedWarpTestCase(MakeWarpTestCase):
         assert psf is not None
         # Ensure the warp has valid pixels
         self.assertGreater(np.isfinite(psf_matched_warp.image.array.ravel()).sum(), 0)
+
+    def test_annotated_partial_outputs(self):
+        """Test that a failed PSF match generates an annotated error"""
+        warp = self._make_warp()
+        config = MakePsfMatchedWarpTask.ConfigClass()
+        makePsfMatchedWarp = MakePsfMatchedWarpTask(config=config)
+        mockConfig = MockPsfMatchConfig()
+        makePsfMatchedWarp.psfMatch = MockPsfMatchTask(config=mockConfig)
+
+        with self.assertRaises(lsst.pipe.base.AnnotatedPartialOutputsError):
+            makePsfMatchedWarp.run(
+                warp,
+                bbox=self.skyInfo.bbox,
+            )
 
 
 def setup_module(module):
