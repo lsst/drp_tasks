@@ -238,7 +238,7 @@ class AssembleCellCoaddTask(PipelineTask):
     Raises
     ------
     NoWorkFound
-        Raised if no input warps are provided.
+        Raised if no input warps are provided, or no cells could be populated.
     RuntimeError
         Raised if the skymap is not cell-based.
 
@@ -292,7 +292,11 @@ class AssembleCellCoaddTask(PipelineTask):
             identifiers=PatchIdentifiers.from_data_id(outputDataId),
         )
 
-        returnStruct = self.run(**inputData)
+        try:
+            returnStruct = self.run(**inputData)
+        except EmptyCellCoaddError:
+            raise NoWorkFound("No cells could be populated")
+
         butlerQC.put(returnStruct, outputRefs)
         return returnStruct
 
@@ -675,6 +679,9 @@ class AssembleCellCoaddTask(PipelineTask):
             )
             # TODO: Attach transmission curve when they become available.
             cells.append(singleCellCoadd)
+
+        if not cells:
+            raise EmptyCellCoaddError()
 
         grid = self._construct_grid(skyInfo)
         multipleCellCoadd = MultipleCellCoadd(
