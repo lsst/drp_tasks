@@ -578,7 +578,17 @@ class AssembleCellCoaddTask(PipelineTask):
                     ccd_row = full_ccd_table[0]
                 else:
                     ccd_table = full_ccd_table.subsetContaining(cell_centers_sky[cellInfo.index])
-                    assert len(ccd_table) > 0, "No CCD from a warp found within a cell."
+
+                    if len(ccd_table) == 0:
+                        # This condition rarely occurs in test runs, if ever.
+                        # But the QG generated upfront in campaign management
+                        # land routinely has extra quanta that should be
+                        # dropped during runtime. These cases arise when
+                        # the tasks upstream didn't process.
+                        # See DM-52306 for example.
+                        self.log.debug("No CCD found for %s in cell %s", warpRef.dataId, cellInfo.index)
+                        continue
+
                     assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
                     ccd_row = ccd_table[0]
 
