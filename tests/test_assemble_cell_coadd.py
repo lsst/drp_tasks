@@ -31,7 +31,11 @@ from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
-from lsst.drp.tasks.assemble_cell_coadd import AssembleCellCoaddConfig, AssembleCellCoaddTask
+from lsst.drp.tasks.assemble_cell_coadd import (
+    AssembleCellCoaddConfig,
+    AssembleCellCoaddTask,
+    EmptyCellCoaddError,
+)
 
 if TYPE_CHECKING:
     from lsst.cell_coadds import ObservationIdentifiers
@@ -174,6 +178,15 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.runTask()
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
+
+    def test_assemble_empty(self):
+        """Test that AssembleCellCoaddTask runs successfully without errors
+        when no input exposures are provided."""
+        config = MockAssembleCellCoaddConfig()
+        assembleTask = MockAssembleCellCoaddTask(config=config)
+        self.result = None  # so tearDown has something.
+        with self.assertRaises(EmptyCellCoaddError, msg="No cells could be populated for the cell coadd."):
+            assembleTask.runQuantum(self.skyInfo, [], [])
 
     # TODO: Remove this test in DM-49401
     @lsst.utils.tests.methodParameters(do_scale_zero_point=[False, True])
