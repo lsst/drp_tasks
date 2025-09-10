@@ -25,6 +25,7 @@ __all__ = (
     "AssembleCellCoaddTask",
     "AssembleCellCoaddConfig",
     "ConvertMultipleCellCoaddToExposureTask",
+    "EmptyCellCoaddError",
 )
 
 from typing import TYPE_CHECKING
@@ -49,7 +50,14 @@ from lsst.cell_coadds import (
 )
 from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
-from lsst.pipe.base import NoWorkFound, PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
+from lsst.pipe.base import (
+    AlgorithmError,
+    NoWorkFound,
+    PipelineTask,
+    PipelineTaskConfig,
+    PipelineTaskConnections,
+    Struct,
+)
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejectedMaskMapping
 from lsst.pipe.tasks.interpImage import InterpImageTask
@@ -58,6 +66,19 @@ from lsst.skymap import BaseSkyMap
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+
+class EmptyCellCoaddError(AlgorithmError):
+    """Raised if no cells could be populated."""
+
+    def __init__(self):
+        msg = "No cells could be populated for the cell coadd."
+        super().__init__(msg)
+
+    @property
+    def metadata(self) -> dict:
+        """There is no metadata associated with this error."""
+        return {}
 
 
 class AssembleCellCoaddConnections(
@@ -217,7 +238,7 @@ class AssembleCellCoaddTask(PipelineTask):
     Raises
     ------
     NoWorkFound
-        Raised if no input warps are provided.
+        Raised if no input warps are provided, or no cells could be populated.
     RuntimeError
         Raised if the skymap is not cell-based.
 
@@ -271,7 +292,11 @@ class AssembleCellCoaddTask(PipelineTask):
             identifiers=PatchIdentifiers.from_data_id(outputDataId),
         )
 
-        returnStruct = self.run(**inputData)
+        try:
+            returnStruct = self.run(**inputData)
+        except EmptyCellCoaddError:
+            raise NoWorkFound("No cells could be populated")
+
         butlerQC.put(returnStruct, outputRefs)
         return returnStruct
 
@@ -654,6 +679,9 @@ class AssembleCellCoaddTask(PipelineTask):
             )
             # TODO: Attach transmission curve when they become available.
             cells.append(singleCellCoadd)
+
+        if not cells:
+            raise EmptyCellCoaddError()
 
         grid = self._construct_grid(skyInfo)
         multipleCellCoadd = MultipleCellCoadd(
