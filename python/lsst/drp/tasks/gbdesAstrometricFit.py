@@ -1147,6 +1147,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 extensionDetectors.append(detector)
                 extensionType.append("SCIENCE")
 
+        if len(wcss) == 0:
+            raise pipeBase.NoWorkFound("No input extensions have valid WCSs.")
+
         # Set the reference epoch to be the median of the science visits.
         # The reference catalog will be shifted to this date.
         if self.config.setRefEpoch is None:
@@ -2595,6 +2598,11 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                 for (ra, dec) in zip(visSum["raCorners"].ravel(), visSum["decCorners"].ravel())
                 if (np.isfinite(ra) and (np.isfinite(dec)))
             ]
+            if len(detectorCorners) == 0:
+                # Skip this visit if none of the detectors have finite ra/dec
+                # corners, which happens when the WCSs are missing. The visit
+                # will get formally dropped elsewhere.
+                continue
             allDetectorCorners.append(detectorCorners)
 
             # Get center and approximate radius of field of view
