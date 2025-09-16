@@ -308,14 +308,21 @@ class PerHealpixInput(PossiblyMultipleInput):
             distances.append(SpherePoint(pixel_region.getCentroid()).separation(center_for_record))
             results.append((pixel_id, record))
 
+        if len(results) == 0:
+            # There were no entries at all; return the null result.
+            return best_result
+
         inPixel = np.array(inPixel)
         results = np.array(results)
         distances = np.array(distances)
         if inPixel.sum() == 1:
+            # There was one match in the pixel; return it.
             best_result = results[inPixel][0]
         elif inPixel.sum() == 0:
+            # There were no entries in the pixel, but choose the closest.
             best_result = results[distances.argmin()]
         else:
+            # There were multiple entries in the pixel. Choose the closest.
             best_result = results[inPixel][distances[inPixel].argmin()]
         return best_result
 
