@@ -938,6 +938,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             inputVisitSummaries,
             exposureInfo,
             mapTemplate,
+            extensionInfo,
             inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
             inputCamera=(inputCamera if self.config.buildCamera else None),
         )
@@ -1897,7 +1898,14 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         return outWCS
 
     def _make_outputs(
-        self, wcsf, visitSummaryTables, exposureInfo, mapTemplate, inputCameraModel=None, inputCamera=None
+        self,
+        wcsf,
+        visitSummaryTables,
+        exposureInfo,
+        mapTemplate,
+        extensionInfo,
+        inputCameraModel=None,
+        inputCamera=None,
     ):
         """Make a WCS object out of the WCS models.
 
@@ -1924,6 +1932,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 "SCIENCE" or "REFERENCE".
         mapTemplate : `dict` [`str`, `str`]
             Dictionary containing the model description.
+        extensionInfo : `lsst.pipe.base.Struct`
+            Struct containing properties for each extension (visit/detector).
         inputCameraModel : `dict` [`str`, `np.ndarray`], optional
             Parameters to use for the device part of the model. This must be
             provided if an input camera model was used.
@@ -1997,6 +2007,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         partialOutputs = False
         for v, visitSummary in enumerate(visitSummaryTables):
             visit = visitSummary[0]["visit"]
+            if visit not in extensionInfo.visit:
+                self.log.warning("Visit %d was dropped because no detectors had valid WCSs.", visit)
+                partialOutputs = True
+                continue
 
             visitMaps = wcsf.mapCollection.orderAtoms(f"{visit}")
             if self.config.useColor:
@@ -2543,6 +2557,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             inputVisitSummaries,
             exposureInfo,
             mapTemplate,
+            extensionInfo,
             inputCameraModel=(inputCameraModel if self.config.useInputCameraModel else None),
             inputCamera=(inputCamera if self.config.buildCamera else None),
         )
