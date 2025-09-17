@@ -2755,8 +2755,9 @@ class GbdesGlobalAstrometricFitConnections(
     )
     camera = pipeBase.connectionTypes.Output(
         doc="Camera object constructed using the per-detector part of the astrometric model",
-        name="gbdesGlobalAstrometricFitCamera",
+        name="astrometry_camera",
         storageClass="Camera",
+        isCalibration=True,
         dimensions=("instrument", "physical_filter"),
     )
 

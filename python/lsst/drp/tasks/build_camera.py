@@ -324,11 +324,11 @@ class BuildCameraFromAstrometryTask(Task):
         expoArray = np.vstack(visitParams)
 
         expoMean = expoArray.mean(axis=0)
+        nCoeffsDev = deviceArray.shape[1] // 2
         if normalize:
             # Shift the per-device part of the model to correspond with the mean
             # per-visit behavior.
             newDeviceArray = np.zeros(deviceArray.shape)
-            nCoeffsDev = deviceArray.shape[1] // 2
             newDeviceArray[:, :nCoeffsDev] = (
                 deviceArray[:, :nCoeffsDev] * expoMean[1] + deviceArray[:, nCoeffsDev:] * expoMean[2]
             )
@@ -340,8 +340,8 @@ class BuildCameraFromAstrometryTask(Task):
         else:
             # Just recenter the model.
             newDeviceArray = np.copy(deviceArray)
-            newDeviceArray[:, 0] += expoMean[0]
-            newDeviceArray[:, nCoeffsDev] += expoMean[3]
+            #newDeviceArray[:, 0] += expoMean[0]
+            #newDeviceArray[:, nCoeffsDev] += expoMean[3]
 
 
         # Then get the tangent plane positions from the new device model:
