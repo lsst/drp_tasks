@@ -28,6 +28,7 @@ __all__ = (
     "EmptyCellCoaddError",
 )
 
+import dataclasses
 
 import numpy as np
 
@@ -47,10 +48,12 @@ from lsst.cell_coadds import (
     SingleCellCoadd,
     UniformGrid,
 )
+from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
 from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
 from lsst.pipe.base import (
     AlgorithmError,
+    InMemoryDatasetHandle,
     NoWorkFound,
     PipelineTask,
     PipelineTaskConfig,
@@ -75,6 +78,34 @@ class EmptyCellCoaddError(AlgorithmError):
     def metadata(self) -> dict:
         """There is no metadata associated with this error."""
         return {}
+
+
+@dataclasses.dataclass
+class WarpInputs:
+    """Collection of associate inputs along with warps."""
+
+    warp: DeferredDatasetHandle | InMemoryDatasetHandle
+    """Handle for the warped exposure."""
+
+    masked_fraction: DeferredDatasetHandle | InMemoryDatasetHandle | None = None
+    """Handle for the masked fraction image."""
+
+    artifact_mask: DeferredDatasetHandle | InMemoryDatasetHandle | None = None
+    """Handle for the CompareWarp artifact mask."""
+
+    noise_warps: list[DeferredDatasetHandle | InMemoryDatasetHandle] = dataclasses.field(default_factory=list)
+    """List of handles for the noise warps"""
+
+    @property
+    def dataId(self) -> DataCoordinate:
+        """DataID corresponding to the warp.
+
+        Returns
+        -------
+        data_id : `~lsst.daf.butler.DataCoordinate`
+            DataID of the warp.
+        """
+        return self.warp.dataId
 
 
 class AssembleCellCoaddConnections(
