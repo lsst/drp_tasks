@@ -35,6 +35,7 @@ from lsst.drp.tasks.assemble_cell_coadd import (
     AssembleCellCoaddConfig,
     AssembleCellCoaddTask,
     EmptyCellCoaddError,
+    WarpInputs,
 )
 
 if TYPE_CHECKING:
@@ -87,8 +88,14 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
             identifiers=pipeBase.Struct(skymap=None, tract=0, patch=42, band="i"),
         )
 
+        inputs = {}
+        for warpInput in warpRefList:
+            inputs[warpInput.dataId] = WarpInputs(
+                warp=warpInput,
+            )
+
         retStruct = self.run(
-            warpRefList,
+            inputs,
             mockSkyInfo,
             visitSummaryList=visitSummaryList,
         )
