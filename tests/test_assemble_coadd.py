@@ -212,12 +212,8 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         matchedExposures = {}
         for expId in range(100, 110):
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId)
-        self.handleList = testData.makeDataRefList(
-            exposures, matchedExposures, "direct", patch=patch, tract=tract
-        )
-        self.handleListPsfMatched = testData.makeDataRefList(
-            exposures, matchedExposures, "psfMatched", patch=patch, tract=tract
-        )
+        self.handleList = testData.makeDataRefList(exposures, patch=patch, tract=tract)
+        self.handleListPsfMatched = testData.makeDataRefList(matchedExposures, patch=patch, tract=tract)
         self.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
     def checkRun(self, assembleTask, warpType="direct"):
@@ -302,7 +298,7 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
             else:
                 badBox = None
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId, badRegionBox=badBox)
-        handleList = testData.makeDataRefList(exposures, matchedExposures, "direct", patch=patch, tract=tract)
+        handleList = testData.makeDataRefList(exposures, patch=patch, tract=tract)
 
         results = assembleTask.runQuantum(
             self.skyInfo,
