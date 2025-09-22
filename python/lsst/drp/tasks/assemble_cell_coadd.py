@@ -28,7 +28,6 @@ __all__ = (
     "EmptyCellCoaddError",
 )
 
-from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -63,9 +62,6 @@ from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejected
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 
 class EmptyCellCoaddError(AlgorithmError):
@@ -528,8 +524,11 @@ class AssembleCellCoaddTask(PipelineTask):
             # or from the warp itself, if not provided. Computing the weight
             # from the warp is not recommended, and in that case we compute one
             # weight per warp and not bother with per-detector weights.
-            weights: Mapping[int, float] = {}  # Mapping from detector to weight.
             full_ccd_table = warp.getInfo().getCoaddInputs().ccds
+            weights: dict[int, float] = dict.fromkeys(
+                full_ccd_table["ccd"],
+                0.0,
+            )  # Mapping from detector to weight.
 
             if visitSummaryRef := visitSummaryRefDict.get(warpRef.dataId["visit"]):
                 visitSummary = visitSummaryRef.get()
