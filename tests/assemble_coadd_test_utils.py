@@ -476,20 +476,14 @@ class MockCoaddTestData:
         return handle
 
     @staticmethod
-    def makeDataRefList(exposures, matchedExposures, warpType, tract=0, patch=42):
+    def makeDataRefList(exposures, tract=0, patch=42):
         """Make data references from the simulated exposures that can be
         retrieved using the Gen 3 Butler API.
 
         Parameters
         ----------
         exposures : `Mapping` [`Any`, `~lsst.afw.image.ExposureF`]
-            A mapping of exposure IDs to ExposureF objects that correspond to
-            directWarp datasets.
-        matchedExposures : `Mapping` [`Any`, `~lsst.afw.image.ExposureF`]
-            A mapping of exposure IDs to ExposureF objects that correspond to
-            psfMatchedWarp datasets.
-        warpType : `str`
-            Either 'direct' or 'psfMatched'.
+            A mapping of exposure IDs to ExposureF objects.
         tract : `int`, optional
             Unique identifier for a tract of a skyMap.
         patch : `int`, optional
@@ -507,12 +501,7 @@ class MockCoaddTestData:
         """
         dataRefList = []
         for expId in exposures:
-            if warpType == "direct":
-                exposure = exposures[expId]
-            elif warpType == "psfMatched":
-                exposure = matchedExposures[expId]
-            else:
-                raise ValueError("warpType must be one of 'direct' or 'psfMatched'")
+            exposure = exposures[expId]
             dataRef = pipeBase.InMemoryDatasetHandle(
                 exposure,
                 storageClass="ExposureF",
