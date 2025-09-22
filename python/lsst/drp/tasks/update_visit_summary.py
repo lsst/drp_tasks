@@ -536,7 +536,7 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
     wcs_provider = Field(
         doc=(
             "Which connection and behavior to use when applying WCS overrides."
-            "The string should be one of the following:\n",
+            "The string should be one of the following:\n"
             "- input_summary: Propagate the WCS from the input visit summary "
             "catalog and do not recompute WCS-based summary statistics.\n"
             "- tract: Use the 'wcs_overrides_tract' connection to load an "
@@ -547,7 +547,7 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
             " and recommpute WCS-based summary statistics.\n"
             "- healpixN: Use the 'wcs_overrides_skypix' connection to load an "
             "`ExposureCatalog` with {visit, healpixN} dimensions and per-"
-            "detector rows, and recommpute WCS-based summary statistics.",
+            "detector rows, and recommpute WCS-based summary statistics."
         ),
         # If needed, we could add options here to propagate the WCS from
         # the input exposures and/or transfer WCS-based summary statistics
