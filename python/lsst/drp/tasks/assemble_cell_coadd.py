@@ -291,39 +291,44 @@ class AssembleCellCoaddTask(PipelineTask):
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # Docstring inherited.
-        inputData = butlerQC.get(inputRefs)
-
-        if not inputData["inputWarps"]:
+        if not inputRefs.inputWarps:
             raise NoWorkFound("No input warps provided for co-addition")
-        self.log.info("Found %d input warps", len(inputData["inputWarps"]))
+        self.log.info("Found %d input warps", len(inputRefs.inputWarps))
 
         # Construct skyInfo expected by run
         # Do not remove skyMap from inputData in case _makeSupplementaryData
         # needs it
-        skyMap = inputData["skyMap"]
+        skyMap = butlerQC.get(inputRefs.skyMap)
 
         if not skyMap.config.tractBuilder.name == "cells":
             raise RuntimeError("AssembleCellCoaddTask requires a cell-based skymap.")
 
         outputDataId = butlerQC.quantum.dataId
 
-        inputData["skyInfo"] = makeSkyInfo(
-            skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"]
-        )
+        skyInfo = makeSkyInfo(skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"])
+        visitSummaryList = butlerQC.get(getattr(inputRefs, "visitSummaryList", []))
 
         units = CoaddUnits.legacy if self.config.do_scale_zero_point else CoaddUnits.nJy
         self.common = CommonComponents(
             units=units,
-            wcs=inputData["skyInfo"].patchInfo.wcs,
+            wcs=skyInfo.patchInfo.wcs,
             band=outputDataId.get("band", None),
             identifiers=PatchIdentifiers.from_data_id(outputDataId),
         )
 
-        try:
-            returnStruct = self.run(**inputData)
-        except EmptyCellCoaddError:
-            raise NoWorkFound("No cells could be populated")
+        inputs: dict[DataCoordinate, WarpInputs] = {}
+        for handle in butlerQC.get(inputRefs.inputWarps):
+            inputs[handle.dataId] = WarpInputs(warp=handle, noise_warps=[])
 
+        for ref in getattr(inputRefs, "artifactMasks", []):
+            inputs[ref.dataId].artifact_mask = butlerQC.get(ref)
+        for ref in getattr(inputRefs, "maskfracWarps", []):
+            inputs[ref.dataId].masked_fraction = butlerQC.get(ref)
+        for n in range(self.config.num_noise_realizations):
+            for ref in getattr(inputRefs, f"noise{n}_warps"):
+                inputs[ref.dataId].noise_warps.append(butlerQC.get(ref))
+
+        returnStruct = self.run(inputs=inputs, skyInfo=skyInfo, visitSummaryList=visitSummaryList)
         butlerQC.put(returnStruct, outputRefs)
         return returnStruct
 
@@ -463,7 +468,13 @@ class AssembleCellCoaddTask(PipelineTask):
 
         return gc
 
-    def run(self, inputWarps, skyInfo, **kwargs):
+    def run(
+        self,
+        *,
+        inputs: dict[DataCoordinate, WarpInputs],
+        skyInfo,
+        visitSummaryList: list | None = None,
+    ):
         for mask_plane in self.config.bad_mask_planes:
             afwImage.Mask.addMaskPlane(mask_plane)
         for mask_plane in self.config.mask_propagation_thresholds:
@@ -501,16 +512,17 @@ class AssembleCellCoaddTask(PipelineTask):
                 compute_n_image=False,
             )
 
-        artifactMasks = kwargs.get("artifactMasks", [None] * len(inputWarps))
-        visitSummaryList = kwargs.get("visitSummaryList", [])
+        # visit_summary do not have (tract, patch, band, skymap) dimensions.
+        if not visitSummaryList:
+            visitSummaryList = []
         visitSummaryRefDict = {
             visitSummaryRef.dataId["visit"]: visitSummaryRef for visitSummaryRef in visitSummaryList
         }
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for warpRef, artifactMaskRef in zip(inputWarps, artifactMasks):
-            warp = warpRef.get(parameters={"bbox": skyInfo.bbox})
+        for _, warp_input in inputs.items():
+            warp = warp_input.warp.get(parameters={"bbox": skyInfo.bbox})
 
             # Pre-process the warp before coadding.
             # TODO: Can we get these mask names from artifactMask?
@@ -519,31 +531,33 @@ class AssembleCellCoaddTask(PipelineTask):
             warp.mask.addMaskPlane("SENSOR_EDGE")
             warp.mask.addMaskPlane("INEXACT_PSF")
 
-            if artifactMaskRef is not None:
+            if artifact_mask_ref := warp_input.artifact_mask:
                 # Apply the artifact mask to the warp.
-                artifactMask = artifactMaskRef.get()
+                artifact_mask = artifact_mask_ref.get()
                 assert (
-                    warp.mask.getMaskPlaneDict() == artifactMask.getMaskPlaneDict()
+                    warp.mask.getMaskPlaneDict() == artifact_mask.getMaskPlaneDict()
                 ), "Mask dicts do not agree."
-                warp.mask.array = artifactMask.array
-                del artifactMask
+                warp.mask.array = artifact_mask.array
+                del artifact_mask
 
             if self.config.do_scale_zero_point:
                 # Each Warp that goes into a coadd will typically have an
                 # independent photometric zero-point. Therefore, we must scale
                 # each Warp to set it to a common photometric zeropoint.
-                imageScaler = self.scale_zero_point.run(exposure=warp, dataRef=warpRef).imageScaler
+                imageScaler = self.scale_zero_point.run(exposure=warp, dataRef=warp_input.warp).imageScaler
                 zero_point_scale_factor = imageScaler.scale
                 self.log.debug(
-                    "Scaled the warp %s by %f to match zero points", warpRef.dataId, zero_point_scale_factor
+                    "Scaled the warp %s by %f to match zero points",
+                    warp_input.dataId,
+                    zero_point_scale_factor,
                 )
             else:
                 zero_point_scale_factor = 1.0
                 if "BUNIT" not in warp.metadata:
-                    raise ValueError(f"Warp {warpRef.dataId} has no BUNIT metadata")
+                    raise ValueError(f"Warp {warp_input.dataId} has no BUNIT metadata")
                 if warp.metadata["BUNIT"] != "nJy":
                     raise ValueError(
-                        f"Warp {warpRef.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
+                        f"Warp {warp_input.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
                     )
 
             # Coadd the warp onto the cells it completely overlaps.
@@ -561,7 +575,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 0.0,
             )  # Mapping from detector to weight.
 
-            if visitSummaryRef := visitSummaryRefDict.get(warpRef.dataId["visit"]):
+            if visitSummaryRef := visitSummaryRefDict.get(warp_input.dataId["visit"]):
                 visitSummary = visitSummaryRef.get()
                 for detector in full_ccd_table["ccd"]:
                     visitSummaryRow = visitSummary.find(detector)
@@ -572,10 +586,10 @@ class AssembleCellCoaddTask(PipelineTask):
                     weights[detector] = 1.0 / mean_variance
                 del visitSummary
             else:
-                self.log.debug("No visit summary found for %s; using warp-based weights", warpRef.dataId)
+                self.log.debug("No visit summary found for %s; using warp-based weights", warp_input.dataId)
                 weight = self._compute_weight(warp, statsCtrl)
                 if not np.isfinite(weight):
-                    self.log.warn("Non-finite weight for %s: skipping", warpRef.dataId)
+                    self.log.warn("Non-finite weight for %s: skipping", warp_input.dataId)
                     continue
 
                 for detector in weights:
@@ -589,7 +603,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 if (mi.mask[inner_bbox].array & edge).any():
                     self.log.debug(
                         "Skipping %s in cell %s because it has a pixel with SENSOR_EDGE or NO_DATA bit set",
-                        warpRef.dataId,
+                        warp_input.dataId,
                         cellInfo.index,
                     )
                     continue
@@ -597,7 +611,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 if (mi.mask[inner_bbox].array & reject).any():
                     self.log.debug(
                         "Skipping %s in cell %s because it has a pixel with CLIPPED or REJECTED bit set",
-                        warpRef.dataId,
+                        warp_input.dataId,
                         cellInfo.index,
                     )
                     continue
@@ -616,7 +630,7 @@ class AssembleCellCoaddTask(PipelineTask):
                         # dropped during runtime. These cases arise when
                         # the tasks upstream didn't process.
                         # See DM-52306 for example.
-                        self.log.debug("No CCD found for %s in cell %s", warpRef.dataId, cellInfo.index)
+                        self.log.debug("No CCD found for %s in cell %s", warp_input.dataId, cellInfo.index)
                         continue
 
                     assert len(ccd_table) == 1, "More than one CCD from a warp found within a cell."
@@ -625,16 +639,18 @@ class AssembleCellCoaddTask(PipelineTask):
                 weight = weights[ccd_row["ccd"]]
                 if not np.isfinite(weight):
                     self.log.warn(
-                        "Non-finite weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index
+                        "Non-finite weight for %s in cell %s: skipping", warp_input.dataId, cellInfo.index
                     )
                     continue
 
                 if weight == 0:
-                    self.log.info("Zero weight for %s in cell %s: skipping", warpRef.dataId, cellInfo.index)
+                    self.log.info(
+                        "Zero weight for %s in cell %s: skipping", warp_input.dataId, cellInfo.index
+                    )
                     continue
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
-                    warpRef.dataId,
+                    warp_input.dataId,
                     backup_detector=ccd_row["ccd"],
                 )
                 observation_identifiers_gc[cellInfo.index].append(observation_identifier)
