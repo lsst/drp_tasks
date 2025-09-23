@@ -240,6 +240,14 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         with self.assertRaises(EmptyCellCoaddError, msg="No cells could be populated for the cell coadd."):
             self.runTask(warpRefList=[], maskedFractionRefList=[], noise0RefList=[], visitSummaryList=[])
 
+    def test_assemble_without_visitSummary(self):
+        """Test that AssembleCellCoaddTask calculates detector weights and
+        runs successfully without errors when no visit summaries are provided.
+        """
+        self.runTask(visitSummaryList=[])
+        # Check that we produced an exposure.
+        self.assertTrue(self.result.multipleCellCoadd is not None)
+
     # TODO: Remove this test in DM-49401
     @lsst.utils.tests.methodParameters(do_scale_zero_point=[False, True])
     def test_do_scale_zero_point(self, do_scale_zero_point):
