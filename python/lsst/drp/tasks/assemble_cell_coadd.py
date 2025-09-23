@@ -122,6 +122,15 @@ class AssembleCellCoaddConnections(
         multiple=True,
     )
 
+    maskedFractionWarps = Input(
+        doc="Mask fraction warps",
+        name="{inputWarpName}Coadd_directWarp_maskedFraction",
+        storageClass="ImageF",
+        dimensions=("tract", "patch", "skymap", "visit", "instrument"),
+        deferLoad=True,
+        multiple=True,
+    )
+
     artifactMasks = Input(
         doc="Artifact masks to be applied to the input warps",
         name="compare_warp_artifact_mask",
@@ -165,6 +174,19 @@ class AssembleCellCoaddConnections(
 
         if not config.do_use_artifact_mask:
             del self.artifactMasks
+
+        # Dynamically set input connections for noise images, depending on the
+        # number of noise realizations specified in the config.
+        for n in range(config.num_noise_realizations):
+            noise_warps = Input(
+                doc="Input noise warps",
+                name=f"{config.connections.inputWarpName}Coadd_directWarp_noise{n}",
+                storageClass="MaskedImageF",
+                dimensions=("tract", "patch", "skymap", "visit", "instrument"),
+                deferLoad=True,
+                multiple=True,
+            )
+            setattr(self, f"noise{n}_warps", noise_warps)
 
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
@@ -231,6 +253,15 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         max=1.0,
         inclusiveMin=True,
         inclusiveMax=False,
+    )
+    num_noise_realizations = Field[int](
+        default=0,
+        doc=(
+            "Number of noise planes to include in the coadd. "
+            "This should not exceed the corresponding config parameter "
+            "specified in `MakeDirectWarpConfig`. "
+        ),
+        check=lambda x: x >= 0,
     )
     psf_warper = ConfigField(
         doc="Configuration for the warper that warps the PSFs. It must have the same configuration used to "
@@ -322,7 +353,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         for ref in getattr(inputRefs, "artifactMasks", []):
             inputs[ref.dataId].artifact_mask = butlerQC.get(ref)
-        for ref in getattr(inputRefs, "maskfracWarps", []):
+        for ref in getattr(inputRefs, "maskedFractionWarps", []):
             inputs[ref.dataId].masked_fraction = butlerQC.get(ref)
         for n in range(self.config.num_noise_realizations):
             for ref in getattr(inputRefs, f"noise{n}_warps"):
@@ -482,19 +513,24 @@ class AssembleCellCoaddTask(PipelineTask):
 
         statsCtrl = self._construct_stats_control()
 
-        gc = self._construct_grid_container(skyInfo, statsCtrl)
-        psf_gc = GridContainer[AccumulatorMeanStack](gc.shape)
-        psf_bbox_gc = GridContainer[geom.Box2I](gc.shape)
-        ap_corr_gc = self._construct_ap_corr_grid_container(skyInfo)
+        warp_stacker_gc = self._construct_grid_container(skyInfo, statsCtrl)
+        maskfrac_stacker_gc = self._construct_grid_container(skyInfo, statsCtrl)
+        noise_stacker_gc_list = [
+            self._construct_grid_container(skyInfo, statsCtrl)
+            for n in range(self.config.num_noise_realizations)
+        ]
+        psf_stacker_gc = GridContainer[AccumulatorMeanStack](warp_stacker_gc.shape)
+        psf_bbox_gc = GridContainer[geom.Box2I](warp_stacker_gc.shape)
+        ap_corr_stacker_gc = self._construct_ap_corr_grid_container(skyInfo)
 
         # Make a container to hold the cell centers in sky coordinates now,
         # so we don't have to recompute them for each warp
         # (they share a common WCS). These are needed to find the various
         # warp + detector combinations that contributed to each cell, and later
         # get the corresponding PSFs as well.
-        cell_centers_sky = GridContainer[geom.SpherePoint](gc.shape)
+        cell_centers_sky = GridContainer[geom.SpherePoint](warp_stacker_gc.shape)
         # Make a container to hold the observation identifiers for each cell.
-        observation_identifiers_gc = GridContainer[list](gc.shape)
+        observation_identifiers_gc = GridContainer[list](warp_stacker_gc.shape)
         # Populate them.
         for cellInfo in skyInfo.patchInfo:
             # Make a list to hold the observation identifiers for each cell.
@@ -504,7 +540,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 geom.Point2D(cellInfo.inner_bbox.getCenter()),
                 geom.Extent2I(self.config.psf_dimensions, self.config.psf_dimensions),
             )
-            psf_gc[cellInfo.index] = AccumulatorMeanStack(
+            psf_stacker_gc[cellInfo.index] = AccumulatorMeanStack(
                 # The shape is for the numpy arrays, hence transposed.
                 shape=(self.config.psf_dimensions, self.config.psf_dimensions),
                 bit_mask_value=0,
@@ -523,6 +559,11 @@ class AssembleCellCoaddTask(PipelineTask):
         # it completely overlaps.
         for _, warp_input in inputs.items():
             warp = warp_input.warp.get(parameters={"bbox": skyInfo.bbox})
+            masked_fraction_image = (
+                warp_input.masked_fraction.get(parameters={"bbox": skyInfo.bbox})
+                if warp_input.masked_fraction
+                else None
+            )
 
             # Pre-process the warp before coadding.
             # TODO: Can we get these mask names from artifactMask?
@@ -595,6 +636,8 @@ class AssembleCellCoaddTask(PipelineTask):
                 for detector in weights:
                     weights[detector] = weight
 
+            noise_warps = [ref.get(parameters={"bbox": skyInfo.bbox}) for ref in warp_input.noise_warps]
+
             for cellInfo in skyInfo.patchInfo:
                 bbox = cellInfo.outer_bbox
                 inner_bbox = cellInfo.inner_bbox
@@ -655,8 +698,14 @@ class AssembleCellCoaddTask(PipelineTask):
                 )
                 observation_identifiers_gc[cellInfo.index].append(observation_identifier)
 
-                stacker = gc[cellInfo.index]
+                stacker = warp_stacker_gc[cellInfo.index]
                 stacker.add_masked_image(mi, weight=weight)
+                if masked_fraction_image:
+                    maskfrac_stacker_gc[cellInfo.index].add_image(masked_fraction_image[bbox], weight=weight)
+
+                for n in range(self.config.num_noise_realizations):
+                    mi = noise_warps[n][bbox]
+                    noise_stacker_gc_list[n][cellInfo.index].add_masked_image(mi, weight=weight)
 
                 calexp_point = ccd_row.getWcs().skyToPixel(cell_centers_sky[cellInfo.index])
                 undistorted_psf_im = ccd_row.getPsf().computeImage(calexp_point)
@@ -682,11 +731,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 warped_psf_maskedImage.variance.array[np.isnan(warped_psf_maskedImage.image.array)] = 1.0
                 warped_psf_maskedImage.image.array[np.isnan(warped_psf_maskedImage.image.array)] = 0.0
 
-                psf_stacker = psf_gc[cellInfo.index]
+                psf_stacker = psf_stacker_gc[cellInfo.index]
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
 
                 if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
-                    ap_corr_gc[cellInfo.index].add(ap_corr_map, weight=weight)
+                    ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
 
             del warp
 
@@ -696,26 +745,39 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.log.debug("Skipping cell %s because it has no input warps", cellInfo.index)
                 continue
 
-            stacker = gc[cellInfo.index]
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
+            cell_maskfrac_image = afwImage.ImageF(cellInfo.outer_bbox)
+            cell_noise_images = [
+                afwImage.MaskedImageF(cellInfo.outer_bbox) for n in range(self.config.num_noise_realizations)
+            ]
             psf_masked_image = afwImage.MaskedImageF(psf_bbox_gc[cellInfo.index])
-            gc[cellInfo.index].fill_stacked_masked_image(cell_masked_image)
-            psf_gc[cellInfo.index].fill_stacked_masked_image(psf_masked_image)
 
-            if ap_corr_gc[cellInfo.index].ap_corr_names:
-                ap_corr_map = ap_corr_gc[cellInfo.index].final_ap_corr_map
+            warp_stacker_gc[cellInfo.index].fill_stacked_masked_image(cell_masked_image)
+            maskfrac_stacker_gc[cellInfo.index].fill_stacked_image(cell_maskfrac_image)
+            for n in range(self.config.num_noise_realizations):
+                noise_stacker_gc_list[n][cellInfo.index].fill_stacked_masked_image(cell_noise_images[n])
+            psf_stacker_gc[cellInfo.index].fill_stacked_masked_image(psf_masked_image)
+
+            if ap_corr_stacker_gc[cellInfo.index].ap_corr_names:
+                ap_corr_map = ap_corr_stacker_gc[cellInfo.index].final_ap_corr_map
             else:
                 ap_corr_map = None
 
             # Post-process the coadd before converting to new data structures.
             if self.config.do_interpolate_coadd:
                 self.interpolate_coadd.run(cell_masked_image, planeName="NO_DATA")
+                for noise_image in cell_noise_images:
+                    self.interpolate_coadd.run(noise_image, planeName="NO_DATA")
                 # The variance must be positive; work around for DM-3201.
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
                     varArray[:] = np.where(varArray > 0, varArray, np.inf)
 
-            image_planes = OwnedImagePlanes.from_masked_image(cell_masked_image)
+            image_planes = OwnedImagePlanes.from_masked_image(
+                masked_image=cell_masked_image,
+                mask_fractions=cell_maskfrac_image,
+                noise_realizations=[noise_image.image for noise_image in cell_noise_images],
+            )
             identifiers = CellIdentifiers(
                 cell=cellInfo.index,
                 skymap=self.common.identifiers.skymap,
