@@ -308,6 +308,20 @@ def _get_instruments(inputVisitSummaries):
     return instruments, instrumentIndices
 
 
+class CholeskyError(pipeBase.AlgorithmError):
+    """Raised if the Cholesky decomposition in the model fit fails."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Cholesky decomposition failed, likely because data is not sufficient to constrain the model."
+        )
+
+    @property
+    def metadata(self) -> dict:
+        """There is no metadata associated with this error."""
+        return {}
+
+
 class GbdesAstrometricFitConnections(
     pipeBase.PipelineTaskConnections,
     dimensions=("skymap", "tract", "instrument", "physical_filter"),
@@ -743,14 +757,18 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             colorCatalog = inputs.pop("colorCatalog")
         else:
             colorCatalog = None
-
-        output = self.run(
-            **inputs,
-            instrumentName=instrumentName,
-            refObjectLoader=refObjectLoader,
-            colorCatalog=colorCatalog,
-            nCores=nCores,
-        )
+        try:
+            output = self.run(
+                **inputs,
+                instrumentName=instrumentName,
+                refObjectLoader=refObjectLoader,
+                colorCatalog=colorCatalog,
+                nCores=nCores,
+            )
+        except pipeBase.AlgorithmError as e:
+            error = pipeBase.AnnotatedPartialOutputsError.annotate(e, self, log=self.log)
+            # No partial outputs for butler to put
+            raise error from e
 
         wcsOutputRefDict = {outWcsRef.dataId["visit"]: outWcsRef for outWcsRef in outputRefs.outputWcs}
         for visit, outputWcs in output.outputWcss.items():
@@ -924,13 +942,20 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         nCoeffVisitModel = _nCoeffsFromDegree(self.config.exposurePolyOrder)
         minFitExposures = int(np.ceil(nCoeffVisitModel / (1 - self.config.fitReserveFraction)))
         # Do the WCS fit
-        wcsf.fit(
-            reserveFraction=self.config.fitReserveFraction,
-            randomNumberSeed=self.config.fitReserveRandomSeed,
-            minFitExposures=minFitExposures,
-            clipThresh=self.config.clipThresh,
-            clipFraction=self.config.clipFraction,
-        )
+        try:
+            wcsf.fit(
+                reserveFraction=self.config.fitReserveFraction,
+                randomNumberSeed=self.config.fitReserveRandomSeed,
+                minFitExposures=minFitExposures,
+                clipThresh=self.config.clipThresh,
+                clipFraction=self.config.clipFraction,
+            )
+        except RuntimeError as e:
+            if "Cholesky decomposition failed" in str(e):
+                raise CholeskyError() from e
+            else:
+                raise
+
         self.log.info("WCS fitting done")
 
         outputWcss, cameraParams, colorParams, camera, partialOutputs = self._make_outputs(
@@ -2388,12 +2413,17 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         else:
             colorCatalog = None
 
-        output = self.run(
-            **inputs,
-            instrumentName=instrumentName,
-            refObjectLoader=refObjectLoader,
-            colorCatalog=colorCatalog,
-        )
+        try:
+            output = self.run(
+                **inputs,
+                instrumentName=instrumentName,
+                refObjectLoader=refObjectLoader,
+                colorCatalog=colorCatalog,
+            )
+        except pipeBase.AlgorithmError as e:
+            error = pipeBase.AnnotatedPartialOutputsError.annotate(e, self, log=self.log)
+            # No partial outputs for butler to put
+            raise error from e
 
         for outputRef in outputRefs.outputWcs:
             visit = outputRef.dataId["visit"]
@@ -2544,12 +2574,19 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             self._add_color_objects(wcsf, colorCatalog)
 
         # Do the WCS fit
-        wcsf.fit(
-            reserveFraction=self.config.fitReserveFraction,
-            randomNumberSeed=self.config.fitReserveRandomSeed,
-            clipThresh=self.config.clipThresh,
-            clipFraction=self.config.clipFraction,
-        )
+        try:
+            wcsf.fit(
+                reserveFraction=self.config.fitReserveFraction,
+                randomNumberSeed=self.config.fitReserveRandomSeed,
+                clipThresh=self.config.clipThresh,
+                clipFraction=self.config.clipFraction,
+            )
+        except RuntimeError as e:
+            if "Cholesky decomposition failed" in str(e):
+                raise CholeskyError() from e
+            else:
+                raise
+
         self.log.info("WCS fitting done")
 
         outputWcss, cameraParams, colorParams, camera, partialOutputs = self._make_outputs(
