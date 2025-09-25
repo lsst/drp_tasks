@@ -344,7 +344,7 @@ class MakeDirectWarpConfig(
     )
     doWarpMaskedFraction = Field[bool](
         doc="Warp the masked fraction image?",
-        default=False,
+        default=True,
     )
     maskedFractionWarper = ConfigField(
         doc="Configuration for the warp that warps the mask fraction image",

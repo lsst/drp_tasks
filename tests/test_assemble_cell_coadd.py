@@ -29,12 +29,14 @@ from typing import TYPE_CHECKING, Iterable
 import numpy as np
 from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 
+import lsst.afw.image as afwImage
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
 from lsst.drp.tasks.assemble_cell_coadd import (
     AssembleCellCoaddConfig,
     AssembleCellCoaddTask,
     EmptyCellCoaddError,
+    WarpInputs,
 )
 
 if TYPE_CHECKING:
@@ -60,7 +62,14 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
 
     ConfigClass = MockAssembleCellCoaddConfig
 
-    def runQuantum(self, mockSkyInfo, warpRefList, visitSummaryList=None):
+    def runQuantum(
+        self,
+        mockSkyInfo,
+        warpRefList,
+        maskedFractionRefList,
+        noise0RefList,
+        visitSummaryList=None,
+    ):
         """Modified interface for testing coaddition algorithms without a
         Butler.
 
@@ -87,9 +96,21 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
             identifiers=pipeBase.Struct(skymap=None, tract=0, patch=42, band="i"),
         )
 
-        retStruct = self.run(
+        inputs = {}
+        for warpInput, maskedFractionInput, noise0Input in zip(
             warpRefList,
-            mockSkyInfo,
+            maskedFractionRefList,
+            noise0RefList,
+        ):
+            inputs[warpInput.dataId] = WarpInputs(
+                warp=warpInput,
+                masked_fraction=maskedFractionInput,
+                noise_warps=[noise0Input],
+            )
+
+        retStruct = self.run(
+            inputs=inputs,
+            skyInfo=mockSkyInfo,
             visitSummaryList=visitSummaryList,
         )
 
@@ -105,16 +126,27 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        np.random.seed(42)
+        rng = np.random.Generator(np.random.MT19937(42))
         patch = 42
         tract = 0
         testData = MockCoaddTestData(fluxRange=1e4)
         exposures = {}
         matchedExposures = {}
+        masked_fraction_images = {}
+        noise0_masked_images = {}
         for expId in range(100, 110):
             exposures[expId], matchedExposures[expId] = testData.makeTestImage(expId)
-        cls.handleList = testData.makeDataRefList(
-            exposures, matchedExposures, "direct", patch=patch, tract=tract
-        )
+            masked_fraction_images[expId] = afwImage.ImageF(bbox=exposures[expId].getBBox())
+            masked_fraction_images[expId].array[:, :] = rng.random(masked_fraction_images[expId].array.shape)
+            noise0_masked_images[expId] = afwImage.MaskedImageF(bbox=exposures[expId].getBBox())
+            noise0_masked_images[expId].image.array[:, :] = rng.normal(
+                0, 1, noise0_masked_images[expId].image.array.shape
+            ) * (exposures[expId].variance.array**0.5)
+
+        cls.handleList = testData.makeDataRefList(exposures, patch=patch, tract=tract)
+        cls.maskedFractionRefList = testData.makeDataRefList(masked_fraction_images, patch=patch, tract=tract)
+        cls.noise0RefList = testData.makeDataRefList(noise0_masked_images, patch=patch, tract=tract)
         cls.visitSummaryList = [
             testData.makeVisitSummaryTableHandle(warpHandle) for warpHandle in cls.handleList
         ]
@@ -123,11 +155,33 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
     def tearDown(self) -> None:
         del self.result
 
-    def runTask(self, config=None) -> None:
+    def runTask(
+        self,
+        config=None,
+        warpRefList=None,
+        maskedFractionRefList=None,
+        noise0RefList=None,
+        visitSummaryList=None,
+    ) -> None:
         if config is None:
             config = MockAssembleCellCoaddConfig()
         assembleTask = MockAssembleCellCoaddTask(config=config)
-        self.result = assembleTask.runQuantum(self.skyInfo, self.handleList, self.visitSummaryList)
+        if warpRefList is None:
+            warpRefList = self.handleList
+        if maskedFractionRefList is None:
+            maskedFractionRefList = self.maskedFractionRefList
+        if noise0RefList is None:
+            noise0RefList = self.noise0RefList
+        if visitSummaryList is None:
+            visitSummaryList = self.visitSummaryList
+
+        self.result = assembleTask.runQuantum(
+            self.skyInfo,
+            warpRefList=warpRefList,
+            maskedFractionRefList=maskedFractionRefList,
+            noise0RefList=noise0RefList,
+            visitSummaryList=visitSummaryList,
+        )
 
     def checkSortOrder(self, inputs: Iterable[ObservationIdentifiers]) -> None:
         """Check that the inputs are sorted.
@@ -182,11 +236,17 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
     def test_assemble_empty(self):
         """Test that AssembleCellCoaddTask runs successfully without errors
         when no input exposures are provided."""
-        config = MockAssembleCellCoaddConfig()
-        assembleTask = MockAssembleCellCoaddTask(config=config)
         self.result = None  # so tearDown has something.
         with self.assertRaises(EmptyCellCoaddError, msg="No cells could be populated for the cell coadd."):
-            assembleTask.runQuantum(self.skyInfo, [], [])
+            self.runTask(warpRefList=[], maskedFractionRefList=[], noise0RefList=[], visitSummaryList=[])
+
+    def test_assemble_without_visitSummary(self):
+        """Test that AssembleCellCoaddTask calculates detector weights and
+        runs successfully without errors when no visit summaries are provided.
+        """
+        self.runTask(visitSummaryList=[])
+        # Check that we produced an exposure.
+        self.assertTrue(self.result.multipleCellCoadd is not None)
 
     # TODO: Remove this test in DM-49401
     @lsst.utils.tests.methodParameters(do_scale_zero_point=[False, True])
