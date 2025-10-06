@@ -623,7 +623,7 @@ class AssembleCellCoaddTask(PipelineTask):
             statsCtrl,
             psf_dimensions=self.config.psf_dimensions,
             num_noise_realizations=self.config.num_noise_realizations,
-            do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_ap_corr,
+            do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_aperture_corrections,
             calc_error_from_input_variance=self.config.calc_error_from_input_variance,
         )
         main_coadd_intermediate = CoaddIntermediates(
@@ -631,7 +631,7 @@ class AssembleCellCoaddTask(PipelineTask):
             statsCtrl,
             psf_dimensions=self.config.psf_dimensions,
             num_noise_realizations=self.config.num_noise_realizations,
-            do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_ap_corr,
+            do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_aperture_corrections,
             calc_error_from_input_variance=self.config.calc_error_from_input_variance,
         )
 
