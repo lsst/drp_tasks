@@ -486,15 +486,50 @@ class GbdesAstrometricFitConfig(
     sourceSelector = sourceSelectorRegistry.makeField(
         doc="How to select sources for cross-matching.", default="science"
     )
+    maxSourcesTotal = pexConfig.Field(
+        doc="Maximum total number of sources to use for the fit. Keeping this "
+        "below a reasonable number can help with memory/runtime considerations "
+        "(especially in crowded fields).  The number chosen should also takte the "
+        "area of the processing unit into account (e.g. healpix pixel, tract, etc.)",
+        dtype=int,
+        default=2**24,
+        optional=True,
+    )
+    maxSourcesPerDetector = pexConfig.Field(
+        doc="Maximum number of sources per detector to use for the fit. Keeping "
+        "this below a reasonable number can help with memory/runtime considerations "
+        "(especially in crowded fields).",
+        dtype=int,
+        default=1000,
+        optional=True,
+    )
     referenceSelector = pexConfig.ConfigurableField(
         target=ReferenceSourceSelectorTask,
         doc="How to down-select the loaded astrometry reference catalog.",
     )
     referenceFilter = pexConfig.Field(
         dtype=str,
-        doc="Name of filter to load from reference catalog. This is a required argument, although the values"
-        "returned are not used.",
+        doc="Name of filter to load from reference catalog. This is a required "
+        "argument, although the values returned are not used unless maxRefObjects "
+        "or minRefMag are set.",
         default="phot_g_mean",
+    )
+    maxRefObjects = pexConfig.Field(
+        doc="Maximum number of reference objects to use for the matcher. Keeping "
+        "this below a reasonable number can help with memory/runtime considerations "
+        "(especially in crowded fields).",
+        dtype=int,
+        default=2**22,
+    )
+    minRefMag = pexConfig.Field(
+        doc="Minimum magnitude for reference catalog (the brightest sources "
+        "are typically saturated in the images, so may as well remove the "
+        "from the reference catalog). This is dependent on (at least) filter "
+        "bandpass (for both references and sources), telescope optics, and "
+        "observing conditions, so be quite generous by default.",
+        dtype=float,
+        default=9.5,
+        optional=True,
     )
     setRefEpoch = pexConfig.Field(
         dtype=float,
@@ -716,6 +751,14 @@ class GbdesAstrometricFitConfig(
                 "If saveCameraObject is True, exposurePolyOrder must be set to 1.",
             )
 
+        if self.maxSourcesTotal < self.maxSourcesPerDetector:
+            raise pexConfig.FieldValidationError(
+                GbdesAstrometricFitConfig.maxSourcesTotal,
+                self,
+                f"Value for maxSourcesTotal ({self.maxSourcesTotal}) must be larger "
+                f"than that of maxSourcesPerDetector ({self.maxSourcesPerDetector}).",
+            )
+
 
 class GbdesAstrometricFitTask(pipeBase.PipelineTask):
     """Calibrate the WCS across multiple visits of the same field using the
@@ -747,8 +790,14 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         inputRefCatRefs = [inputRefs.referenceCatalog[htm7] for htm7 in inputRefHtm7s.argsort()]
         inputRefCats = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputs["referenceCatalog"]])
         inputs["referenceCatalog"] = [inputs["referenceCatalog"][v] for v in inputRefCats.argsort()]
+        self.log.debug("List of input visits: %s", inputCatVisits)
 
         refConfig = LoadReferenceObjectsConfig()
+        refConfig.anyFilterMapsToThis = self.config.referenceFilter
+        if self.config.maxRefObjects:
+            refConfig.maxRefObjects = self.config.maxRefObjects
+        if self.config.maxRefObjects:
+            refConfig.minRefMag = self.config.minRefMag
         if self.config.applyRefCatProperMotion:
             refConfig.requireProperMotion = True
         refObjectLoader = ReferenceObjectLoader(
@@ -1329,7 +1378,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             skyRegion = refObjectLoader.loadRegion(region, self.config.referenceFilter, epoch=formattedEpoch)
         elif (center is not None) and (radius is not None):
             skyRegion = refObjectLoader.loadSkyCircle(
-                center, radius, self.config.referenceFilter, epoch=formattedEpoch
+                center, radius, self.config.referenceFilter, epoch=formattedEpoch,
             )
         else:
             raise RuntimeError("Either `region` or `center` and `radius` must be set.")
@@ -1502,6 +1551,24 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             columns.append(self.sourceSelector.config.requirePrimary.primaryColName)
 
         sourceIndices = [None] * len(extensionInfo.visit)
+        # Determine total number of input detectors
+        nInputDetectors = 0
+        for inputCatalogRef in inputCatalogRefs:
+            inputCatalog = inputCatalogRef.get(parameters={"columns": ["detector"]})
+            # Get a sorted array of detector names
+            detectors = np.unique(inputCatalog["detector"])
+            nInputDetectors += len(detectors)
+        if self.config.maxSourcesTotal is not None:
+            maxSourcesPerDetector = max(100, int(self.config.maxSourcesTotal/nInputDetectors))
+            if maxSourcesPerDetector*nInputDetectors > self.config.maxSourcesTotal:
+                self.log.warning("Allowing for a total of %d input sources...may hit memory issues.",
+                                 maxSourcesPerDetector*nInputDetectors)
+            self.log.warning("With %d input detectors (in %d visits), maximum number of sources per "
+                             "detector is set to %d",
+                             nInputDetectors, len(inputCatalogRefs), maxSourcesPerDetector)
+        else:
+            maxSourcesPerDetector = None
+
         for inputCatalogRef in inputCatalogRefs:
             visit = inputCatalogRef.dataId["visit"]
             inputCatalog = inputCatalogRef.get(parameters={"columns": columns})
@@ -1519,6 +1586,21 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 goodShapes = xyCov**2 <= (xCov * yCov)
                 selected = self.sourceSelector.run(detectorSources)
                 goodInds = selected.selected & goodShapes
+                # Filter sources if maximum limits have been imposed via the
+                # configs maxSourcesTotal and maxSourcesPerDetector.
+                if self.config.maxSourcesPerDetector is not None and maxSourcesPerDetector is not None:
+                    if sum(goodInds) > maxSourcesPerDetector:
+                        self.log.warning("INITIAL: sum(goodInds) = %d", sum(goodInds))
+                        minSn = self.sourceSelector.config.signalToNoise.minimum
+                        deltaSn = 2.5*minSn
+                        while sum(goodInds) > maxSourcesPerDetector and minSn < 120:
+                            minSn += deltaSn
+                            snFlux = self.config.sourceFluxType + "_instFlux"
+                            goodSn = detectorSources[snFlux]/detectorSources[snFlux + "Err"] > minSn
+                            goodInds = goodInds & goodSn
+                        self.log.warning("Too many sources.  Trimmed by S/N > %.2f...", minSn)
+                    self.log.warning("FINAL: sum(goodInds) = %d", sum(goodInds))
+
                 isStar = np.ones(goodInds.sum())
                 extensionIndex = self._find_extension_index(extensionInfo, visit, detector)
                 if extensionIndex is None:
@@ -2419,6 +2501,11 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         )
 
         refConfig = LoadReferenceObjectsConfig()
+        refConfig.anyFilterMapsToThis = self.config.referenceFilter
+        if self.config.maxRefObjects:
+            refConfig.maxRefObjects = self.config.maxRefObjects
+        if self.config.maxRefObjects:
+            refConfig.minRefMag = self.config.minRefMag
         if self.config.applyRefCatProperMotion:
             refConfig.requireProperMotion = True
         refObjectLoader = ReferenceObjectLoader(

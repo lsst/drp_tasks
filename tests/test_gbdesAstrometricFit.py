@@ -90,6 +90,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.config.saveModelParams = True
         cls.config.allowSelfMatches = True
         cls.config.saveCameraModel = True
+        cls.config.referenceSelector.magLimit.fluxField = "test_filter"
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
         (
