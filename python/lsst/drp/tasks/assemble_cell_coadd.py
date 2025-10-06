@@ -619,9 +619,21 @@ class AssembleCellCoaddTask(PipelineTask):
         statsCtrl = self._construct_stats_control()
 
         fallback_coadd_intermediate = CoaddIntermediates(
-            skyInfo, statsCtrl, self.config.num_noise_realizations
+            skyInfo,
+            statsCtrl,
+            psf_dimensions=self.config.psf_dimensions,
+            num_noise_realizations=self.config.num_noise_realizations,
+            do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_ap_corr,
+            calc_error_from_input_variance=self.config.calc_error_from_input_variance,
         )
-        main_coadd_intermediate = CoaddIntermediates(skyInfo, statsCtrl, self.config.num_noise_realizations)
+        main_coadd_intermediate = CoaddIntermediates(
+            skyInfo,
+            statsCtrl,
+            psf_dimensions=self.config.psf_dimensions,
+            num_noise_realizations=self.config.num_noise_realizations,
+            do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_ap_corr,
+            calc_error_from_input_variance=self.config.calc_error_from_input_variance,
+        )
 
         # Make a container to hold the cell centers in sky coordinates now,
         # so we don't have to recompute them for each warp
