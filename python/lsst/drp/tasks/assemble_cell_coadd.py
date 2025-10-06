@@ -64,7 +64,7 @@ from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejectedMaskMapping
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
-from lsst.skymap import BaseSkyMap
+from lsst.skymap import BaseSkyMap, Index2D
 
 
 class EmptyCellCoaddError(AlgorithmError):
@@ -106,6 +106,199 @@ class WarpInputs:
             DataID of the warp.
         """
         return self.warp.dataId
+
+
+@dataclasses.dataclass
+class WarpIntermediates:
+    """Single-cell single-visit pixel-level data for coaddition."""
+
+    warp: afwImage.ExposureF
+    psf_image: afwImage.ImageF
+    masked_fraction: afwImage.ImageF | None = None
+    noise_warps: list[afwImage.ExposureF] = dataclasses.field(default_factory=list)
+    ap_corr_map: Struct | None = None
+    observation_identifier: ObservationIdentifiers | None = None
+
+
+def _construct_grid(skyInfo):
+    """Construct a UniformGrid object from a SkyInfo struct.
+
+    Parameters
+    ----------
+    skyInfo : `~lsst.pipe.base.Struct`
+        A Struct object
+
+    Returns
+    -------
+    grid : `~lsst.cell_coadds.UniformGrid`
+        A UniformGrid object.
+    """
+    padding = skyInfo.patchInfo.getCellBorder()
+    grid_bbox = skyInfo.patchInfo.outer_bbox.erodedBy(padding)
+    grid = UniformGrid.from_bbox_cell_size(
+        grid_bbox,
+        skyInfo.patchInfo.getCellInnerDimensions(),
+        padding=padding,
+    )
+    return grid
+
+
+@dataclasses.dataclass(init=False)
+class CoaddIntermediates:
+    """Intermediate online data structures for coaddition."""
+
+    warp_stacker_gc: GridContainer[AccumulatorMeanStack]
+    """Grid container of AccumulatorMeanStack for the warps."""
+
+    maskfrac_stacker_gc: GridContainer[AccumulatorMeanStack]
+    """Grid container of AccumulatorMeanStack for the masked fraction images."""
+
+    noise_stacker_gc_list: list[GridContainer[AccumulatorMeanStack]]
+    """List of grid containers of AccumulatorMeanStack for the noise warps."""
+
+    psf_stacker_gc: GridContainer[AccumulatorMeanStack]
+    """Grid container of AccumulatorMeanStack for the PSF images."""
+
+    ap_corr_stacker_gc: GridContainer[CoaddApCorrMapStacker]
+    """Grid container of CoaddApCorrMapStacker for the aperture corrections."""
+
+    observation_identifiers_gc: GridContainer[list[ObservationIdentifiers]]
+    """Grid container of lists of observation identifiers for each cell."""
+
+    def __init__(
+        self,
+        skyInfo,
+        statsCtrl,
+        psf_dimensions,
+        num_noise_realizations=0,
+        do_coadd_inverse_ap_corr=False,
+        calc_error_from_input_variance=True,
+    ):
+        self.warp_stacker_gc = self._construct_grid_container(
+            skyInfo,
+            statsCtrl,
+            calc_error_from_input_variance=calc_error_from_input_variance,
+        )
+        self.maskfrac_stacker_gc = self._construct_grid_container(
+            skyInfo,
+            statsCtrl,
+            calc_error_from_input_variance=calc_error_from_input_variance,
+        )
+        self.noise_stacker_gc_list = [
+            self._construct_grid_container(
+                skyInfo,
+                statsCtrl,
+                calc_error_from_input_variance=calc_error_from_input_variance,
+            )
+            for _ in range(num_noise_realizations)
+        ]
+        self.ap_corr_stacker_gc = self._construct_ap_corr_grid_container(skyInfo, do_coadd_inverse_ap_corr)
+        self.observation_identifiers_gc = GridContainer[list[ObservationIdentifiers]](
+            self.warp_stacker_gc.shape
+        )
+        self.psf_stacker_gc = GridContainer[AccumulatorMeanStack](self.warp_stacker_gc.shape)
+
+        for cellInfo in skyInfo.patchInfo:
+            self.observation_identifiers_gc[cellInfo.index] = []
+            self.psf_stacker_gc[cellInfo.index] = AccumulatorMeanStack(
+                # The shape is for the numpy arrays, hence transposed.
+                shape=(psf_dimensions, psf_dimensions),
+                bit_mask_value=0,
+                calc_error_from_input_variance=calc_error_from_input_variance,
+                compute_n_image=False,
+            )
+
+    def _construct_grid_container(self, skyInfo, statsCtrl, calc_error_from_input_variance=True):
+        """Construct a grid of AccumulatorMeanStack instances.
+
+        Parameters
+        ----------
+        skyInfo : `~lsst.pipe.base.Struct`
+            A Struct object
+        statsCtrl : `~lsst.afw.math.StatisticsControl`
+            A control (config-like) object for StatisticsStack.
+        calc_error_from_input_variance : `bool`, optional
+            Whether to calculate error from input variance.
+
+        Returns
+        -------
+        gc : `~lsst.cell_coadds.GridContainer`
+            A GridContainer object container one AccumulatorMeanStack per cell.
+        """
+        grid = _construct_grid(skyInfo)
+
+        maskMap = setRejectedMaskMapping(statsCtrl)
+        # self.log.debug("Obtained maskMap = %s for %s", maskMap, skyInfo.patchInfo)
+        thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
+
+        # Initialize the grid container with AccumulatorMeanStacks
+        gc = GridContainer[AccumulatorMeanStack](grid.shape)
+        for cellInfo in skyInfo.patchInfo:
+            stacker = AccumulatorMeanStack(
+                # The shape is for the numpy arrays, hence transposed.
+                shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
+                bit_mask_value=statsCtrl.getAndMask(),
+                mask_threshold_dict=thresholdDict,
+                calc_error_from_input_variance=calc_error_from_input_variance,
+                compute_n_image=False,
+                mask_map=maskMap,
+                no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
+            )
+            gc[cellInfo.index] = stacker
+
+        return gc
+
+    def _construct_ap_corr_grid_container(self, skyInfo, do_coadd_inverse_ap_corr=False):
+        """Construct a grid of CoaddApCorrMapStacker instances.
+
+        Parameters
+        ----------
+        skyInfo : `~lsst.pipe.base.Struct`
+            A Struct object
+        do_coadd_inverse_ap_corr : `bool`, optional
+            Whether to coadd the inverse aperture corrections.
+
+        Returns
+        -------
+        gc : `~lsst.cell_coadds.GridContainer`
+            A GridContainer object container one CoaddApCorrMapStacker per
+            cell.
+        """
+        grid = _construct_grid(skyInfo)
+
+        # Initialize the grid container with CoaddApCorrMapStacker.
+        gc = GridContainer[CoaddApCorrMapStacker](grid.shape)
+        for cellInfo in skyInfo.patchInfo:
+            stacker = CoaddApCorrMapStacker(
+                evaluation_point=cellInfo.inner_bbox.getCenter(),
+                do_coadd_inverse_ap_corr=do_coadd_inverse_ap_corr,
+            )
+            gc[cellInfo.index] = stacker
+
+        return gc
+
+    def add(self, warp_intermediate: WarpIntermediates, cell_index: Index2D, weight: float):
+        self.warp_stacker_gc[cell_index].add_masked_image(warp_intermediate.warp, weight=weight)
+        self.maskfrac_stacker_gc[cell_index].add_image(warp_intermediate.masked_fraction, weight=weight)
+        self.psf_stacker_gc[cell_index].add_masked_image(warp_intermediate.psf_image, weight=weight)
+        for noise_warp in warp_intermediate.noise_warps:
+            self.noise_stacker_gc_list[cell_index].add_masked_image(noise_warp, weight=weight)
+        if warp_intermediate.ap_corr_map is not None:
+            self.ap_corr_stacker_gc[cell_index].add(warp_intermediate.ap_corr_map, weight=weight)
+        if warp_intermediate.observation_identifier is not None:
+            if self.observation_identifiers_gc[cell_index] is None:
+                self.observation_identifiers_gc[cell_index] = []
+            self.observation_identifiers_gc[cell_index].append(warp_intermediate.observation_identifier)
+
+    def update(self, other):
+        """Similar to dict's update method."""
+        self.warp_stacker_gc.update(other.warp_stacker_gc)
+        self.maskfrac_stacker_gc.update(other.maskfrac_stacker_gc)
+        self.psf_stacker_gc.update(other.psf_stacker_gc)
+        for n in range(len(self.noise_stacker_gc_list)):
+            self.noise_stacker_gc_list[n].update(other.noise_stacker_gc_list[n])
+        self.ap_corr_stacker_gc.update(other.ap_corr_stacker_gc)
+        self.observation_identifiers_gc.update(other.observation_identifiers_gc)
 
 
 class AssembleCellCoaddConnections(
@@ -386,67 +579,6 @@ class AssembleCellCoaddTask(PipelineTask):
         weight = 1.0 / float(meanVar)
         return weight
 
-    @staticmethod
-    def _construct_grid(skyInfo):
-        """Construct a UniformGrid object from a SkyInfo struct.
-
-        Parameters
-        ----------
-        skyInfo : `~lsst.pipe.base.Struct`
-            A Struct object
-
-        Returns
-        -------
-        grid : `~lsst.cell_coadds.UniformGrid`
-            A UniformGrid object.
-        """
-        padding = skyInfo.patchInfo.getCellBorder()
-        grid_bbox = skyInfo.patchInfo.outer_bbox.erodedBy(padding)
-        grid = UniformGrid.from_bbox_cell_size(
-            grid_bbox,
-            skyInfo.patchInfo.getCellInnerDimensions(),
-            padding=padding,
-        )
-        return grid
-
-    def _construct_grid_container(self, skyInfo, statsCtrl):
-        """Construct a grid of AccumulatorMeanStack instances.
-
-        Parameters
-        ----------
-        skyInfo : `~lsst.pipe.base.Struct`
-            A Struct object
-        statsCtrl : `~lsst.afw.math.StatisticsControl`
-            A control (config-like) object for StatisticsStack.
-
-        Returns
-        -------
-        gc : `~lsst.cell_coadds.GridContainer`
-            A GridContainer object container one AccumulatorMeanStack per cell.
-        """
-        grid = self._construct_grid(skyInfo)
-
-        maskMap = setRejectedMaskMapping(statsCtrl)
-        self.log.debug("Obtained maskMap = %s for %s", maskMap, skyInfo.patchInfo)
-        thresholdDict = AccumulatorMeanStack.stats_ctrl_to_threshold_dict(statsCtrl)
-
-        # Initialize the grid container with AccumulatorMeanStacks
-        gc = GridContainer[AccumulatorMeanStack](grid.shape)
-        for cellInfo in skyInfo.patchInfo:
-            stacker = AccumulatorMeanStack(
-                # The shape is for the numpy arrays, hence transposed.
-                shape=(cellInfo.outer_bbox.height, cellInfo.outer_bbox.width),
-                bit_mask_value=statsCtrl.getAndMask(),
-                mask_threshold_dict=thresholdDict,
-                calc_error_from_input_variance=self.config.calc_error_from_input_variance,
-                compute_n_image=False,
-                mask_map=maskMap,
-                no_good_pixels_mask=statsCtrl.getNoGoodPixelsMask(),
-            )
-            gc[cellInfo.index] = stacker
-
-        return gc
-
     def _construct_stats_control(self):
         """Construct a StatisticsControl object for coadd.
 
@@ -472,33 +604,6 @@ class AssembleCellCoaddTask(PipelineTask):
             statsCtrl.setMaskPropagationThreshold(bit, threshold)
         return statsCtrl
 
-    def _construct_ap_corr_grid_container(self, skyInfo):
-        """Construct a grid of CoaddApCorrMapStacker instances.
-
-        Parameters
-        ----------
-        skyInfo : `~lsst.pipe.base.Struct`
-            A Struct object
-
-        Returns
-        -------
-        gc : `~lsst.cell_coadds.GridContainer`
-            A GridContainer object container one CoaddApCorrMapStacker per
-            cell.
-        """
-        grid = self._construct_grid(skyInfo)
-
-        # Initialize the grid container with CoaddApCorrMapStacker.
-        gc = GridContainer[CoaddApCorrMapStacker](grid.shape)
-        for cellInfo in skyInfo.patchInfo:
-            stacker = CoaddApCorrMapStacker(
-                evaluation_point=cellInfo.inner_bbox.getCenter(),
-                do_coadd_inverse_ap_corr=self.config.do_coadd_inverse_aperture_corrections,
-            )
-            gc[cellInfo.index] = stacker
-
-        return gc
-
     def run(
         self,
         *,
@@ -513,39 +618,26 @@ class AssembleCellCoaddTask(PipelineTask):
 
         statsCtrl = self._construct_stats_control()
 
-        warp_stacker_gc = self._construct_grid_container(skyInfo, statsCtrl)
-        maskfrac_stacker_gc = self._construct_grid_container(skyInfo, statsCtrl)
-        noise_stacker_gc_list = [
-            self._construct_grid_container(skyInfo, statsCtrl)
-            for n in range(self.config.num_noise_realizations)
-        ]
-        psf_stacker_gc = GridContainer[AccumulatorMeanStack](warp_stacker_gc.shape)
-        psf_bbox_gc = GridContainer[geom.Box2I](warp_stacker_gc.shape)
-        ap_corr_stacker_gc = self._construct_ap_corr_grid_container(skyInfo)
+        fallback_coadd_intermediate = CoaddIntermediates(
+            skyInfo, statsCtrl, self.config.num_noise_realizations
+        )
+        main_coadd_intermediate = CoaddIntermediates(skyInfo, statsCtrl, self.config.num_noise_realizations)
 
         # Make a container to hold the cell centers in sky coordinates now,
         # so we don't have to recompute them for each warp
         # (they share a common WCS). These are needed to find the various
         # warp + detector combinations that contributed to each cell, and later
         # get the corresponding PSFs as well.
-        cell_centers_sky = GridContainer[geom.SpherePoint](warp_stacker_gc.shape)
-        # Make a container to hold the observation identifiers for each cell.
-        observation_identifiers_gc = GridContainer[list](warp_stacker_gc.shape)
+        cell_centers_sky = GridContainer[geom.SpherePoint](main_coadd_intermediate.warp_stacker_gc.shape)
+        psf_bbox_gc = GridContainer[geom.Box2I](main_coadd_intermediate.warp_stacker_gc.shape)
+
         # Populate them.
         for cellInfo in skyInfo.patchInfo:
             # Make a list to hold the observation identifiers for each cell.
-            observation_identifiers_gc[cellInfo.index] = []
             cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
             psf_bbox_gc[cellInfo.index] = geom.Box2I.makeCenteredBox(
                 geom.Point2D(cellInfo.inner_bbox.getCenter()),
                 geom.Extent2I(self.config.psf_dimensions, self.config.psf_dimensions),
-            )
-            psf_stacker_gc[cellInfo.index] = AccumulatorMeanStack(
-                # The shape is for the numpy arrays, hence transposed.
-                shape=(self.config.psf_dimensions, self.config.psf_dimensions),
-                bit_mask_value=0,
-                calc_error_from_input_variance=self.config.calc_error_from_input_variance,
-                compute_n_image=False,
             )
 
         # visit_summary do not have (tract, patch, band, skymap) dimensions.
@@ -643,22 +735,6 @@ class AssembleCellCoaddTask(PipelineTask):
                 inner_bbox = cellInfo.inner_bbox
                 mi = warp[bbox].maskedImage
 
-                if (mi.mask[inner_bbox].array & edge).any():
-                    self.log.debug(
-                        "Skipping %s in cell %s because it has a pixel with SENSOR_EDGE or NO_DATA bit set",
-                        warp_input.dataId,
-                        cellInfo.index,
-                    )
-                    continue
-
-                if (mi.mask[inner_bbox].array & reject).any():
-                    self.log.debug(
-                        "Skipping %s in cell %s because it has a pixel with CLIPPED or REJECTED bit set",
-                        warp_input.dataId,
-                        cellInfo.index,
-                    )
-                    continue
-
                 # Find the CCD that contributed to this cell.
                 if len(warp.getInfo().getCoaddInputs().ccds) == 1:
                     # If there is only one, don't bother with a WCS look up.
@@ -696,16 +772,6 @@ class AssembleCellCoaddTask(PipelineTask):
                     warp_input.dataId,
                     backup_detector=ccd_row["ccd"],
                 )
-                observation_identifiers_gc[cellInfo.index].append(observation_identifier)
-
-                stacker = warp_stacker_gc[cellInfo.index]
-                stacker.add_masked_image(mi, weight=weight)
-                if masked_fraction_image:
-                    maskfrac_stacker_gc[cellInfo.index].add_image(masked_fraction_image[bbox], weight=weight)
-
-                for n in range(self.config.num_noise_realizations):
-                    mi = noise_warps[n][bbox]
-                    noise_stacker_gc_list[n][cellInfo.index].add_masked_image(mi, weight=weight)
 
                 calexp_point = ccd_row.getWcs().skyToPixel(cell_centers_sky[cellInfo.index])
                 undistorted_psf_im = ccd_row.getPsf().computeImage(calexp_point)
@@ -731,35 +797,54 @@ class AssembleCellCoaddTask(PipelineTask):
                 warped_psf_maskedImage.variance.array[np.isnan(warped_psf_maskedImage.image.array)] = 1.0
                 warped_psf_maskedImage.image.array[np.isnan(warped_psf_maskedImage.image.array)] = 0.0
 
-                psf_stacker = psf_stacker_gc[cellInfo.index]
-                psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
+                warp_intermediates = WarpIntermediates(
+                    warp=mi,
+                    masked_fraction=masked_fraction_image[bbox] if masked_fraction_image else None,
+                    noise_warps=[noise_warps[n][bbox] for n in range(self.config.num_noise_realizations)],
+                    psf_image=warped_psf_maskedImage,
+                    ap_corr_map=warp.getInfo().getApCorrMap(),
+                    observation_identifier=observation_identifier,
+                )
 
-                if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
-                    ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
+                fallback_coadd_intermediate.add(warp_intermediates, cellInfo.index, weight)
 
-            del warp
+                if (mi.mask[inner_bbox].array & edge).any():
+                    self.log.debug(
+                        "Skipping %s in cell %s because it has a pixel with SENSOR_EDGE or NO_DATA bit set",
+                        warp_input.dataId,
+                        cellInfo.index,
+                    )
+                    continue
+
+                if (mi.mask[inner_bbox].array & reject).any():
+                    self.log.debug(
+                        "Skipping %s in cell %s because it has a pixel with CLIPPED or REJECTED bit set",
+                        warp_input.dataId,
+                        cellInfo.index,
+                    )
+                    continue
+
+                main_coadd_intermediate.add(warp_intermediates, cellInfo.index, weight)
+
+            del warp_intermediates, warp
+
+        fallback_coadd_intermediate.update(main_coadd_intermediate)
 
         cells: list[SingleCellCoadd] = []
         for cellInfo in skyInfo.patchInfo:
-            if len(observation_identifiers_gc[cellInfo.index]) == 0:
+            if len(fallback_coadd_intermediate.observation_identifiers_gc[cellInfo.index]) == 0:
                 self.log.debug("Skipping cell %s because it has no input warps", cellInfo.index)
                 continue
 
             cell_masked_image = afwImage.MaskedImageF(cellInfo.outer_bbox)
             cell_maskfrac_image = afwImage.ImageF(cellInfo.outer_bbox)
             cell_noise_images = [
-                afwImage.MaskedImageF(cellInfo.outer_bbox) for n in range(self.config.num_noise_realizations)
+                afwImage.MaskedImageF(cellInfo.outer_bbox) for _ in range(self.config.num_noise_realizations)
             ]
             psf_masked_image = afwImage.MaskedImageF(psf_bbox_gc[cellInfo.index])
 
-            warp_stacker_gc[cellInfo.index].fill_stacked_masked_image(cell_masked_image)
-            maskfrac_stacker_gc[cellInfo.index].fill_stacked_image(cell_maskfrac_image)
-            for n in range(self.config.num_noise_realizations):
-                noise_stacker_gc_list[n][cellInfo.index].fill_stacked_masked_image(cell_noise_images[n])
-            psf_stacker_gc[cellInfo.index].fill_stacked_masked_image(psf_masked_image)
-
-            if ap_corr_stacker_gc[cellInfo.index].ap_corr_names:
-                ap_corr_map = ap_corr_stacker_gc[cellInfo.index].final_ap_corr_map
+            if fallback_coadd_intermediate.ap_corr_stacker_gc[cellInfo.index].ap_corr_names:
+                ap_corr_map = fallback_coadd_intermediate.ap_corr_stacker_gc[cellInfo.index].final_ap_corr_map
             else:
                 ap_corr_map = None
 
@@ -790,7 +875,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 outer=image_planes,
                 psf=psf_masked_image.image,
                 inner_bbox=cellInfo.inner_bbox,
-                inputs=observation_identifiers_gc[cellInfo.index],
+                inputs=fallback_coadd_intermediate.observation_identifiers_gc[cellInfo.index],
                 common=self.common,
                 identifiers=identifiers,
                 aperture_correction_map=ap_corr_map,
@@ -801,7 +886,7 @@ class AssembleCellCoaddTask(PipelineTask):
         if not cells:
             raise EmptyCellCoaddError()
 
-        grid = self._construct_grid(skyInfo)
+        grid = _construct_grid(skyInfo)
         multipleCellCoadd = MultipleCellCoadd(
             cells,
             grid=grid,
