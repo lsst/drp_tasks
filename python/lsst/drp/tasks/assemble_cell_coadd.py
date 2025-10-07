@@ -860,11 +860,19 @@ class AssembleCellCoaddTask(PipelineTask):
             else:
                 ap_corr_map = None
 
-            fallback_coadd_intermediate.warp_stacker_gc[cellInfo.index].fill_masked_image(cell_masked_image)
-            fallback_coadd_intermediate.maskfrac_stacker_gc[cellInfo.index].fill_image(cell_maskfrac_image)
-            fallback_coadd_intermediate.psf_stacker_gc[cellInfo.index].fill_masked_image(psf_masked_image)
+            fallback_coadd_intermediate.warp_stacker_gc[cellInfo.index].fill_stacked_masked_image(
+                cell_masked_image
+            )
+            fallback_coadd_intermediate.maskfrac_stacker_gc[cellInfo.index].fill_stacked_image(
+                cell_maskfrac_image
+            )
+            fallback_coadd_intermediate.psf_stacker_gc[cellInfo.index].fill_stacked_masked_image(
+                psf_masked_image
+            )
             for n in range(self.config.num_noise_realizations):
-                fallback_coadd_intermediate.noise_stacker_gc_list[n].fill_masked_image(cell_noise_images[n])
+                fallback_coadd_intermediate.noise_stacker_gc_list[n].fill_stacked_masked_image(
+                    cell_noise_images[n]
+                )
 
             # Post-process the coadd before converting to new data structures.
             if self.config.do_interpolate_coadd:
