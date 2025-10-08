@@ -152,9 +152,6 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         ]
         cls.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
 
-    def tearDown(self) -> None:
-        del self.result
-
     def runTask(
         self,
         config=None,
