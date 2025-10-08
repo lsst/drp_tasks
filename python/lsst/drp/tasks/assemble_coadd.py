@@ -614,11 +614,12 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
                 maskedImage.getVariance(), maskedImage.getMask(), afwMath.MEANCLIP, statsCtrl
             )
             meanVar, meanVarErr = statObj.getResult(afwMath.MEANCLIP)
-            weight = 1.0 / float(meanVar)
-            if not numpy.isfinite(weight):
+            if meanVar > 0.0 and numpy.isfinite(meanVar):
+                weight = 1.0 / float(meanVar)
+                self.log.info("Weight of %s %s = %0.3f", warpName, warpRef.dataId, weight)
+            else:
                 self.log.warning("Non-finite weight for %s: skipping", warpRef.dataId)
                 continue
-            self.log.info("Weight of %s %s = %0.3f", warpName, warpRef.dataId, weight)
 
             del maskedImage
             del warp
@@ -1649,6 +1650,11 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         # Check and match the order of the supplementaryData
         # (PSF-matched) inputs to the order of the direct inputs,
         # so that the artifact mask is applied to the right warp
+
+        # For any missing psfMatched warp refs replaced with None,
+        # findArtifacts() will produce a NO_DATA mask covering the entire bbox.
+        # As long as NO_DATA is in self.config.badMaskPlanes, these direct
+        # warps with missing psfMatched warps will not contribute to the coadd.
         dataIds = [ref.dataId for ref in warpRefList]
         psfMatchedDataIds = [ref.dataId for ref in supplementaryData.warpRefList]
 

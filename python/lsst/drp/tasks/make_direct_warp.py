@@ -807,14 +807,20 @@ class MakeDirectWarpTask(PipelineTask):
                 return False
 
             if self.config.useVisitSummaryPhotoCalib:
-                if photo_calib := row.getPhotoCalib():
-                    input_exposure.setPhotoCalib(photo_calib)
-                else:
+                photo_calib = row.getPhotoCalib()
+                if photo_calib is None:
                     self.log.info(
                         "No photometric calibration found in visit summary for detector = %s. Skipping it.",
                         detector,
                     )
                     return False
+                elif not np.isfinite(photo_calib.getInstFluxAtZeroMagnitude()):
+                    self.log.info(
+                        f"Invalid PhotoCalib found in visit summary for detector {detector}. Skipping it.",
+                    )
+                    return False
+                else:
+                    input_exposure.setPhotoCalib(photo_calib)
 
             if self.config.useVisitSummaryWcs:
                 if wcs := row.getWcs():
