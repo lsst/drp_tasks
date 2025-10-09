@@ -1794,17 +1794,26 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
 
                     _ = self.maskStreaks.run(warpDiffExp)
                     streakMask = warpDiffExp.mask
-                    spanSetStreak = afwGeom.SpanSet.fromMask(
+                    initSpanSetStreak = afwGeom.SpanSet.fromMask(
                         streakMask, streakMask.getPlaneBitMask(maskName)
                     ).split()
                     # Pad the streaks to account for low-surface brightness
                     # wings.
                     psf = warpDiffExp.getPsf()
-                    for s, sset in enumerate(spanSetStreak):
+                    spanSetStreak = []
+                    for sset in initSpanSetStreak:
+                        if self.config.doPreserveContainedBySource and templateFootprints is not None:
+                            doKeep = True
+                            for footprint in templateFootprints.positive.getFootprints():
+                                if footprint.spans.contains(sset):
+                                    doKeep = False
+                                    break
+                            if not doKeep:
+                                continue
                         psfShape = psf.computeShape(sset.computeCentroid())
                         dilation = self.config.growStreakFp * psfShape.getDeterminantRadius()
                         sset_dilated = sset.dilated(int(dilation))
-                        spanSetStreak[s] = sset_dilated
+                        spanSetStreak.append(sset_dilated)
 
                 # PSF-Matched warps have less available area (~the matching
                 # kernel) because the calexps undergo a second convolution.
