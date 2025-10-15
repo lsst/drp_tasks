@@ -36,7 +36,6 @@ from lsst.cell_coadds import CommonComponents
 from lsst.drp.tasks.assemble_cell_coadd import (
     AssembleCellCoaddConfig,
     AssembleCellCoaddTask,
-    EmptyCellCoaddError,
     WarpInputs,
 )
 
@@ -235,7 +234,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         """Test that AssembleCellCoaddTask runs successfully without errors
         when no input exposures are provided."""
         self.result = None  # so tearDown has something.
-        with self.assertRaises(EmptyCellCoaddError, msg="No cells could be populated for the cell coadd."):
+        with self.assertRaises(pipeBase.NoWorkFound, msg="No cells could be populated for the cell coadd."):
             self.runTask(warpRefList=[], maskedFractionRefList=[], noise0RefList=[], visitSummaryList=[])
 
     def test_assemble_without_visitSummary(self):

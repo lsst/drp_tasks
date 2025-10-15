@@ -25,7 +25,6 @@ __all__ = (
     "AssembleCellCoaddTask",
     "AssembleCellCoaddConfig",
     "ConvertMultipleCellCoaddToExposureTask",
-    "EmptyCellCoaddError",
 )
 
 import dataclasses
@@ -52,7 +51,6 @@ from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
 from lsst.meas.algorithms import AccumulatorMeanStack
 from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
 from lsst.pipe.base import (
-    AlgorithmError,
     InMemoryDatasetHandle,
     NoWorkFound,
     PipelineTask,
@@ -65,19 +63,6 @@ from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejected
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
-
-
-class EmptyCellCoaddError(AlgorithmError):
-    """Raised if no cells could be populated."""
-
-    def __init__(self):
-        msg = "No cells could be populated for the cell coadd."
-        super().__init__(msg)
-
-    @property
-    def metadata(self) -> dict:
-        """There is no metadata associated with this error."""
-        return {}
 
 
 @dataclasses.dataclass
@@ -799,7 +784,7 @@ class AssembleCellCoaddTask(PipelineTask):
             cells.append(singleCellCoadd)
 
         if not cells:
-            raise EmptyCellCoaddError()
+            raise NoWorkFound("No cells could be populated for the cell coadd.")
 
         grid = self._construct_grid(skyInfo)
         multipleCellCoadd = MultipleCellCoadd(
