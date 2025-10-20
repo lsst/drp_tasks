@@ -221,7 +221,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         # This has to be at least 0.5 to ensure that the an input overlaps the
         # cell center. Inputs will overlap fraction less than 0.25 will
         # definitely not overlap the cell center.
-        default=1.0,
+        default=0.0,
         min=0.0,
         max=1.0,
         inclusiveMin=True,
