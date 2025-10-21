@@ -126,6 +126,17 @@ class SingleFrameDetectAndMeasureConfig(
         self.detection.reEstimateBackground = True
         self.detection.doTempLocalBackground = False
 
+        self.measurement.plugins = [
+            "base_PixelFlags",
+            "base_SdssCentroid",
+            "ext_shapeHSM_HsmSourceMoments",
+            "ext_shapeHSM_HsmPsfMoments",
+            "base_GaussianFlux",
+            "base_PsfFlux",
+            "base_CircularApertureFlux",
+            "base_ClassificationSizeExtendedness",
+            "base_CompensatedTophatFlux",
+        ]
         # NOTE: these apertures were selected for HSC, and may not be
         # what we want for LSSTCam.
         self.measurement.plugins["base_CircularApertureFlux"].radii = [
@@ -141,8 +152,6 @@ class SingleFrameDetectAndMeasureConfig(
             70.0,
         ]
         lsst.meas.extensions.shapeHSM.configure_hsm(self.measurement)
-        self.measurement.plugins.names |= ["base_Jacobian", "base_FPPosition", "ext_photometryKron_KronFlux"]
-        self.measurement.plugins["base_Jacobian"].pixelScale = 0.2
 
         # TODO DM-46306: should make this the ApertureFlux default!
         # Use a large aperture to be independent of seeing in calibration
