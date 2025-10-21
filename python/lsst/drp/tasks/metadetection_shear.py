@@ -153,6 +153,12 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
 
     idGenerator = SkyMapIdGeneratorConfig.make_field()
 
+    shear_step = Field[float](
+        "Shear step size",
+        default=0.01,
+        optional=True,
+    )
+    
     # TODO: expose more configuration options here.
 
 
@@ -726,7 +732,8 @@ class MetadetectionShearTask(PipelineTask):
         update_config = {"meas_type" : self.config.shape_fitter}
         mdet_config = get_mdet_config(update_config)
         mdet_config['metacal']['types']=['noshear', '1p', '1m', '2p', '2m']
-
+        mdet_config['step_size'] = self.config.shear_step
+        
         res = run_metadetect(
             rng=self.rng,
             config=mdet_config,
@@ -775,20 +782,20 @@ class MetadetectionShearTask(PipelineTask):
         )
 
     def _make_noise_exposure(self, cell_coadd: SingleCellCoadd, index: int) -> ExposureF:
-    	# TODO: cell coadds will have real noise realization
-    	# fake_noise_image = ImageF(cell_coadd.outer.image, True)
-    	# noise = np.median(cell_coadd.outer.variance.array[:, :])
-    	# fake_noise_image.array[:, :] = self.rng.normal(
-    	#     scale=np.sqrt(noise),
-    	#     size=fake_noise_image.array.shape,
-    	# )
-    	# return self._make_cell_exposure(
-    	#     fake_noise_image,
-    	#     cell_coadd,
-    	# )
-    	return self._make_cell_exposure(
-    		cell_coadd.outer.noise_realizations[index], cell_coadd,
-    	)
+        # TODO: cell coadds will have real noise realization
+        # fake_noise_image = ImageF(cell_coadd.outer.image, True)
+        # noise = np.median(cell_coadd.outer.variance.array[:, :])
+        # fake_noise_image.array[:, :] = self.rng.normal(
+        #     scale=np.sqrt(noise),
+        #     size=fake_noise_image.array.shape,
+        # )
+        # return self._make_cell_exposure(
+        #     fake_noise_image,
+        #     cell_coadd,
+        # )
+        return self._make_cell_exposure(
+                cell_coadd.outer.noise_realizations[index], cell_coadd,
+        )
 
     def _make_mfrac_exposure(self, cell_coadd: SingleCellCoadd) -> ExposureF:
         # TODO: cell coadds will have a real mfrac image
@@ -932,7 +939,6 @@ def _make_comb_data(
                 newdata["shear_type"] = "ns"
             else:
                 newdata["shear_type"] = stype
-            
             dlist.append(newdata)
 
     if len(dlist) > 0:
