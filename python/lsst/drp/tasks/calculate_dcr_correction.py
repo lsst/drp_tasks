@@ -10,13 +10,18 @@ import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 import lsst.geom as geom
-from lsst.ip.diffim.dcrModel import calculateDcr
+from lsst.ip.diffim.dcrModel import calculateDcr, wavelengthGenerator
 import lsst.meas.base as measBase
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 from lsst.pipe.tasks.coaddBase import makeSkyInfo
 import lsst.utils as utils
 from lsst.skymap import BaseSkyMap
+
+
+__all__ = ("CalculateDcrCorrectionConfig",
+           "CalculateDcrCorrectionTask",
+           )
 
 
 class CalculateDcrCorrectionConnections(
@@ -60,19 +65,33 @@ class CalculateDcrCorrectionConnections(
         storageClass="SkyMap",
         dimensions=("skymap",),
     )
-    dcrCorrections = pipeBase.connectionTypes.Output(
-        doc="Output coadded exposure, produced by stacking input warps",
+    dcrCorrectionCatalog = pipeBase.connectionTypes.Output(
+        doc="Output catalog of sub-band fluxes and footprints",
         name="{fakesType}dcr_correction_catalog",
-        storageClass="SourceCatalog",
-        dimensions=("tract", "patch", "skymap", "band", "subfilter"),
-        multiple=True,
-    )
-    dcrReference = pipeBase.connectionTypes.Output(
-        doc="Output image of number of input images per pixel",
-        name="{fakesType}dcr_reference_catalog",
         storageClass="SourceCatalog",
         dimensions=("tract", "patch", "skymap", "band"),
     )
+    modelCatalog = pipeBase.connectionTypes.Output(
+        doc="Model catalog of the stacked dcrCorrectionCatalog."
+        "First subtract this model from the coadd template, then add the DCR"
+        " correction.",
+        name="{fakesType}dcr_model_catalog",
+        storageClass="SourceCatalog",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
+    dcrResidual = pipeBase.connectionTypes.Output(
+        doc="The template with DCR sources removed, so they can be added back"
+        " using the DCR model.",
+        name="{fakesType}dcrCoadd{warpTypeSuffix}",
+        storageClass="ExposureF",
+        dimensions=("tract", "patch", "skymap", "band"),
+    )
+
+    def __init__(self, *, config=None):
+        super().__init__(config=config)
+
+        if not config.doWriteDcrResidual:
+            self.outputs.remove("dcrResidual")
 
 
 class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
@@ -129,7 +148,12 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
     )
     taperFootprint = pexConfig.Field(
         dtype=bool,
-        doc="Weight the PSF model by a Blackman-Harris window function to reduce edge artifacts.",
+        doc="Weight the PSF model by a hanning window function to reduce edge artifacts.",
+        default=True,
+    )
+    doWriteDcrResidual = pexConfig.Field(
+        dtype=bool,
+        doc="Write the residual coadd exposure after removing the DCR modeled sources.",
         default=True,
     )
 
@@ -144,6 +168,14 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         super().__init__(**kwargs)
         self.schema = afwTable.SourceTable.makeMinimalSchema()
         self.schema.addField("modelFlux", "F", doc="Fit PSF flux.", units="nJy")
+        self.schema.addField("numSubfilters", "F", doc="Number of DCR subfilters.", units="count")
+        for subfilter in range(self.config.dcrNumSubfilters):
+            self.schema.addField(f"subfilterWeight_{subfilter}", "F",
+                                 doc="Fraction of the full band flux attributed to this subfilter.",
+                                 units="count")
+            self.schema.addField(f"subfilterWavelength_{subfilter}", "F",
+                                 doc="Central wavelength of this subfilter.",
+                                 units="nm")
         # The following sets the necessary columns and mappings to the schema
         centroidName = "base_SdssCentroid"
         control = measBase.SdssCentroidControl()
@@ -267,7 +299,14 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         for warp in warpRefList:
             visit = warp.visitInfo.getId()
             print(visit)
+            # Generate a lookup table with the shifted PSF models for each
+            # subfilter, and the image cutouts for each object in the catalog
             lookupTableSingle = self.make_warp_footprints(refCat, warp)
+            # Reformat the per-visit lookup table into two new tables with a
+            # different ordering, both indexed by source record first and
+            # having an inner lookup table over visit.
+            # That way we can solve for the best fit to the subfilters across
+            # all visits at once for a single source.
             for record in refCat:
                 recId = record.getId()
                 if lookupTableSingle[recId] is not None:
@@ -275,17 +314,85 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     cutoutLookupTable[recId][visit] = lookupTableSingle[recId]['cutout']
                     recordVisitCount[recId] += 1
         # Drop any records that were removed from all visits
-        badRecords = [recordVisitCount[record.getId()] == 0 for record in refCat]
+        # Note: should this be a configurable minimum instead? E.g. min 3?
+        badRecords = np.array([recordVisitCount[record.getId()] == 0 for record in refCat])
         if np.any(badRecords):
-            for badRec in refCat:
+            for badRec in refCat[badRecords]:
                 recId = badRec.getId()
                 dcrFpLookupTable.pop(recId)
                 cutoutLookupTable.pop(recId)
                 recordVisitCount.pop(recId)
             refCat = refCat[~badRecords].copy(deep=True)
-        modelExposure, residual = calculateTemplateResidual(templateCoadd,
-                                                            dcrFpLookupTable,
-                                                            cutoutLookupTable)
+        # Calculate one model per source
+        results = self.calculateTemplateResidual(templateCoadd, dcrFpLookupTable, cutoutLookupTable)
+
+        # Convert the lookup table to a source catalog with heavy footprints
+        # containing the unshifted PSF model of the coadd at the source
+        # location, and columns containing the overall flux and fractional flux
+        # per subfilter 
+        dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable)
+        return pipeBase.Struct(dcrResidual=results.dcrResidual,
+                               dcrCorrectionCatalog=dcrCorrectionCatalog,
+                               modelCatalog=results.template_models)
+
+    def filter_object_catalog(self, objectCat):
+        # Only include moderately bright objects
+        # Faint objects won't have enough signal to fit DCR,
+        # and bright objects will saturate the model in the bounding box
+        # and create unwanted artifacts.
+        snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
+        goodSnr = snr > self.config.minimumSNR
+        refCat = objectCat[snr > self.config.minimumSNR].copy(deep=True)
+        # Exclude flagged objects that probably won't compute
+        refCat = refCat[~refCat['base_SdssCentroid_flag']].copy(deep=True)
+        goodCentroid = ~refCat['base_SdssCentroid_flag']
+        refCat = refCat[~refCat['base_SdssShape_flag']].copy(deep=True)
+        goodShape = ~refCat['base_SdssShape_flag']
+        # Exclude extended objects
+        refCat = refCat[refCat['base_ClassificationSizeExtendedness_value'] < 0.8].copy(deep=True)
+        goodExtendedness = refCat['base_ClassificationSizeExtendedness_value'] < 0.5
+        # Do not included deblended parents, only the children
+        refCat = refCat[refCat['parent'] > 0].copy(deep=True)
+        notParent = refCat['parent'] > 0
+        # The source needs to fit in the defined footprint.
+        # If it's larger, it's either trailed, extended, or just very bright
+        # None of those cases will be fit well by the DCR model
+        maxFootprintArea = (self.config.footprintSize - self.configfootprintBufferSize)**2
+        goodArea = refCat['base_FootprintArea_value'] < maxFootprintArea
+        srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
+        return refCat[srcUse].copy(deep=True)
+
+    def initialize_dcr_catalog(self):
+        cat = afwTable.SourceCatalog(self.schema)
+        cat.defineCentroid(self.centroidName)
+        return cat
+
+    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable):
+        dcrCorrectionCatalog = self.initialize_dcr_catalog()
+        dcrGen = wavelengthGenerator(self.config.effectiveWavelength,
+                                     self.config.bandwidth,
+                                     self.config.dcrNumSubfilters)
+        subfilterEffectiveWavelengths = [np.mean(wl) for wl in dcrGen]
+        for refSrc in refCat:
+            srcId = refSrc.getId()
+            models = dcrFpLookupTable[srcId]
+            visits = [visit for visit in models]
+            # At this point the subfilter fractions are the same for each visit
+            # so we can take the values from the first visit
+            model = models[visits[0]]
+            src = dcrCorrectionCatalog.addNew()
+            src.setId(srcId)
+            src['numSubfilters'] = self.config.dcrNumSubfilters
+            src['modelFlux'] = fluxLookupTable[srcId]
+            src['coord_ra'] = refSrc['coord_ra']
+            src['coord_dec'] = refSrc['coord_dec']
+            src['base_SdssCentroid_x'], src['base_SdssCentroid_y'] = refSrc.getCentroid()
+
+            for subfilter in range(self.config.dcrNumSubfilters):
+                src[f'subfilterWeight_{subfilter}'] = model[subfilter]['modelFlux']
+                src[f'subfilterWavelength_{subfilter}'] = subfilterEffectiveWavelengths[subfilter]
+            
+        return dcrCorrectionCatalog
 
     def make_warp_footprints(self, catalog, warp):
         dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
@@ -405,37 +512,63 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         scales = [scale/image_fp['modelFlux'] for scale in scaleFit.x]
         return scales
 
-    def initialize_dcr_catalog(self):
-        cat = afwTable.SourceCatalog(self.schema)
-        cat.defineCentroid(self.centroidName)
-        return cat
+    def calculateTemplateResidual(self, templateCoadd, dcrFpLookupTable, cutoutLookupTable):
+        inputs = templateCoadd.getInfo().getCoaddInputs()
+        weightLookup = {}
+        for visit in inputs.ccds['visit']:
+            inds = inputs.ccds['visit'] == visit
+            weightLookup[visit] = np.mean(inputs.ccds['weight'][inds])
+        scaleLookup = {}
+        dcrFpLookupTableNew = dcrFpLookupTable.copy()
 
-    def filter_object_catalog(self, objectCat):
-        # Only include moderately bright objects
-        # Faint objects won't have enough signal to fit DCR,
-        # and bright objects will saturate the model in the bounding box
-        # and create unwanted artifacts.
-        snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
-        goodSnr = snr > self.config.minimumSNR
-        refCat = objectCat[snr > self.config.minimumSNR].copy(deep=True)
-        # Exclude flagged objects that probably won't compute
-        refCat = refCat[~refCat['base_SdssCentroid_flag']].copy(deep=True)
-        goodCentroid = ~refCat['base_SdssCentroid_flag']
-        refCat = refCat[~refCat['base_SdssShape_flag']].copy(deep=True)
-        goodShape = ~refCat['base_SdssShape_flag']
-        # Exclude extended objects
-        refCat = refCat[refCat['base_ClassificationSizeExtendedness_value'] < 0.8].copy(deep=True)
-        goodExtendedness = refCat['base_ClassificationSizeExtendedness_value'] < 0.5
-        # Do not included deblended parents, only the children
-        refCat = refCat[refCat['parent'] > 0].copy(deep=True)
-        notParent = refCat['parent'] > 0
-        # The source needs to fit in the defined footprint.
-        # If it's larger, it's either trailed, extended, or just very bright
-        # None of those cases will be fit well by the DCR model
-        maxFootprintArea = (self.config.footprintSize - self.configfootprintBufferSize)**2
-        goodArea = refCat['base_FootprintArea_value'] < maxFootprintArea
-        srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
-        return refCat[srcUse].copy(deep=True)
+        template_models = self.initialize_dcr_catalog()
+        fp_ctrl = afwDet.HeavyFootprintCtrl()
+        residual = templateCoadd.clone()
+        # modelExposure = templateCoadd.clone()
+        # modelExposure.image.array *= 0
+        fluxLookupTable = {}
+        for recId in dcrFpLookupTable:
+            scales = []
+            for visit in dcrFpLookupTable[recId]:
+                scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
+            recScales = np.median(scales, axis=0)
+            scaleLookup[recId] = recScales/np.sum(recScales)
+            # Update the modelFlux entries to be the same for all visits
+            # for each record
+            for visit in dcrFpLookupTableNew[recId]:
+                for fp, scale in zip(dcrFpLookupTableNew[recId][visit], scaleLookup[recId]):
+                    fp['modelFlux'] = scale
+            model, flux = stack_dcr_footprints(dcrFpLookupTableNew[recId],
+                                               cutoutLookupTable[recId],
+                                               weightLookup
+                                               )
+            fluxLookupTable[recId] = flux
+            # The bbox will be the same for all visits, so just grab the last one
+            bbox = cutoutLookupTable[recId][visit].getFootprint().getBBox()
+            spans = afwGeom.SpanSet(bbox)
+            # modelExposure[bbox].image.array += model
+            residual[bbox].image.array -= model
+
+            # Add the heavy footprint of the stacked source
+            # This can be subtracted from the original coadd, so that the DCR
+            # model can be added in its place without having to store the
+            # dcrResidual image
+            cutout = template_models.addNew()
+            cutout.setId(recId)
+            cutout["modelFlux"] = flux
+            # The centroid will be the same for all visits, so just grab the last one
+            xc = cutoutLookupTable[recId][visit]['base_SdssCentroid_x']
+            yc = cutoutLookupTable[recId][visit]['base_SdssCentroid_y']
+            cutout['base_SdssCentroid_x'] = xc
+            cutout['base_SdssCentroid_y'] = yc
+            foot = afwDet.Footprint(spans)
+            foot.addPeak(xc, yc, flux)
+            cutout.setFootprint(afwDet.HeavyFootprintF(foot, model, fp_ctrl))
+        # return(modelExposure, residual, fluxLookupTable)
+        return pipeBase.Struct(residual=residual,
+                               fluxLookupTable=fluxLookupTable,
+                               template_models=template_models,
+                               )
 
 
 def fit_footprints(model, image):
@@ -451,6 +584,7 @@ def stack_dcr_footprints(dcrFootprints, cutouts, weightLookup):
     models = []
     weights = []
     bbox = None
+    fluxes = []
     for visit in cutouts:
         flux = cutouts[visit]['modelFlux']
         if visit in weightLookup:
@@ -460,35 +594,10 @@ def stack_dcr_footprints(dcrFootprints, cutouts, weightLookup):
             continue
         weights.append(weight)
         dcrFPs = dcrFootprints[visit]
-        stack = [dcrFp.getFootprint().extractImage(bbox=bbox, fill=0).array*dcrFp['modelFlux'] for dcrFp in dcrFPs]
+        # dcrFPs is a list of the shifted footprints for all subfilters.
+        # Stack each and weight with the fitted subfilter fraction.
+        stack = [dcrFp.getFootprint().extractImage(bbox=bbox, fill=0).array*dcrFp['modelFlux']
+                 for dcrFp in dcrFPs]
         models.append(np.sum(stack, axis=0)*flux*weight)
-    return np.sum(models, axis=0)/np.sum(weights)
-
-
-def calculateTemplateResidual(templateCoadd, dcrFpLookupTable, cutoutLookupTable):
-    inputs = templateCoadd.getInfo().getCoaddInputs()
-    weightLookup = {}
-    for visit in inputs.ccds['visit']:
-        inds = inputs.ccds['visit'] == visit
-        weightLookup[visit] = np.mean(inputs.ccds['weight'][inds])
-    scaleLookup = {}
-    dcrFpLookupTableNew = dcrFpLookupTable.copy()
-    residual = templateCoadd.clone()
-    modelExposure = templateCoadd.clone()
-    modelExposure.image.array *= 0
-    for recId in dcrFpLookupTable:
-        scales = []
-        for visit in dcrFpLookupTable[recId]:
-            scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
-        recScales = np.median(scales, axis=0)
-        scaleLookup[recId] = recScales/np.sum(recScales)
-        # Update the modelFlux entries to be the same for all visits for each record
-        for visit in dcrFpLookupTableNew[recId]:
-            for fp, scale in zip(dcrFpLookupTableNew[recId][visit], scaleLookup[recId]):
-                fp['modelFlux'] = scale
-        model = stack_dcr_footprints(dcrFpLookupTableNew[recId], cutoutLookupTable[recId], weightLookup)
-        # The bbox will be the same for all visits, so just grab the last one
-        bbox = cutoutLookupTable[recId][visit].getFootprint().getBBox()
-        modelExposure[bbox].image.array += model
-        residual[bbox].image.array -= model
-    return(modelExposure, residual)
+        fluxes.append(flux*weight)
+    return (np.sum(models, axis=0)/np.sum(weights), np.sum(fluxes)/np.sum(weights))
