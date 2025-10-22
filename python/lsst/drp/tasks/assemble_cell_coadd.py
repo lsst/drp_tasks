@@ -639,6 +639,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
             noise_warps = [ref.get(parameters={"bbox": skyInfo.bbox}) for ref in warp_input.noise_warps]
 
+            visit_polygons: dict[ObservationIdentifiers, afwGeom.Polygon] = {}
             # Create an image where each pixel value corresponds to the
             # detector ID that pixel comes from.
             detector_map = afwImage.ImageI(bbox=warp.getBBox(), initialValue=-1)
@@ -652,10 +653,23 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                 except SinglePolygonException:
                     continue
+
+                observation_identifier = ObservationIdentifiers.from_data_id(
+                    warp_input.dataId,
+                    backup_detector=row["ccd"],
+                )
+                visit_polygons[observation_identifier] = dest_polygon
+
                 detector_map_slice = dest_polygon.createImage(detector_map.getBBox()).array > 0
                 if not (detector_map.array[detector_map_slice] < 0).all():
                     self.log.warning("Multiple detectors from visit %s are overlapping", warp_input.dataId)
                 detector_map.array[detector_map_slice] = row["ccd"]
+
+            # Update common with the visit polygons.
+            self.common = dataclasses.replace(
+                self.common,
+                visit_polygons=visit_polygons,
+            )
 
             if (detector_map.array < 0).all():
                 self.log.warning("Unable to split the warp %s into single-detector warps.", warp_input.dataId)
