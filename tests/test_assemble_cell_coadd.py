@@ -32,6 +32,7 @@ from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 import lsst.afw.image as afwImage
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
+from lsst.cell_coadds import CommonComponents
 from lsst.drp.tasks.assemble_cell_coadd import (
     AssembleCellCoaddConfig,
     AssembleCellCoaddTask,
@@ -89,7 +90,7 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
             The coadded exposure and associated metadata.
         """
 
-        self.common = pipeBase.Struct(
+        self.common = CommonComponents(
             units=None,
             wcs=mockSkyInfo.wcs,
             band="i",
