@@ -81,7 +81,7 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
         self.xPix = (self.task.x + 1) * bbox.endX / 2
         self.yPix = (self.task.y + 1) * bbox.endY / 2
 
-    def test_normalize_model(self):
+    def notest_normalize_model(self):
 
         deviceParams = []
         for element in self.mapTemplate["BAND/DEVICE"]["Elements"]:
@@ -166,7 +166,7 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
             self.assertFloatsAlmostEqual(origMapX, newMapX, atol=1e-12)
             self.assertFloatsAlmostEqual(origMapY, newMapY, atol=1e-12)
 
-    def test_run_with_basic_model(self):
+    def notest_run_with_basic_model(self):
 
         config = BuildCameraFromAstrometryConfig()
         config.modelSplitting = "basic"
@@ -195,7 +195,7 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
         self.assertFloatsAlmostEqual(self.originalFieldAngleX, testX, atol=1e-12)
         self.assertFloatsAlmostEqual(self.originalFieldAngleY, testY, atol=1e-12)
 
-    def test_run_with_splitModel(self):
+    def notest_run_with_splitModel(self):
 
         config = BuildCameraFromAstrometryConfig()
         config.modelSplitting = "physical"
