@@ -79,6 +79,7 @@ class AggregateCoaddInputsTract(lsst.pipe.base.PipelineTask):
             Result struct containing:
                 ``aggregate_tract_output`` : `astropy.table.Table`
         """
+        self.log.info("Aggregating %d coadd input catalogs", len(coadd_inputs_handles))
         n_inputs = 0
         detector_table_dict = {}
         bands = set()
@@ -94,6 +95,8 @@ class AggregateCoaddInputsTract(lsst.pipe.base.PipelineTask):
 
             detector_table_dict[(tract, patch, band)] = coadd_inputs.ccds
             n_inputs += len(coadd_inputs.ccds)
+
+        self.log.info("Found %d coadd input rows to aggregate", n_inputs)
 
         aggregate_tract_output = Table()
         aggregate_tract_output["tract"] = np.zeros(n_inputs, dtype=np.int32)
