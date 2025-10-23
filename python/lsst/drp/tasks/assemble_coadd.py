@@ -1673,8 +1673,13 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         spanSetMaskList = self.findArtifacts(
             supplementaryData.templateCoadd, supplementaryData.warpRefList, supplementaryData.imageScalerList
         )
-
-        badMaskPlanes = self.config.badMaskPlanes[:]
+        # The mask planes are defined globally, so we can load the dict from
+        # the templateCoadd or the warps.
+        badMaskPlanes = [
+            mp
+            for mp in self.config.badMaskPlanes
+            if mp in supplementaryData.templateCoadd.mask.getMaskPlaneDict().keys()
+        ]
         badMaskPlanes.append("CLIPPED")
         badPixelMask = afwImage.Mask.getPlaneBitMask(badMaskPlanes)
 
