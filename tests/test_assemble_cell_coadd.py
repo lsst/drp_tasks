@@ -32,10 +32,10 @@ from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 import lsst.afw.image as afwImage
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
+from lsst.cell_coadds import CommonComponents
 from lsst.drp.tasks.assemble_cell_coadd import (
     AssembleCellCoaddConfig,
     AssembleCellCoaddTask,
-    EmptyCellCoaddError,
     WarpInputs,
 )
 
@@ -89,7 +89,7 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
             The coadded exposure and associated metadata.
         """
 
-        self.common = pipeBase.Struct(
+        self.common = CommonComponents(
             units=None,
             wcs=mockSkyInfo.wcs,
             band="i",
@@ -151,9 +151,6 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
             testData.makeVisitSummaryTableHandle(warpHandle) for warpHandle in cls.handleList
         ]
         cls.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
-
-    def tearDown(self) -> None:
-        del self.result
 
     def runTask(
         self,
@@ -237,7 +234,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         """Test that AssembleCellCoaddTask runs successfully without errors
         when no input exposures are provided."""
         self.result = None  # so tearDown has something.
-        with self.assertRaises(EmptyCellCoaddError, msg="No cells could be populated for the cell coadd."):
+        with self.assertRaises(pipeBase.NoWorkFound, msg="No cells could be populated for the cell coadd."):
             self.runTask(warpRefList=[], maskedFractionRefList=[], noise0RefList=[], visitSummaryList=[])
 
     def test_assemble_without_visitSummary(self):
