@@ -636,6 +636,14 @@ class GbdesAstrometricFitConfig(
         optional=True,
         default=None,
     )
+    minDetectorFraction = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Minimum fraction of detectors with valid WCSs per visit required to include the visit in the "
+            "fit."
+        ),
+        default=0.25,
+    )
 
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
@@ -1137,6 +1145,17 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             observatory_icrs = observatory_gcrs.transform_to(astropy.coordinates.ICRS())
             # We want the position in AU in Cartesian coordinates
             observatories.append(observatory_icrs.cartesian.xyz.to(u.AU).value)
+
+            validDetectors = [row for row in visitSummary if row.wcs is not None]
+            nDetectorFraction = len(validDetectors) / len(visitSummary)
+            if nDetectorFraction < self.config.minDetectorFraction:
+                self.log.warning(
+                    "Visit %d has only %d detectors with valid WCSs (%s of total) and will be dropped.",
+                    visit,
+                    len(validDetectors),
+                    nDetectorFraction,
+                )
+                continue
 
             for row in visitSummary:
                 detector = row["id"]
