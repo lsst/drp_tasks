@@ -23,11 +23,15 @@ __all__ = [
     "AggregateCoaddInputsTractConnections",
     "AggregateCoaddInputsTractConfig",
     "AggregateCoaddInputsTract",
+    "AggregateCoaddInputsConnections",
+    "AggregateCoaddInputsConfig",
+    "AggregateCoaddInputs",
 ]
 
 from astropy.table import Table
 import numpy as np
 
+from lsst.obs.base import TableVStack
 import lsst.pipe.base
 import lsst.pex.config
 
@@ -60,7 +64,7 @@ class AggregateCoaddInputsTractConfig(
 
 
 class AggregateCoaddInputsTract(lsst.pipe.base.PipelineTask):
-    """Task to aggregate coadd inputs."""
+    """Task to aggregate coadd inputs by tract/band."""
 
     ConfigClass = AggregateCoaddInputsTractConfig
     _DefaultName = "aggreate_coadd_inputs_tract"
@@ -121,3 +125,58 @@ class AggregateCoaddInputsTract(lsst.pipe.base.PipelineTask):
             counter += ndet
 
         return lsst.pipe.base.Struct(aggregate_tract_output=aggregate_tract_output)
+
+
+class AggregateCoaddInputsConnections(
+    lsst.pipe.base.PipelineTaskConnections,
+    dimensions=("skymap",),
+):
+    aggregated_tract_handles = lsst.pipe.base.connectionTypes.Input(
+        name="deep_coadd_inputs_aggregate_tract",
+        doc="Aggregated coadd inputs (by tract and band).",
+        storageClass="ArrowAstropy",
+        dimensions=("skymap", "tract", "band"),
+        deferLoad=True,
+        multiple=True,
+    )
+    aggregated_coadd_inputs = lsst.pipe.base.connectionTypes.Output(
+        name="deep_coadd_inputs_aggregate",
+        doc="Aggregated coadd inputs.",
+        storageClass="ArrowAstropy",
+        dimensions=("skymap",),
+    )
+
+
+class AggregateCoaddInputsConfig(
+    lsst.pipe.base.PipelineTaskConfig,
+    pipelineConnections=AggregateCoaddInputsConnections,
+):
+    pass
+
+
+class AggregateCoaddInputs(lsst.pipe.base.PipelineTask):
+    """Task to aggregate aggregated coadd inputs over a full run."""
+
+    ConfigClass = AggregateCoaddInputsConfig
+    _DefaultName = "aggregate_coadd_inputs"
+
+    def run(self, *, aggregated_tract_handles):
+        """Run the AggregateCoaddInputs task.
+
+        Parameters
+        ----------
+        aggregated_tract_handles : `list`
+            [`lsst.daf.butler.DeferredDatasetHandle`]
+            List of aggregated coadd nipust to aggregate.
+
+        Returns
+        -------
+        result : `lsst.pipe.base.Struct`
+            Result struct containing:
+                ``aggregated_coadd_inputs`` : `astropy.table.Table`
+        """
+        self.log.info("Aggregating %d aggregated coadd input catalogs", len(aggregated_tract_handles))
+
+        aggregated_coadd_inputs = TableVStack.vstack_handles(aggregated_tract_handles)
+
+        return lsst.pipe.base.Struct(aggregated_coadd_inputs=aggregated_coadd_inputs)
