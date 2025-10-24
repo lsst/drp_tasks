@@ -20,6 +20,7 @@
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
 import dataclasses
+import itertools
 import re
 
 import astropy.coordinates
@@ -39,6 +40,7 @@ import lsst.geom
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 import lsst.sphgeom
+from lsst.daf.butler import DataCoordinate
 from lsst.meas.algorithms import (
     LoadReferenceObjectsConfig,
     ReferenceObjectLoader,
@@ -368,6 +370,22 @@ class GbdesAstrometricFitConnections(
         deferLoad=True,
         multiple=True,
     )
+    isolatedStarSources = pipeBase.connectionTypes.Input(
+        doc="Catalog of matched sources.",
+        name="isolated_star_presources",
+        storageClass="DataFrame",
+        dimensions=("instrument", "skymap", "tract"),
+        multiple=True,
+        deferLoad=True,
+    )
+    isolatedStarCatalogs = pipeBase.connectionTypes.Input(
+        doc="Catalog of objects corresponding to the isolatedStarSources.",
+        name="isolated_star_presource_associations",
+        storageClass="DataFrame",
+        dimensions=("instrument", "skymap", "tract"),
+        multiple=True,
+        deferLoad=True,
+    )
     colorCatalog = pipeBase.connectionTypes.Input(
         doc="The catalog of magnitudes to match to input sources.",
         name="fgcm_Cycle4_StandardStars",
@@ -444,6 +462,66 @@ class GbdesAstrometricFitConnections(
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
 
+    def adjust_all_quanta(self, adjuster: pipeBase.QuantaAdjuster) -> None:
+        if not self.config.useIsolatedStars:
+            return
+        # The goal of this implementation of the hook is to expand the set
+        # of isolatedStar* inputs to the tracts that overlap the visits that
+        # overlap the quantum, as opposed to just the tracts that overlap the
+        # quantum.
+        #
+        # We start by extracting mappings from quantum data ID (i.e. tract or
+        # healpix) to tract data ID and visit data ID from the naive-overlap
+        # QG we're starting from.
+        tracts_by_quantum: dict[DataCoordinate, set[DataCoordinate]] = {}
+        visits_by_quantum: dict[DataCoordinate, set[DataCoordinate]] = {}
+        for quantum_data_id in adjuster.iter_data_ids():
+            quantum_inputs = adjuster.get_inputs(quantum_data_id)
+            # We assume we have the exact same tracts for isolatedStarCatalogs
+            # and isolatedStar sources; something is very wrong if we do not.
+            tracts_by_quantum[quantum_data_id] = set(quantum_inputs["isolatedStarCatalogs"])
+            visits_by_quantum[quantum_data_id] = set(quantum_inputs["inputVisitSummaries"])
+        # In order to get from quantum data ID to visit ID to tract data ID,
+        # we next need a mapping from visit to tract.  Here's a start, with
+        # just the keys populated so far.:
+        tracts_by_visit: dict[DataCoordinate, set[DataCoordinate]] = {
+            visit_data_id: set()
+            for visit_data_id in itertools.chain.from_iterable(visits_by_quantum.values())
+        }
+        if self.config.healpix is None:
+            # If quanta are per-tract, we just have to invert
+            # visits_by_quantum.
+            for tract_data_id, visit_data_ids_for_quantum in visits_by_quantum.items():
+                for visit_data_id in visit_data_ids_for_quantum:
+                    tracts_by_visit[visit_data_id].add(tract_data_id)
+        else:
+            # If quanta are per-healpix, we have to query the butler for the
+            # tract/visit overlaps.
+            tracts_flat = set(itertools.chain.from_iterable(tracts_by_quantum.values()))
+            tract_dimensions = adjuster.butler.dimensions.conform(["tract", "instrument"])
+            visit_dimensions = adjuster.butler.dimensions.conform(["visit"])
+            with adjuster.butler.query() as query:
+                for joint_data_id in (
+                    query.join_data_coordinates(tracts_flat)
+                    .join_data_coordinates(tracts_by_visit.keys())
+                    .data_ids(["tract", "visit"])
+                ):
+                    tract_data_id = joint_data_id.subset(tract_dimensions)
+                    visit_data_id = joint_data_id.subset(visit_dimensions)
+                    tracts_by_visit[visit_data_id].add(tract_data_id)
+        # Loop over quantum data IDs and then visits and then tracts to extend
+        # the inputs of each quantum.
+        for quantum_data_id, visit_data_ids_for_quantum in visits_by_quantum.items():
+            # We'll use tracts_for_quantum to track which inputs are already
+            # present.
+            tracts_for_quantum = tracts_by_quantum[quantum_data_id]
+            for visit_data_id in visit_data_ids_for_quantum:
+                for tract_data_id in tracts_by_visit[visit_data_id]:
+                    if tract_data_id not in tracts_for_quantum:
+                        adjuster.add_input(quantum_data_id, "isolatedStarCatalogs", tract_data_id)
+                        adjuster.add_input(quantum_data_id, "isolatedStarSources", tract_data_id)
+                        tracts_for_quantum.add(tract_data_id)
+
     def __init__(self, *, config=None):
         super().__init__(config=config)
 
@@ -486,6 +564,11 @@ class GbdesAstrometricFitConnections(
         if not self.config.saveCameraObject:
             self.prerequisiteInputs.remove("inputCamera")
             self.outputs.remove("camera")
+        if self.config.useIsolatedStars:
+            del self.inputCatalogRefs
+        else:
+            del self.isolatedStarCatalogs
+            del self.isolatedStarSources
 
 
 class GbdesAstrometricFitConfig(
@@ -654,6 +737,14 @@ class GbdesAstrometricFitConfig(
         ),
         default=0.25,
     )
+    useIsolatedStars = pexConfig.Field(
+        dtype=bool,
+        default=False,
+        doc=(
+            "If True, use the pre-matched isolated star catalogs instead of loading and matching per-visit "
+            "input catalogs."
+        ),
+    )
 
     def setDefaults(self):
         # Use only stars because aperture fluxes of galaxies are biased and
@@ -749,8 +840,20 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         instrumentName = butlerQC.quantum.dataId["instrument"]
 
         # Ensure the inputs are in a consistent and deterministic order
-        inputCatVisits = np.array([inputCat.dataId["visit"] for inputCat in inputs["inputCatalogRefs"]])
-        inputs["inputCatalogRefs"] = [inputs["inputCatalogRefs"][v] for v in inputCatVisits.argsort()]
+        if self.config.useIsolatedStars:
+            isolatedStarCatalogs = inputs.pop("isolatedStarCatalogs")
+            inputCatTracts = np.array([inputCat.dataId["tract"] for inputCat in isolatedStarCatalogs])
+            isolatedStarCatalogs = [isolatedStarCatalogs[v] for v in inputCatTracts.argsort()]
+
+            isolatedStarSources = inputs.pop("isolatedStarSources")
+            inputSourceTracts = np.array([inputCat.dataId["tract"] for inputCat in isolatedStarSources])
+            isolatedStarSources = [isolatedStarSources[v] for v in inputSourceTracts.argsort()]
+            inputs["inputCatalogRefs"] = None
+        else:
+            inputCatVisits = np.array([inputCat.dataId["visit"] for inputCat in inputs["inputCatalogRefs"]])
+            inputs["inputCatalogRefs"] = [inputs["inputCatalogRefs"][v] for v in inputCatVisits.argsort()]
+            isolatedStarCatalogs = None
+            isolatedStarSources = None
         inputSumVisits = np.array([inputSum[0]["visit"] for inputSum in inputs["inputVisitSummaries"]])
         inputs["inputVisitSummaries"] = [inputs["inputVisitSummaries"][v] for v in inputSumVisits.argsort()]
         inputRefHtm7s = np.array([inputRefCat.dataId["htm7"] for inputRefCat in inputRefs.referenceCatalog])
@@ -778,6 +881,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         try:
             output = self.run(
                 **inputs,
+                isolatedStarCatalogs=isolatedStarCatalogs,
+                isolatedStarSources=isolatedStarSources,
                 instrumentName=instrumentName,
                 refObjectLoader=refObjectLoader,
                 colorCatalog=colorCatalog,
@@ -810,6 +915,8 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self,
         inputCatalogRefs,
         inputVisitSummaries,
+        isolatedStarSources=None,
+        isolatedStarCatalogs=None,
         instrumentName="",
         refEpoch=None,
         refObjectLoader=None,
@@ -877,15 +984,18 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         self.log.info("Field center set at %s with radius %s degrees", fieldCenter, fieldRadius.asDegrees())
 
         self.log.info("Load catalogs and associate sources")
-        # Set up class to associate sources into matches using a
-        # friends-of-friends algorithm
-        associations = wcsfit.FoFClass(
-            fields,
-            instruments,
-            exposuresHelper,
-            [fieldRadius.asDegrees()],
-            (self.config.matchRadius * u.arcsec).to(u.degree).value,
-        )
+        if not self.config.useIsolatedStars:
+            # Set up class to associate sources into matches using a
+            # friends-of-friends algorithm
+            associations = wcsfit.FoFClass(
+                fields,
+                instruments,
+                exposuresHelper,
+                [fieldRadius.asDegrees()],
+                (self.config.matchRadius * u.arcsec).to(u.degree).value,
+            )
+        else:
+            associations = None
 
         # Add the reference catalog to the associator
         medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="jyear").mjd
@@ -898,10 +1008,17 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             associations=associations,
         )
 
-        # Add the science catalogs and associate new sources as they are added
-        sourceIndices, usedColumns = self._load_catalogs_and_associate(
-            associations, inputCatalogRefs, extensionInfo
-        )
+        if self.config.useIsolatedStars:
+            allRefObjects = {0: refObjects}
+            associations, sourceDict = self._associate_from_isolated_sources(
+                isolatedStarSources, isolatedStarCatalogs, extensionInfo, allRefObjects
+            )
+        else:
+            # Add the science catalogs and associate new sources as they are
+            # added.
+            sourceIndices, usedColumns = self._load_catalogs_and_associate(
+                associations, inputCatalogRefs, extensionInfo
+            )
         self._check_degeneracies(associations, extensionInfo)
 
         self.log.info("Fit the WCSs")
@@ -947,7 +1064,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             num_threads=nCores,
         )
         # Add the science and reference sources
-        self._add_objects(wcsf, inputCatalogRefs, sourceIndices, extensionInfo, usedColumns)
+        if self.config.useIsolatedStars:
+            self._add_objects_from_dict(wcsf, sourceDict, extensionInfo)
+        else:
+            self._add_objects(wcsf, inputCatalogRefs, sourceIndices, extensionInfo, usedColumns)
         self._add_ref_objects(wcsf, refObjects, refCovariance, extensionInfo)
         if self.config.useColor:
             self._add_color_objects(wcsf, colorCatalog)
@@ -1602,6 +1722,190 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
 
         return sourceIndices, columns
 
+    def _associate_from_isolated_sources(
+        self, isolatedStarSourceRefs, isolatedStarCatalogRefs, extensionInfo, refObjects
+    ):
+        """Match the input catalog of isolated stars with the reference catalog
+        and transform the combined isolated star sources and reference source
+        into the format needed for gbdes.
+
+        Parameters
+        ----------
+        isolatedStarSourceRefs : `list` [`DeferredDatasetHandle`]
+            List of handles pointing to isolated star sources.
+        isolatedStarCatalogRefs: `list` [`DeferredDatasetHandle`]
+            List of handles pointing to isolated star catalogs.
+        extensionInfo : `lsst.pipe.base.Struct`
+            Struct containing properties for each extension (visit/detector).
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
+        refObjects : `dict`
+            Dictionary of dictionaries containing the position and error
+            information of reference objects.
+
+        Returns
+        -------
+        associations : `lsst.pipe.base.Struct`
+            Struct containing the associations of sources with objects.
+        sourceDict : `dict` [`int`, [`int`, [`str`, `list` [`float`]]]]
+            Dictionary containing the source centroids for each visit.
+        """
+        sequences = []
+        extensions = []
+        object_indices = []
+
+        sourceColumns = ["x", "y", "xErr", "yErr", "ixx", "ixy", "iyy", "obj_index", "visit", "detector"]
+        catalogColumns = ["ra", "dec"]
+
+        sortedVisits = np.unique(extensionInfo.visit)
+
+        sourceDict = dict([(visit, {}) for visit in np.unique(extensionInfo.visit)])
+        for visit, detector in zip(extensionInfo.visit, extensionInfo.detector):
+            sourceDict[visit][detector] = {"x": [], "y": [], "xCov": [], "yCov": [], "xyCov": []}
+
+        for isolatedStarCatalogRef, isolatedStarSourceRef in zip(
+            isolatedStarCatalogRefs, isolatedStarSourceRefs
+        ):
+            isolatedStarCatalog = isolatedStarCatalogRef.get(parameters={"columns": catalogColumns})
+            isolatedStarSources = isolatedStarSourceRef.get(parameters={"columns": sourceColumns})
+            if len(isolatedStarCatalog) == 0:
+                # This is expected when only one visit overlaps with a given
+                # tract, meaning that no sources can be associated.
+                self.log.debug(
+                    "Skipping tract %d, which has no associated isolated stars",
+                    isolatedStarCatalogRef.dataId["tract"],
+                )
+                continue
+
+            # Only use isolated sources that are from the visits in this fit.
+            sub1 = np.clip(
+                np.searchsorted(sortedVisits, isolatedStarSources["visit"]),
+                0,
+                len(sortedVisits) - 1,
+            )
+            visitsInFit = sortedVisits[sub1] == isolatedStarSources["visit"].to_numpy()
+            if not visitsInFit.any():
+                continue
+            isolatedStarSources = isolatedStarSources[visitsInFit]
+
+            # Match the reference stars to the existing isolated stars, then
+            # insert the reference stars into the isolated star sources.
+            allVisits = np.copy(isolatedStarSources["visit"])
+            allDetectors = np.copy(isolatedStarSources["detector"])
+            allObjectIndices = np.copy(isolatedStarSources["obj_index"])
+            issIndices = np.copy(isolatedStarSources.index)
+            for f, regionRefObjects in refObjects.items():
+                # Use the same matching technique that is done in
+                # isolatedStarAssociation and fgcmBuildFromIsolatedStars.
+                with Matcher(
+                    isolatedStarCatalog["ra"].to_numpy(), isolatedStarCatalog["dec"].to_numpy()
+                ) as matcher:
+                    idx, idx_isoStarCat, idx_refObjects, d = matcher.query_radius(
+                        np.array(regionRefObjects["ra"]),
+                        np.array(regionRefObjects["dec"]),
+                        self.config.matchRadius / 3600.0,
+                        return_indices=True,
+                    )
+
+                # Remove sources that were matched to multiple reference
+                # objects.
+                if len(idx_isoStarCat) != len(np.unique(idx_isoStarCat)):
+                    _, matchInverse, matchCount = np.unique(
+                        idx_isoStarCat, return_inverse=True, return_counts=True
+                    )
+                    idx_isoStarCat = idx_isoStarCat[matchCount[matchInverse] == 1]
+                    idx_refObjects = idx_refObjects[matchCount[matchInverse] == 1]
+
+                refSort = np.searchsorted(isolatedStarSources["obj_index"], idx_isoStarCat)
+                sub1 = np.clip(refSort, 0, len(isolatedStarSources) - 1)
+                goodMatches = isolatedStarSources["obj_index"].iloc[sub1].to_numpy() == idx_isoStarCat
+
+                refDetector = np.ones(len(idx_isoStarCat)) * -1
+                # The "visit" for the reference catalogs is the field times -1.
+                refVisit = np.ones(len(idx_isoStarCat)) * f * -1
+
+                allVisits = np.insert(allVisits, refSort[goodMatches], refVisit[goodMatches])
+                allDetectors = np.insert(allDetectors, refSort[goodMatches], refDetector[goodMatches])
+                allObjectIndices = np.insert(
+                    allObjectIndices, refSort[goodMatches], idx_isoStarCat[goodMatches]
+                )
+                issIndices = np.insert(issIndices, refSort[goodMatches], idx_refObjects[goodMatches])
+
+            # Loop through the associated sources to convert them to the gbdes
+            # format, which requires the extension index, the source's index in
+            # the input table, and a sequence number corresponding to the
+            # object with which it is associated.
+            tractExtensions = np.zeros(len(allObjectIndices), dtype=int)
+            tractObjIndices = np.zeros(len(allObjectIndices), dtype=int)
+            skippedSources = np.zeros(len(allObjectIndices), dtype=bool)
+            for visit in np.unique(isolatedStarSources["visit"]):
+                for detector in np.unique(
+                    isolatedStarSources[isolatedStarSources["visit"] == visit]["detector"]
+                ):
+                    outputInds = (allVisits == visit) & (allDetectors == detector)
+                    extensionIndex = np.flatnonzero(
+                        (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                    )
+                    if len(extensionIndex) == 0:
+                        # This happens for runs where you are not using all the
+                        # visits overlapping a given tract that were included
+                        # in the isolated star association task.
+                        skippedSources[outputInds] = True
+                        continue
+                    else:
+                        extensionIndex = extensionIndex[0]
+
+                    sourceInds = (isolatedStarSources["visit"] == visit) & (
+                        isolatedStarSources["detector"] == detector
+                    )
+
+                    tractExtensions[outputInds] = extensionIndex
+                    objIndices = np.arange(sourceInds.sum()) + len(sourceDict[visit][detector]["x"])
+                    tractObjIndices[outputInds] = objIndices
+
+                    source = isolatedStarSources[sourceInds]
+                    sourceDict[visit][detector]["x"].extend(list(source["x"]))
+                    sourceDict[visit][detector]["y"].extend(list(source["y"]))
+                    xCov = source["xErr"] ** 2
+                    yCov = source["yErr"] ** 2
+                    xyCov = source["ixy"] * (xCov + yCov) / (source["ixx"] + source["iyy"])
+                    # TODO: add correct xyErr if DM-7101 is ever done.
+                    sourceDict[visit][detector]["xCov"].extend(list(xCov))
+                    sourceDict[visit][detector]["yCov"].extend(list(yCov))
+                    sourceDict[visit][detector]["xyCov"].extend(list(xyCov))
+
+            # Add ref objects:
+            for refField in np.unique(allVisits[allVisits <= 0]):
+                extensionIndex = np.flatnonzero(
+                    (extensionInfo.detector == -1) & (extensionInfo.visit == refField)
+                )
+                extensionIndex = extensionIndex[0]
+                outputInds = (allVisits == refField) & (allDetectors == -1)
+                tractExtensions[outputInds] = extensionIndex
+                tractObjIndices[outputInds] = issIndices[outputInds]
+
+            uniqueObjects = np.arange(np.array(allObjectIndices).max() + 2)
+            sorted = np.searchsorted(np.array(allObjectIndices), uniqueObjects)
+            objectCount = np.diff(sorted)
+            tractSequence = np.concatenate([np.arange(count) for count in objectCount])
+
+            extensions.extend(list(tractExtensions[~skippedSources]))
+            object_indices.extend(list(tractObjIndices[~skippedSources]))
+            sequences.extend(list(tractSequence[~skippedSources]))
+
+        associations = pipeBase.Struct(extn=extensions, obj=object_indices, sequence=sequences)
+        return associations, sourceDict
+
     def _check_degeneracies(self, associations, extensionInfo):
         """Check that the minimum number of visits and sources needed to
         constrain the model are present.
@@ -1824,6 +2128,57 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                     "xyCov": xyCov.to_numpy(),
                 }
 
+                wcsf.setObjects(
+                    extensionIndex,
+                    d,
+                    "x",
+                    "y",
+                    ["xCov", "yCov", "xyCov"],
+                    defaultColor=self.config.referenceColor,
+                )
+
+    def _add_objects_from_dict(self, wcsf, sourceDict, extensionInfo):
+        """Add science sources to the wcsfit.WCSFit object.
+
+        Parameters
+        ----------
+        wcsf : `wcsfit.WCSFit`
+            WCS-fitting object.
+        sourceDict : `dict`
+            Dictionary containing the source centroids for each visit.
+        extensionInfo : `lsst.pipe.base.Struct`
+            Struct containing properties for each extension (visit/detector).
+            ``visit`` : `np.ndarray`
+                Name of the visit for this extension.
+            ``detector`` : `np.ndarray`
+                Name of the detector for this extension.
+            ``visitIndex` : `np.ndarray` [`int`]
+                Index of visit for this extension.
+            ``detectorIndex`` : `np.ndarray` [`int`]
+                Index of the detector for this extension.
+            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
+                Initial WCS for this extension.
+            ``extensionType`` : `np.ndarray` [`str`]
+                "SCIENCE" or "REFERENCE".
+        """
+        for visit, visitSources in sourceDict.items():
+            # Visit numbers equal or below zero connote the reference catalog.
+            if visit <= 0:
+                # This "visit" number corresponds to a reference catalog.
+                continue
+
+            for detector, sourceCat in visitSources.items():
+                extensionIndex = np.flatnonzero(
+                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                )[0]
+
+                d = {
+                    "x": np.array(sourceCat["x"]),
+                    "y": np.array(sourceCat["y"]),
+                    "xCov": np.array(sourceCat["xCov"]),
+                    "yCov": np.array(sourceCat["yCov"]),
+                    "xyCov": np.array(sourceCat["xyCov"]),
+                }
                 wcsf.setObjects(
                     extensionIndex,
                     d,
@@ -2641,7 +2996,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         )
 
         # Add the science and reference sources
-        self._add_objects(wcsf, sourceDict, extensionInfo)
+        self._add_objects_from_dict(wcsf, sourceDict, extensionInfo)
         for f in fieldRegions.keys():
             self._add_ref_objects(
                 wcsf, allRefObjects[f], allRefCovariances[f], extensionInfo, fieldIndex=-1 * f
@@ -2784,194 +3139,6 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         fields = wcsfit.Fields(fieldNames, fieldRAs, fieldDecs, epochs)
 
         return fields, fieldRegions
-
-    def _associate_from_isolated_sources(
-        self, isolatedStarSourceRefs, isolatedStarCatalogRefs, extensionInfo, refObjects
-    ):
-        """Match the input catalog of isolated stars with the reference catalog
-        and transform the combined isolated star sources and reference source
-        into the format needed for gbdes.
-
-        Parameters
-        ----------
-        isolatedStarSourceRefs : `list` [`DeferredDatasetHandle`]
-            List of handles pointing to isolated star sources.
-        isolatedStarCatalogRefs: `list` [`DeferredDatasetHandle`]
-            List of handles pointing to isolated star catalogs.
-        extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension (visit/detector).
-            ``visit`` : `np.ndarray`
-                Name of the visit for this extension.
-            ``detector`` : `np.ndarray`
-                Name of the detector for this extension.
-            ``visitIndex` : `np.ndarray` [`int`]
-                Index of visit for this extension.
-            ``detectorIndex`` : `np.ndarray` [`int`]
-                Index of the detector for this extension.
-            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
-                Initial WCS for this extension.
-            ``extensionType`` : `np.ndarray` [`str`]
-                "SCIENCE" or "REFERENCE".
-        refObjects : `dict`
-            Dictionary of dictionaries containing the position and error
-            information of reference objects.
-
-        Returns
-        -------
-        associations : `lsst.pipe.base.Struct`
-            Struct containing the associations of sources with objects.
-        sourceDict : `dict` [`int`, [`int`, [`str`, `list` [`float`]]]]
-            Dictionary containing the source centroids for each visit.
-        """
-        sequences = []
-        extensions = []
-        object_indices = []
-
-        sourceColumns = ["x", "y", "xErr", "yErr", "ixx", "ixy", "iyy", "obj_index", "visit", "detector"]
-        catalogColumns = ["ra", "dec"]
-
-        sourceDict = dict([(visit, {}) for visit in np.unique(extensionInfo.visit)])
-        for visit, detector in zip(extensionInfo.visit, extensionInfo.detector):
-            sourceDict[visit][detector] = {"x": [], "y": [], "xCov": [], "yCov": [], "xyCov": []}
-
-        for isolatedStarCatalogRef, isolatedStarSourceRef in zip(
-            isolatedStarCatalogRefs, isolatedStarSourceRefs
-        ):
-            isolatedStarCatalog = isolatedStarCatalogRef.get(parameters={"columns": catalogColumns})
-            isolatedStarSources = isolatedStarSourceRef.get(parameters={"columns": sourceColumns})
-            if len(isolatedStarCatalog) == 0:
-                # This is expected when only one visit overlaps with a given
-                # tract, meaning that no sources can be associated.
-                self.log.debug(
-                    "Skipping tract %d, which has no associated isolated stars",
-                    isolatedStarCatalogRef.dataId["tract"],
-                )
-                continue
-
-            # Match the reference stars to the existing isolated stars, then
-            # insert the reference stars into the isolated star sources.
-            allVisits = np.copy(isolatedStarSources["visit"])
-            allDetectors = np.copy(isolatedStarSources["detector"])
-            allObjectIndices = np.copy(isolatedStarSources["obj_index"])
-            issIndices = np.copy(isolatedStarSources.index)
-            for f, regionRefObjects in refObjects.items():
-                # Use the same matching technique that is done in
-                # isolatedStarAssociation and fgcmBuildFromIsolatedStars.
-                with Matcher(
-                    isolatedStarCatalog["ra"].to_numpy(), isolatedStarCatalog["dec"].to_numpy()
-                ) as matcher:
-                    idx, idx_isoStarCat, idx_refObjects, d = matcher.query_radius(
-                        np.array(regionRefObjects["ra"]),
-                        np.array(regionRefObjects["dec"]),
-                        self.config.matchRadius / 3600.0,
-                        return_indices=True,
-                    )
-
-                refSort = np.searchsorted(isolatedStarSources["obj_index"], idx_isoStarCat)
-                refDetector = np.ones(len(idx_isoStarCat)) * -1
-                # The "visit" for the reference catalogs is the field times -1.
-                refVisit = np.ones(len(idx_isoStarCat)) * f * -1
-
-                allVisits = np.insert(allVisits, refSort, refVisit)
-                allDetectors = np.insert(allDetectors, refSort, refDetector)
-                allObjectIndices = np.insert(allObjectIndices, refSort, idx_isoStarCat)
-                issIndices = np.insert(issIndices, refSort, idx_refObjects)
-
-            # Loop through the associated sources to convert them to the gbdes
-            # format, which requires the extension index, the source's index in
-            # the input table, and a sequence number corresponding to the
-            # object with which it is associated.
-            sequence = 0
-            obj_index = allObjectIndices[0]
-            for visit, detector, row, obj_ind in zip(allVisits, allDetectors, issIndices, allObjectIndices):
-                extensionIndex = np.flatnonzero(
-                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
-                )
-                if len(extensionIndex) == 0:
-                    # This happens for runs where you are not using all the
-                    # visits overlapping a given tract that were included in
-                    # the isolated star association task."
-                    continue
-                else:
-                    extensionIndex = extensionIndex[0]
-
-                extensions.append(extensionIndex)
-                if visit <= 0:
-                    object_indices.append(row)
-                else:
-                    object_indices.append(len(sourceDict[visit][detector]["x"]))
-                    source = isolatedStarSources.loc[row]
-                    sourceDict[visit][detector]["x"].append(source["x"])
-                    sourceDict[visit][detector]["y"].append(source["y"])
-                    xCov = source["xErr"] ** 2
-                    yCov = source["yErr"] ** 2
-                    xyCov = source["ixy"] * (xCov + yCov) / (source["ixx"] + source["iyy"])
-                    # TODO: add correct xyErr if DM-7101 is ever done.
-                    sourceDict[visit][detector]["xCov"].append(xCov)
-                    sourceDict[visit][detector]["yCov"].append(yCov)
-                    sourceDict[visit][detector]["xyCov"].append(xyCov)
-                if obj_ind != obj_index:
-                    sequence = 0
-                    sequences.append(sequence)
-                    obj_index = obj_ind
-                    sequence += 1
-                else:
-                    sequences.append(sequence)
-                    sequence += 1
-
-        associations = pipeBase.Struct(extn=extensions, obj=object_indices, sequence=sequences)
-        return associations, sourceDict
-
-    def _add_objects(self, wcsf, sourceDict, extensionInfo):
-        """Add science sources to the wcsfit.WCSFit object.
-
-        Parameters
-        ----------
-        wcsf : `wcsfit.WCSFit`
-            WCS-fitting object.
-        sourceDict : `dict`
-            Dictionary containing the source centroids for each visit.
-        extensionInfo : `lsst.pipe.base.Struct`
-            Struct containing properties for each extension (visit/detector).
-            ``visit`` : `np.ndarray`
-                Name of the visit for this extension.
-            ``detector`` : `np.ndarray`
-                Name of the detector for this extension.
-            ``visitIndex` : `np.ndarray` [`int`]
-                Index of visit for this extension.
-            ``detectorIndex`` : `np.ndarray` [`int`]
-                Index of the detector for this extension.
-            ``wcss`` : `np.ndarray` [`lsst.afw.geom.SkyWcs`]
-                Initial WCS for this extension.
-            ``extensionType`` : `np.ndarray` [`str`]
-                "SCIENCE" or "REFERENCE".
-        """
-        for visit, visitSources in sourceDict.items():
-            # Visit numbers equal or below zero connote the reference catalog.
-            if visit <= 0:
-                # This "visit" number corresponds to a reference catalog.
-                continue
-
-            for detector, sourceCat in visitSources.items():
-                extensionIndex = np.flatnonzero(
-                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
-                )[0]
-
-                d = {
-                    "x": np.array(sourceCat["x"]),
-                    "y": np.array(sourceCat["y"]),
-                    "xCov": np.array(sourceCat["xCov"]),
-                    "yCov": np.array(sourceCat["yCov"]),
-                    "xyCov": np.array(sourceCat["xyCov"]),
-                }
-                wcsf.setObjects(
-                    extensionIndex,
-                    d,
-                    "x",
-                    "y",
-                    ["xCov", "yCov", "xyCov"],
-                    defaultColor=self.config.referenceColor,
-                )
 
 
 class GbdesGlobalAstrometricMultibandFitConnections(
