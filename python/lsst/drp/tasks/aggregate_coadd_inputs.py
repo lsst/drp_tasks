@@ -34,7 +34,7 @@ import lsst.pex.config
 
 class AggregateCoaddInputsTractConnections(
     lsst.pipe.base.PipelineTaskConnections,
-    dimensions=("skymap", "tract"),
+    dimensions=("skymap", "tract", "band"),
 ):
     coadd_inputs_handles = lsst.pipe.base.connectionTypes.Input(
         name="deep_coadd_predetection.coaddInputs",
@@ -46,9 +46,9 @@ class AggregateCoaddInputsTractConnections(
     )
     aggregate_tract_output = lsst.pipe.base.connectionTypes.Output(
         name="deep_coadd_inputs_aggregate_tract",
-        doc="Aggregated coadd inputs (by tract).",
+        doc="Aggregated coadd inputs (by tract and band).",
         storageClass="ArrowAstropy",
-        dimensions=("skymap", "tract"),
+        dimensions=("skymap", "tract", "band"),
     )
 
 
