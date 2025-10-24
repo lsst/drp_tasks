@@ -20,6 +20,7 @@
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
 import dataclasses
+import itertools
 import re
 
 import astropy.coordinates
@@ -38,6 +39,7 @@ import lsst.geom
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 import lsst.sphgeom
+from lsst.daf.butler import DataCoordinate
 from lsst.meas.algorithms import (
     LoadReferenceObjectsConfig,
     ReferenceObjectLoader,
@@ -358,6 +360,22 @@ class GbdesAstrometricFitConnections(
         deferLoad=True,
         multiple=True,
     )
+    isolatedStarSources = pipeBase.connectionTypes.Input(
+        doc="Catalog of matched sources.",
+        name="isolated_star_presources",
+        storageClass="DataFrame",
+        dimensions=("instrument", "skymap", "tract"),
+        multiple=True,
+        deferLoad=True,
+    )
+    isolatedStarCatalogs = pipeBase.connectionTypes.Input(
+        doc="Catalog of objects corresponding to the isolatedStarSources.",
+        name="isolated_star_presource_associations",
+        storageClass="DataFrame",
+        dimensions=("instrument", "skymap", "tract"),
+        multiple=True,
+        deferLoad=True,
+    )
     colorCatalog = pipeBase.connectionTypes.Input(
         doc="The catalog of magnitudes to match to input sources.",
         name="fgcm_Cycle4_StandardStars",
@@ -434,6 +452,66 @@ class GbdesAstrometricFitConnections(
     def getSpatialBoundsConnections(self):
         return ("inputVisitSummaries",)
 
+    def adjust_all_quanta(self, adjuster: pipeBase.QuantaAdjuster) -> None:
+        if not self.config.useIsolatedStars:
+            return
+        # The goal of this implementation of the hook is to expand the set
+        # of isolatedStar* inputs to the tracts that overlap the visits that
+        # overlap the quantum, as opposed to just the tracts that overlap the
+        # quantum.
+        #
+        # We start by extracting mappings from quantum data ID (i.e. tract or
+        # healpix) to tract data ID and visit data ID from the naive-overlap
+        # QG we're starting from.
+        tracts_by_quantum: dict[DataCoordinate, set[DataCoordinate]] = {}
+        visits_by_quantum: dict[DataCoordinate, set[DataCoordinate]] = {}
+        for quantum_data_id in adjuster.iter_data_ids():
+            quantum_inputs = adjuster.get_inputs(quantum_data_id)
+            # We assume we have the exact same tracts for isolatedStarCatalogs
+            # and isolatedStar sources; something is very wrong if we do not.
+            tracts_by_quantum[quantum_data_id] = set(quantum_inputs["isolatedStarCatalogs"])
+            visits_by_quantum[quantum_data_id] = set(quantum_inputs["inputVisitSummaries"])
+        # In order to get from quantum data ID to visit ID to tract data ID,
+        # we next need a mapping from visit to tract.  Here's a start, with
+        # just the keys populated so far.:
+        tracts_by_visit: dict[DataCoordinate, set[DataCoordinate]] = {
+            visit_data_id: set()
+            for visit_data_id in itertools.chain.from_iterable(visits_by_quantum.values())
+        }
+        if self.config.healpix is None:
+            # If quanta are per-tract, we just have to invert
+            # visits_by_quantum.
+            for tract_data_id, visit_data_ids_for_quantum in visits_by_quantum.items():
+                for visit_data_id in visit_data_ids_for_quantum:
+                    tracts_by_visit[visit_data_id].add(tract_data_id)
+        else:
+            # If quanta are per-healpix, we have to query the butler for the
+            # tract/visit overlaps.
+            tracts_flat = set(itertools.chain.from_iterable(tracts_by_quantum.values()))
+            tract_dimensions = adjuster.butler.dimensions.conform(["tract"])
+            visit_dimensions = adjuster.butler.dimensions.conform(["visit"])
+            with adjuster.butler.query() as query:
+                for joint_data_id in (
+                    query.join_data_coordinates(tracts_flat)
+                    .join_data_coordinates(tracts_by_visit.keys())
+                    .data_ids(["tract", "visit"])
+                ):
+                    tract_data_id = joint_data_id.subset(tract_dimensions)
+                    visit_data_id = joint_data_id.subset(visit_dimensions)
+                    tracts_by_visit[visit_data_id].add(tract_data_id)
+        # Loop over quantum data IDs and then visits and then tracts to extend
+        # the inputs of each quantum.
+        for quantum_data_id, visit_data_ids_for_quantum in visits_by_quantum.items():
+            # We'll use tracts_for_quantum to track which inputs are already
+            # present.
+            tracts_for_quantum = tracts_by_quantum[quantum_data_id]
+            for visit_data_id in visit_data_ids_for_quantum:
+                for tract_data_id in tracts_by_visit[visit_data_id]:
+                    if tract_data_id not in tracts_for_quantum:
+                        adjuster.add_input(quantum_data_id, "isolatedStarCatalogs", tract_data_id)
+                        adjuster.add_input(quantum_data_id, "isolatedStarSources", tract_data_id)
+                        tracts_for_quantum.add(tract_data_id)
+
     def __init__(self, *, config=None):
         super().__init__(config=config)
 
@@ -476,6 +554,11 @@ class GbdesAstrometricFitConnections(
         if not self.config.saveCameraObject:
             self.prerequisiteInputs.remove("inputCamera")
             self.outputs.remove("camera")
+        if self.config.useIsolatedStars:
+            del self.inputCatalogRefs
+        else:
+            del self.isolatedStarCatalogs
+            del self.isolatedStarSources
 
 
 class GbdesAstrometricFitConfig(
@@ -643,6 +726,14 @@ class GbdesAstrometricFitConfig(
             "fit."
         ),
         default=0.25,
+    )
+    useIsolatedStars = pexConfig.Field(
+        dtype=bool,
+        default=False,
+        doc=(
+            "If True, use the pre-matched isolated star catalogs instead of loading and matching per-visit "
+            "input catalogs."
+        ),
     )
 
     def setDefaults(self):
