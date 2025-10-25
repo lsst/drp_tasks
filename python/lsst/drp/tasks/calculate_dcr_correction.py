@@ -69,7 +69,7 @@ class CalculateDcrCorrectionConnections(
         doc="Bandpass of the filter used for the observation.",
         name="standard_passband",
         storageClass="ArrowAstropy",
-        dimensions=("band",),
+        dimensions=("band", "instrument"),
     )
     dcrCorrectionCatalog = pipeBase.connectionTypes.Output(
         doc="Output catalog of sub-band fluxes and footprints",
