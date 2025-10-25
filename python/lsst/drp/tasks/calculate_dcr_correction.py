@@ -7,7 +7,6 @@ from scipy.signal.windows import hann
 import lsst.afw.detection as afwDet
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
-import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 import lsst.geom as geom
 from lsst.ip.diffim.dcrModel import calculateDcr, wavelengthGenerator
@@ -284,11 +283,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             dcrFpLookupTable[recId] = {}
             cutoutLookupTable[recId] = {}
             recordVisitCount[recId] = 0
-        for warp in warpRefList:
-            visit = warp.visitInfo.getId()
+        for warpRef in warpRefList:
+            visit = warpRef.dataId['visit']
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
-            lookupTableSingle = self.make_warp_footprints(refCat, warp, effectiveWavelength, bandwidth)
+            lookupTableSingle = self.make_warp_footprints(refCat, warpRef.get(),
+                                                          effectiveWavelength, bandwidth)
             # Reformat the per-visit lookup table into two new tables with a
             # different ordering, both indexed by source record first and
             # having an inner lookup table over visit.
