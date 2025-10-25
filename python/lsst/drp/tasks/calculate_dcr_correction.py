@@ -107,6 +107,16 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
         doc="Number of sub-filters to forward model chromatic effects to fit the supplied exposures.",
         default=3,
     )
+    sigmaClip = pexConfig.Field(
+        dtype=float,
+        doc="Sigma for outlier rejection; ignored if non-clipping statistic " "selected.",
+        default=3.0,
+    )
+    clipIter = pexConfig.Field(
+        dtype=int,
+        doc="Number of iterations of outlier rejection; ignored if " "non-clipping statistic selected.",
+        default=2,
+    )
     minimumSNR = pexConfig.Field(
         doc="Bandwidth of the physical filter, in nm."
         "Required if transmission curves aren't used."
