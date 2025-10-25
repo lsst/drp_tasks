@@ -47,7 +47,7 @@ class CalculateDcrCorrectionConnections(
         deferLoad=True,
         multiple=True,
     )
-    templateExposure = pipeBase.connectionTypes.Input(
+    templateCoadd = pipeBase.connectionTypes.Input(
         doc="Input coadded exposure, produced by previous call to AssembleCoadd",
         name="{fakesType}{inputCoaddName}Coadd{warpTypeSuffix}",
         storageClass="ExposureF",
