@@ -347,7 +347,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # The source needs to fit in the defined footprint.
         # If it's larger, it's either trailed, extended, or just very bright
         # None of those cases will be fit well by the DCR model
-        maxFootprintArea = (self.config.footprintSize - self.configfootprintBufferSize)**2
+        maxFootprintArea = self.config.footprintSize**2
         goodArea = refCat['base_FootprintArea_value'] < maxFootprintArea
         srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
         return refCat[srcUse].copy(deep=True)
