@@ -205,19 +205,18 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         )
 
         # Construct list of input Deferred Datasets
-        warpRefList = inputData["inputWarps"]
-
-        inputs = self.prepareInputs(warpRefList, skyInfo.bbox)
-        self.log.info("Found %d %s", len(inputs.warpRefList), self.getTempExpDatasetName(self.warpType))
-        if len(inputs.warpRefList) == 0:
+        warpRefList = self.prepareInputs(inputData.pop("inputWarps"), skyInfo.bbox)
+        self.log.info("Found %d %s", len(warpRefList), self.getTempExpDatasetName(self.warpType))
+        if len(warpRefList) == 0:
             self.log.warning("No coadd temporary exposures found")
             return
 
+        templateCoadd = inputData.pop("templateCoadd")
+        objectCatalog = inputData.pop("objectCatalog")
         retStruct = self.run(
-            warpRefList=inputs.warpRefList,
-            weightList=inputs.weightList,
-            templateCoadd=inputs.templateCoadd,
-            objectCatalog=inputs.objectCatalog,
+            warpRefList=warpRefList,
+            templateCoadd=templateCoadd,
+            objectCatalog=objectCatalog,
             effectiveWavelength=throughput.effectiveWavelength,
             bandwidth=throughput.bandwidth,
         )
@@ -246,18 +245,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
 
             ``warpRefList``
                 `list` of dataset handles (data references) to warp.
-            ``weightList``
-                `list` of weightings.
         """
-        statsCtrl = afwMath.StatisticsControl()
-        statsCtrl.setNumSigmaClip(self.config.sigmaClip)
-        statsCtrl.setNumIter(self.config.clipIter)
-        statsCtrl.setAndMask(self.getBadPixelMask())
-        statsCtrl.setNanSafe(True)
         # compute warpRefList: a list of warpRef that actually exist
-        # and weightList: a list of the weight of the associated coadd warp
         warpRefList = []
-        weightList = []
 
         for warpRef in refList:
             warp = warpRef.get(parameters={"bbox": coadd_bbox})
@@ -272,28 +262,15 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 raise ValueError(
                     f"Warp {warpRef.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
                 )
-            statObj = afwMath.makeStatistics(
-                maskedImage.getVariance(), maskedImage.getMask(), afwMath.MEANCLIP, statsCtrl
-            )
-            meanVar, meanVarErr = statObj.getResult(afwMath.MEANCLIP)
-            weight = 1.0 / float(meanVar)
-            if not np.isfinite(weight):
-                self.log.warning("Non-finite weight for %s: skipping", warpRef.dataId)
-                continue
-            self.log.info("Weight of warp %s = %0.3f", warpRef.dataId, weight)
 
             del maskedImage
             del warp
 
             warpRefList.append(warpRef)
-            weightList.append(weight)
 
-        return pipeBase.Struct(
-            warpRefList=warpRefList,
-            weightList=weightList,
-        )
+        return warpRefList
 
-    def run(self, warpRefList, weightList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth):
+    def run(self, warpRefList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth):
         self.metadata['effectiveWavelength'] = effectiveWavelength
         self.metadata['bandwidth'] = bandwidth
         refCat = self.filter_object_catalog(objectCatalog)
