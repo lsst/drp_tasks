@@ -65,6 +65,12 @@ class CalculateDcrCorrectionConnections(
         storageClass="SkyMap",
         dimensions=("skymap",),
     )
+    throughput = pipeBase.connectionTypes.Input(
+        doc="Bandpass of the filter used for the observation.",
+        name="standard_passband",
+        storageClass="ArrowAstropy",
+        dimensions=("band",),
+    )
     dcrCorrectionCatalog = pipeBase.connectionTypes.Output(
         doc="Output catalog of sub-band fluxes and footprints",
         name="{fakesType}dcr_correction_catalog",
@@ -100,18 +106,6 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
         dtype=int,
         doc="Number of sub-filters to forward model chromatic effects to fit the supplied exposures.",
         default=3,
-    )
-    effectiveWavelength = pexConfig.Field(
-        doc="Effective wavelength of the filter, in nm."
-        "Required if transmission curves aren't used."
-        "Support for using transmission curves is to be added in DM-13668.",
-        dtype=float,
-    )
-    bandwidth = pexConfig.Field(
-        doc="Bandwidth of the physical filter, in nm."
-        "Required if transmission curves aren't used."
-        "Support for using transmission curves is to be added in DM-13668.",
-        dtype=float,
     )
     minimumSNR = pexConfig.Field(
         doc="Bandwidth of the physical filter, in nm."
@@ -193,6 +187,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         inputData = butlerQC.get(inputRefs)
         # Construct skyInfo expected by run
         skyMap = inputData.pop("skyMap")
+        throughput = fit_throughput(inputData.pop("throughput"))
         outputDataId = butlerQC.quantum.dataId
 
         skyInfo = makeSkyInfo(
@@ -213,6 +208,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             weightList=inputs.weightList,
             templateCoadd=inputs.templateCoadd,
             objectCatalog=inputs.objectCatalog,
+            effectiveWavelength=throughput.effectiveWavelength,
+            bandwidth=throughput.bandwidth,
         )
 
         butlerQC.put(retStruct, outputRefs)
@@ -286,7 +283,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             weightList=weightList,
         )
 
-    def run(self, warpRefList, weightList, templateCoadd, objectCatalog):
+    def run(self, warpRefList, weightList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth):
+        self.metadata['effectiveWavelength'] = effectiveWavelength
+        self.metadata['bandwidth'] = bandwidth
         refCat = self.filter_object_catalog(objectCatalog)
         dcrFpLookupTable = {}
         cutoutLookupTable = {}
@@ -301,7 +300,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             print(visit)
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
-            lookupTableSingle = self.make_warp_footprints(refCat, warp)
+            lookupTableSingle = self.make_warp_footprints(refCat, warp, effectiveWavelength, bandwidth)
             # Reformat the per-visit lookup table into two new tables with a
             # different ordering, both indexed by source record first and
             # having an inner lookup table over visit.
@@ -330,7 +329,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # containing the unshifted PSF model of the coadd at the source
         # location, and columns containing the overall flux and fractional flux
         # per subfilter 
-        dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable)
+        dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
+                                                     effectiveWavelength, bandwidth)
         return pipeBase.Struct(dcrResidual=results.dcrResidual,
                                dcrCorrectionCatalog=dcrCorrectionCatalog,
                                modelCatalog=results.template_models)
@@ -367,10 +367,10 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         cat.defineCentroid(self.centroidName)
         return cat
 
-    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable):
+    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, effectiveWavelength, bandwidth):
         dcrCorrectionCatalog = self.initialize_dcr_catalog()
-        dcrGen = wavelengthGenerator(self.config.effectiveWavelength,
-                                     self.config.bandwidth,
+        dcrGen = wavelengthGenerator(effectiveWavelength,
+                                     bandwidth,
                                      self.config.dcrNumSubfilters)
         subfilterEffectiveWavelengths = [np.mean(wl) for wl in dcrGen]
         for refSrc in refCat:
@@ -394,10 +394,10 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             
         return dcrCorrectionCatalog
 
-    def make_warp_footprints(self, catalog, warp):
+    def make_warp_footprints(self, catalog, warp, effectiveWavelength, bandwidth):
         dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
-                                self.config.effectiveWavelength,
-                                self.config.bandwidth,
+                                effectiveWavelength,
+                                bandwidth,
                                 self.config.dcrNumSubfilters,
                                 )
         image_footprints = self.initialize_dcr_catalog()
@@ -569,6 +569,18 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                fluxLookupTable=fluxLookupTable,
                                template_models=template_models,
                                )
+
+
+def fit_throughput(throughput):
+    wl = np.asarray(throughput["wavelength"])
+    th = np.asarray(throughput["throughput"])
+    effectiveWavelength = np.sum(wl*th)/np.sum(th)
+    inBand = th >= np.max(th)/2
+
+    bandwidth = np.max(wl[inBand]) - np.min(wl[inBand])
+    return pipeBase.Struct(effectiveWavelength=effectiveWavelength,
+                           bandwidth=bandwidth,
+                           )
 
 
 def fit_footprints(model, image):
