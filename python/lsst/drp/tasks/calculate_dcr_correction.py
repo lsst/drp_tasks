@@ -206,7 +206,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
 
         # Construct list of input Deferred Datasets
         warpRefList = self.prepareInputs(inputData.pop("inputWarps"), skyInfo.bbox)
-        self.log.info("Found %d %s", len(warpRefList), self.getTempExpDatasetName(self.warpType))
+        self.log.info("Found %d input warps", len(warpRefList))
         if len(warpRefList) == 0:
             self.log.warning("No coadd temporary exposures found")
             return
@@ -273,6 +273,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
     def run(self, warpRefList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth):
         self.metadata['effectiveWavelength'] = effectiveWavelength
         self.metadata['bandwidth'] = bandwidth
+        self.log.info("Dividing %fnm bandwidth into %d subfilters with %fnm effective wavelength",
+                      bandwidth, self.config.dcrNumSubfilters, effectiveWavelength)
         refCat = self.filter_object_catalog(objectCatalog)
         dcrFpLookupTable = {}
         cutoutLookupTable = {}
@@ -284,7 +286,6 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             recordVisitCount[recId] = 0
         for warp in warpRefList:
             visit = warp.visitInfo.getId()
-            print(visit)
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
             lookupTableSingle = self.make_warp_footprints(refCat, warp, effectiveWavelength, bandwidth)
@@ -305,10 +306,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         if np.any(badRecords):
             for badRec in refCat[badRecords]:
                 recId = badRec.getId()
+                self.log.info("Dropping visit %d due to no remaining records", recId)
                 dcrFpLookupTable.pop(recId)
                 cutoutLookupTable.pop(recId)
                 recordVisitCount.pop(recId)
             refCat = refCat[~badRecords].copy(deep=True)
+        self.log.info("Calculating DCR correction for %d surviving sources", len(refCat))
         # Calculate one model per source
         results = self.calculateTemplateResidual(templateCoadd, dcrFpLookupTable, cutoutLookupTable)
 
