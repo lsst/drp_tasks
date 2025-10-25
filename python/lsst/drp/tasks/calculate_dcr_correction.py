@@ -180,10 +180,10 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                  doc="Central wavelength of this subfilter.",
                                  units="nm")
         # The following sets the necessary columns and mappings to the schema
-        centroidName = "base_SdssCentroid"
+        self.centroidName = "base_SdssCentroid"
         control = measBase.SdssCentroidControl()
-        self.schema.getAliasMap().set("slot_Centroid", centroidName)
-        self.centroider = measBase.SdssCentroidAlgorithm(control, centroidName, self.schema)
+        self.schema.getAliasMap().set("slot_Centroid", self.centroidName)
+        self.centroider = measBase.SdssCentroidAlgorithm(control, self.centroidName, self.schema)
 
     @utils.inheritDoc(pipeBase.PipelineTask)
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
