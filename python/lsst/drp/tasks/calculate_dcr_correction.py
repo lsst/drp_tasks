@@ -332,25 +332,25 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # and create unwanted artifacts.
         snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
         goodSnr = snr > self.config.minimumSNR
-        refCat = objectCat[snr > self.config.minimumSNR].copy(deep=True)
+        # refCat = objectCat[snr > self.config.minimumSNR].copy(deep=True)
         # Exclude flagged objects that probably won't compute
-        refCat = refCat[~refCat['base_SdssCentroid_flag']].copy(deep=True)
-        goodCentroid = ~refCat['base_SdssCentroid_flag']
-        refCat = refCat[~refCat['base_SdssShape_flag']].copy(deep=True)
-        goodShape = ~refCat['base_SdssShape_flag']
+        # refCat = refCat[~refCat['base_SdssCentroid_flag']].copy(deep=True)
+        goodCentroid = ~objectCat['base_SdssCentroid_flag']
+        # refCat = refCat[~refCat['base_SdssShape_flag']].copy(deep=True)
+        goodShape = ~objectCat['base_SdssShape_flag']
         # Exclude extended objects
-        refCat = refCat[refCat['base_ClassificationSizeExtendedness_value'] < 0.8].copy(deep=True)
-        goodExtendedness = refCat['base_ClassificationSizeExtendedness_value'] < 0.5
+        # refCat = refCat[refCat['base_ClassificationSizeExtendedness_value'] < 0.8].copy(deep=True)
+        goodExtendedness = objectCat['base_ClassificationSizeExtendedness_value'] < 0.5
         # Do not included deblended parents, only the children
-        refCat = refCat[refCat['parent'] > 0].copy(deep=True)
-        notParent = refCat['parent'] > 0
+        # refCat = refCat[refCat['parent'] > 0].copy(deep=True)
+        notParent = objectCat['parent'] > 0
         # The source needs to fit in the defined footprint.
         # If it's larger, it's either trailed, extended, or just very bright
         # None of those cases will be fit well by the DCR model
         maxFootprintArea = self.config.footprintSize**2
-        goodArea = refCat['base_FootprintArea_value'] < maxFootprintArea
+        goodArea = objectCat['base_FootprintArea_value'] < maxFootprintArea
         srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
-        return refCat[srcUse].copy(deep=True)
+        return objectCat[srcUse].copy(deep=True)
 
     def initialize_dcr_catalog(self):
         cat = afwTable.SourceCatalog(self.schema)
