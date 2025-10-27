@@ -306,12 +306,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         if np.any(badRecords):
             for badRec in refCat[badRecords]:
                 recId = badRec.getId()
-                self.log.info("Dropping visit %d due to no remaining records", recId)
                 dcrFpLookupTable.pop(recId)
                 cutoutLookupTable.pop(recId)
                 recordVisitCount.pop(recId)
             refCat = refCat[~badRecords].copy(deep=True)
-        self.log.info("Calculating DCR correction for %d surviving sources", len(refCat))
+        self.log.info("Calculating DCR correction for %d surviving sources, and dropping %d sources",
+                      len(refCat), np.sum(badRecords))
         # Calculate one model per source
         results = self.calculateTemplateResidual(templateCoadd, dcrFpLookupTable, cutoutLookupTable)
 
@@ -429,6 +429,10 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                         # create artifacts.
                         lookupTable[record.getId()] = None
                         continue
+                    cutout_mi = warp[bbox].maskedImage.clone()
+                    if np.any(np.isnan(cutout_mi.image.array)):
+                        lookupTable[record.getId()] = None
+                        continue
                     cutout = image_footprints.addNew()
                     cutout.setId(record.getId())
                     cutout["modelFlux"] = flux
@@ -436,7 +440,6 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     cutout['base_SdssCentroid_y'] = yc
                     foot = afwDet.Footprint(spans)
                     foot.addPeak(xc, yc, flux)
-                    cutout_mi = warp[bbox].maskedImage.clone()
                     cutout_mi.image.array *= windowFunction
                     cutout.setFootprint(afwDet.HeavyFootprintF(foot, cutout_mi, fp_ctrl))
                     lookupTable[record.getId()] = {}
@@ -522,17 +525,21 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             for visit in dcrFpLookupTable[recId]:
                 scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
             recScales = np.median(scales, axis=0)
-            scaleLookup[recId] = recScales/np.sum(recScales)
+            scalesSingle = recScales/np.sum(recScales)
             # Update the modelFlux entries to be the same for all visits
             # for each record
             for visit in dcrFpLookupTableNew[recId]:
-                for fp, scale in zip(dcrFpLookupTableNew[recId][visit], scaleLookup[recId]):
+                for fp, scale in zip(dcrFpLookupTableNew[recId][visit], scalesSingle):
                     fp['modelFlux'] = scale
-            model, flux = stack_dcr_footprints(dcrFpLookupTableNew[recId],
-                                               cutoutLookupTable[recId],
-                                               weightLookup
-                                               )
+            try:
+                model, flux = stack_dcr_footprints(dcrFpLookupTableNew[recId],
+                                                   cutoutLookupTable[recId],
+                                                   weightLookup
+                                                   )
+            except RuntimeError:
+                continue
             fluxLookupTable[recId] = flux
+            scaleLookup[recId] = scalesSingle
             # The bbox will be the same for all visits, so just grab the last one
             bbox = cutoutLookupTable[recId][visit].getFootprint().getBBox()
             spans = afwGeom.SpanSet(bbox)
@@ -602,4 +609,6 @@ def stack_dcr_footprints(dcrFootprints, cutouts, weightLookup):
                  for dcrFp in dcrFPs]
         models.append(np.sum(stack, axis=0)*flux*weight)
         fluxes.append(flux*weight)
+    if bbox is None:
+        raise RuntimeError
     return (np.sum(models, axis=0)/np.sum(weights), np.sum(fluxes)/np.sum(weights))
