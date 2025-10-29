@@ -35,6 +35,7 @@ import lsst.meas.base.tests
 import lsst.pipe.base.testUtils
 import lsst.utils.tests
 from lsst.drp.tasks.reprocess_visit_image import ReprocessVisitImageTask
+from lsst.pex.exceptions import InvalidParameterError
 
 
 def make_visit_summary(summary=None, psf=None, wcs=None, photo_calib=None, detector=42):
@@ -264,6 +265,57 @@ class ReprocessVisitImageTaskTests(lsst.utils.tests.TestCase):
 
         self.assertEqual(result.exposure.metadata["BUNIT"], "nJy")
 
+    def test_update_masks(self):
+
+        config = self.config
+        config.copyMaskPlanes = ["foo", "bar"]
+        preliminary_mask_planes = ["bar", "TEST", "foobar"]
+        bbox = self.exposure.getBBox()
+        xy0 = bbox.getBegin()
+        preliminary_mask = self.exposure.mask.clone()
+        preliminary_mask.array *= 0
+        width = 20
+        for mp in preliminary_mask_planes:
+            xy0.shift(lsst.geom.Extent2I(width, width))
+            subBox = lsst.geom.Box2I(xy0, lsst.geom.Extent2I(width, width))
+            bitmask = preliminary_mask.addMaskPlane(mp)
+            preliminary_mask[subBox] |= 2**bitmask
+        exposure = self.exposure.clone()
+        xy0.shift(lsst.geom.Extent2I(width, width))
+        subBox = lsst.geom.Box2I(xy0, lsst.geom.Extent2I(width, width))
+        bitmask = exposure.mask.addMaskPlane("TEST")
+        exposure.mask[subBox] |= 2**bitmask
+
+        task = ReprocessVisitImageTask(config=config)
+        result = task.run(
+            exposures=exposure,
+            initial_photo_calib=self.truth_exposure.photoCalib,
+            psf=self.truth_exposure.psf,
+            background=self.background,
+            ap_corr=lsst.afw.image.ApCorrMap(),
+            photo_calib=self.truth_exposure.photoCalib,
+            wcs=self.truth_exposure.wcs,
+            calib_sources=self.visit_catalog,
+            preliminary_mask=preliminary_mask,
+            id_generator=self.id_generator,
+            background_to_photometric_ratio=None,
+        )
+        # A mask plane in copyMaskPlanes that is not actually in
+        # preliminary_mask should not be added
+        with self.assertRaises(InvalidParameterError):
+            result.exposure.mask.getMaskPlane("foo")
+        # ensure that masks from preliminary_mask that exist in copyMaskPlanes
+        # have been copied, while existing masks not listed in copyMaskPlanes
+        # are unchanged.
+        barMask = result.exposure.mask.getPlaneBitMask("bar")
+        resultSet = (result.exposure.mask.array & barMask) > 0
+        prelimSet = (preliminary_mask.array & barMask) > 0
+        self.assertTrue(np.all(resultSet == prelimSet))
+        detectedMask = result.exposure.mask.getPlaneBitMask("TEST")
+        resultSet = (result.exposure.mask.array & detectedMask) > 0
+        prelimSet = (preliminary_mask.array & detectedMask) > 0
+        self.assertEqual(np.sum(resultSet != prelimSet), 2 * width**2)
+
 
 class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
     """Tests of ``ReprocessVisitImageTask.runQuantum``, which need a test
@@ -330,6 +382,9 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         butlerTests.addDatasetType(
             self.repo, "pvi_background", {"instrument", "visit", "detector"}, "Background"
         )
+        butlerTests.addDatasetType(
+            self.repo, "preliminary_visit_mask", {"instrument", "visit", "detector"}, "Mask"
+        )
 
         # dataIds
         self.exposure0_id = self.repo.registry.expandDataId(
@@ -356,6 +411,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
         self.butler = butlerTests.makeTestCollection(self.repo)
         self.butler.put(lsst.afw.image.ExposureF(), "postISRCCD", self.exposure0_id)
         self.butler.put(lsst.afw.image.ExposureF(), "postISRCCD", self.exposure1_id)
+        self.butler.put(lsst.afw.image.Mask(), "preliminary_visit_mask", self.visit_id)
         control = lsst.afw.math.BackgroundControl(10, 10)
         background = lsst.afw.math.makeBackground(lsst.afw.image.ImageF(100, 100), control)
         self.butler.put(lsst.afw.image.PhotoCalib(10), "initial_photoCalib_detector", self.visit_id)
@@ -402,6 +458,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             self.visit_id,
             {
                 "exposures": [self.exposure0_id],
+                "preliminary_mask": self.visit_id,
                 "visit_summary": self.visit_only_id,
                 "initial_photo_calib": self.visit_id,
                 "background_1": self.visit_id,
@@ -421,6 +478,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             mock_run.call_args.kwargs.keys(),
             {
                 "exposures",
+                "preliminary_mask",
                 "initial_photo_calib",
                 "psf",
                 "background",
@@ -447,6 +505,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             self.visit1_id,
             {
                 "exposures": [self.exposure0_id],
+                "preliminary_mask": self.visit_id,
                 "visit_summary": self.visit_only_id,
                 "initial_photo_calib": self.visit1_id,
                 "background_1": self.visit1_id,
@@ -479,6 +538,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             self.visit2_id,
             {
                 "exposures": [self.exposure0_id],
+                "preliminary_mask": self.visit_id,
                 "visit_summary": self.visit_only_id,
                 "initial_photo_calib": self.visit2_id,
                 "background_1": self.visit2_id,
@@ -517,6 +577,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             self.visit_id,
             {
                 "exposures": [self.exposure0_id],
+                "preliminary_mask": self.visit_id,
                 "visit_summary": self.visit_only_id,
                 "initial_photo_calib": self.visit_id,
                 "background_1": self.visit_id,
@@ -535,6 +596,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             mock_run.call_args.kwargs.keys(),
             {
                 "exposures",
+                "preliminary_mask",
                 "initial_photo_calib",
                 "psf",
                 "background",
@@ -561,6 +623,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             self.visit_id,
             {
                 "exposures": [self.exposure0_id],
+                "preliminary_mask": self.visit_id,
                 "visit_summary": self.visit_only_id,
                 "initial_photo_calib": self.visit_id,
                 "background_1": self.visit_id,
@@ -580,6 +643,7 @@ class ReprocessVisitImageTaskRunQuantumTests(lsst.utils.tests.TestCase):
             mock_run.call_args.kwargs.keys(),
             {
                 "exposures",
+                "preliminary_mask",
                 "initial_photo_calib",
                 "psf",
                 "background",

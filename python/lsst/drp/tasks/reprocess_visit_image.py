@@ -47,6 +47,12 @@ class ReprocessVisitImageConnections(
         multiple=True,  # to handle 1 exposure or 2 snaps
         dimensions=["instrument", "exposure", "detector"],
     )
+    preliminary_mask = connectionTypes.Input(
+        doc="Mask plane calculated in the initial calibration step.",
+        name="preliminary_visit_mask",
+        storageClass="Mask",
+        dimensions=["instrument", "visit", "detector"],
+    )
     visit_summary = connectionTypes.Input(
         doc="Visit-level catalog summarizing all image characterizations and calibrations.",
         name="finalVisitSummary",
@@ -208,6 +214,9 @@ class ReprocessVisitImageConfig(
         default=False,
         doc="This should be True if processing was done with an illumination correction.",
     )
+    copyMaskPlanes = lsst.pex.config.ListField(
+        dtype=str, default=("SPIKE",), doc="Mask planes to copy from the initial calibration task."
+    )
 
     def setDefaults(self):
         super().setDefaults()
@@ -357,6 +366,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
 
         detector = outputRefs.exposure.dataId["detector"]
         exposures = inputs.pop("exposures")
+        preliminary_mask = inputs.pop("preliminary_mask")
         visit_summary = inputs.pop("visit_summary")
         calib_sources = inputs.pop("calib_sources")
         if self.config.remove_initial_photo_calib:
@@ -416,6 +426,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
                 result=result,
                 id_generator=id_generator,
                 background_to_photometric_ratio=background_to_photometric_ratio,
+                preliminary_mask=preliminary_mask,
             )
         except pipeBase.AlgorithmError as e:
             error = pipeBase.AnnotatedPartialOutputsError.annotate(
@@ -437,6 +448,7 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         photo_calib,
         wcs,
         calib_sources,
+        preliminary_mask=None,
         id_generator=None,
         background_to_photometric_ratio=None,
         result=None,
@@ -470,6 +482,8 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
             World Coordinate System model for this exposure.
         calib_sources : `astropy.table.Table`
             Per-visit catalog of measurements to get 'calib_*' flags from.
+        preliminary_mask : `lsst.afw.image.Mask`, optional
+           An input Mask to copy individual mask planes from.
         id_generator : `lsst.meas.base.IdGenerator`, optional
             Object that generates source IDs and provides random seeds.
         background_to_photometric_ratio : `lsst.afw.image.ImageF`, optional
@@ -505,6 +519,8 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
             id_generator = lsst.meas.base.IdGenerator()
 
         result.exposure = self.snap_combine.run(exposures).exposure
+        if preliminary_mask is not None:
+            self._copyMaskPlanes(result.exposure, preliminary_mask)
 
         # Apply the illumination correction if required.
         # This assumes the input images have had a background-flat applied.
@@ -558,6 +574,23 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         result.sources = result.sources_footprints.asAstropy()
 
         return result
+
+    def _copyMaskPlanes(self, exposure, mask):
+        """Copy mask planes from an input Mask to the final Exposure.
+
+        Parameters
+        ----------
+        exposure : `lsst.afw.image.Exposure`
+            Calibrated exposure; will be modified in place.
+        mask : `lsst.afw.image.Mask`
+            Mask to copy from.
+        """
+        copyMaskPlanes = []
+        for mp in self.config.copyMaskPlanes:
+            if mp in mask.getMaskPlaneDict().keys():
+                copyMaskPlanes.append(mp)
+        bitMask = mask.getPlaneBitMask(copyMaskPlanes)
+        exposure.mask.array |= mask.array & bitMask
 
     def _find_sources(
         self,
