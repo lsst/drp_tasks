@@ -559,6 +559,9 @@ class AssembleCellCoaddTask(PipelineTask):
             visitSummaryRef.dataId["visit"]: visitSummaryRef for visitSummaryRef in visitSummaryList
         }
 
+        # Keep track of the polygons corresponding to each (visit, detector).
+        visit_polygons: dict[ObservationIdentifiers, afwGeom.Polygon] = {}
+
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
         for _, warp_input in inputs.items():
@@ -639,7 +642,6 @@ class AssembleCellCoaddTask(PipelineTask):
 
             noise_warps = [ref.get(parameters={"bbox": skyInfo.bbox}) for ref in warp_input.noise_warps]
 
-            visit_polygons: dict[ObservationIdentifiers, afwGeom.Polygon] = {}
             # Create an image where each pixel value corresponds to the
             # detector ID that pixel comes from.
             detector_map = afwImage.ImageI(bbox=warp.getBBox(), initialValue=-1)
@@ -664,12 +666,6 @@ class AssembleCellCoaddTask(PipelineTask):
                 if not (detector_map.array[detector_map_slice] < 0).all():
                     self.log.warning("Multiple detectors from visit %s are overlapping", warp_input.dataId)
                 detector_map.array[detector_map_slice] = row["ccd"]
-
-            # Update common with the visit polygons.
-            self.common = dataclasses.replace(
-                self.common,
-                visit_polygons=visit_polygons,
-            )
 
             if (detector_map.array < 0).all():
                 self.log.warning("Unable to split the warp %s into single-detector warps.", warp_input.dataId)
@@ -817,6 +813,12 @@ class AssembleCellCoaddTask(PipelineTask):
                     ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
 
             del warp
+
+        # Update common with the visit polygons.
+        self.common = dataclasses.replace(
+            self.common,
+            visit_polygons=visit_polygons,
+        )
 
         cells: list[SingleCellCoadd] = []
         for cellInfo in skyInfo.patchInfo:
