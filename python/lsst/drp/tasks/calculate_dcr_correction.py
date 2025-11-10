@@ -332,17 +332,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # and create unwanted artifacts.
         snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
         goodSnr = snr > self.config.minimumSNR
-        # refCat = objectCat[snr > self.config.minimumSNR].copy(deep=True)
         # Exclude flagged objects that probably won't compute
-        # refCat = refCat[~refCat['base_SdssCentroid_flag']].copy(deep=True)
         goodCentroid = ~objectCat['base_SdssCentroid_flag']
-        # refCat = refCat[~refCat['base_SdssShape_flag']].copy(deep=True)
         goodShape = ~objectCat['base_SdssShape_flag']
         # Exclude extended objects
-        # refCat = refCat[refCat['base_ClassificationSizeExtendedness_value'] < 0.8].copy(deep=True)
         goodExtendedness = objectCat['base_ClassificationSizeExtendedness_value'] < 0.5
         # Do not included deblended parents, only the children
-        # refCat = refCat[refCat['parent'] > 0].copy(deep=True)
         notParent = objectCat['parent'] > 0
         # The source needs to fit in the defined footprint.
         # If it's larger, it's either trailed, extended, or just very bright
@@ -540,7 +535,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 continue
             fluxLookupTable[recId] = flux
             scaleLookup[recId] = scalesSingle
-            # The bbox will be the same for all visits, so just grab the last one
+            # The bbox will be the same for all visits,
+            # so just grab the last one
             bbox = cutoutLookupTable[recId][visit].getFootprint().getBBox()
             spans = afwGeom.SpanSet(bbox)
             # modelExposure[bbox].image.array += model
@@ -553,7 +549,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             cutout = template_models.addNew()
             cutout.setId(recId)
             cutout["modelFlux"] = flux
-            # The centroid will be the same for all visits, so just grab the last one
+            # The centroid will be the same for all visits,
+            # so just grab the last one
             xc = cutoutLookupTable[recId][visit]['base_SdssCentroid_x']
             yc = cutoutLookupTable[recId][visit]['base_SdssCentroid_y']
             cutout['base_SdssCentroid_x'] = xc
