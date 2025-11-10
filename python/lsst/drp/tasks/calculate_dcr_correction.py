@@ -326,10 +326,23 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                modelCatalog=results.template_models)
 
     def filter_object_catalog(self, objectCat):
-        # Only include moderately bright objects
-        # Faint objects won't have enough signal to fit DCR,
-        # and bright objects will saturate the model in the bounding box
-        # and create unwanted artifacts.
+        """Select sources to model from an input catalog.
+
+        Only include moderately bright objects.
+        Faint objects won't have enough signal to fit DCR, and bright objects
+        will saturate the model in the bounding box and create unwanted
+        artifacts.
+
+        Parameters
+        ----------
+        objectCat : `lsst.afw.table.SourceCatalog`
+            Description
+
+        Returns
+        -------
+        filteredCatalog : `lsst.afw.table.SourceCatalog`
+            Description
+        """
         snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
         goodSnr = snr > self.config.minimumSNR
         # Exclude flagged objects that probably won't compute
@@ -348,11 +361,38 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         return objectCat[srcUse].copy(deep=True)
 
     def initialize_dcr_catalog(self):
+        """Create an empty catalog with the columns defined for the DCR schema
+
+        Returns
+        -------
+        cat : `lsst.afw.table.SourceCatalog`
+            Empty catalog with the correct schema.
+        """
         cat = afwTable.SourceCatalog(self.schema)
         cat.defineCentroid(self.centroidName)
         return cat
 
     def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, effectiveWavelength, bandwidth):
+        """Summary
+
+        Parameters
+        ----------
+        refCat : `lsst.afw.table.SourceCatalog`
+            Description
+        dcrFpLookupTable : TYPE
+            Description
+        fluxLookupTable : TYPE
+            Description
+        effectiveWavelength : TYPE
+            Description
+        bandwidth : TYPE
+            Description
+
+        Returns
+        -------
+        dcrCorrectionCatalog : `lsst.afw.table.SourceCatalog`
+            Description
+        """
         dcrCorrectionCatalog = self.initialize_dcr_catalog()
         dcrGen = wavelengthGenerator(effectiveWavelength,
                                      bandwidth,
@@ -380,98 +420,23 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         return dcrCorrectionCatalog
 
     def make_warp_footprints(self, catalog, warp, effectiveWavelength, bandwidth):
-        dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
-                                effectiveWavelength,
-                                bandwidth,
-                                self.config.dcrNumSubfilters,
-                                )
         image_footprints = self.initialize_dcr_catalog()
         fp_ctrl = afwDet.HeavyFootprintCtrl()
-        lookupTable = {}
-        boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
         if self.config.taperFootprint:
             windowFunction = np.outer(hann(self.config.footprintSize), hann(self.config.footprintSize))
             windowFunction /= np.max(windowFunction)
         else:
-            windowFunction = np.ones((self.config.footprintSize, self.config.footprintSize))
-        coreBoxSize = geom.Extent2I(self.config.footprintSize//2, self.config.footprintSize//2)
-        for subfilter, shift in enumerate(dcrShift):
-            windowFunction_shift = ndimage.shift(windowFunction, shift)
-            # instantiate the catalog, and define the centroid
-            cat = self.initialize_dcr_catalog()
-            # Next define footprints
-            for record in catalog:
-                xc, yc = record.getCentroid()
-                bbox = geom.Box2I.makeCenteredBox(center=record.getCentroid(), size=boxSize)
-                coreBBox = geom.Box2I.makeCenteredBox(center=record.getCentroid(), size=coreBoxSize)
-                if np.any(warp[coreBBox].mask.array & warp.mask.getPlaneBitMask('NO_DATA')):
-                    lookupTable[record.getId()] = None
-                    continue
-                spans = afwGeom.SpanSet(bbox)
-                if subfilter == 0:
-                    # Only fill the image catalog once
-                    base_psf = warp.psf.computeImage(geom.Point2D(xc, yc)).array
-                    bbox_psf = warp.psf.computeImageBBox(geom.Point2D(xc, yc))
-                    cutout_arr = warp[bbox_psf].image.array
-                    flux = fit_footprints(base_psf, cutout_arr)
-                    if not np.isfinite(flux):
-                        lookupTable[record.getId()] = None
-                        continue
-                    deltaFlux = 2*abs(flux - record.getCalibInstFlux())/(flux + record.getCalibInstFlux())
-                    if deltaFlux > .5:
-                        # If the fit flux is much brighter than the calibration
-                        # flux, skip the source since it is more likely to
-                        # create artifacts.
-                        lookupTable[record.getId()] = None
-                        continue
-                    cutout_mi = warp[bbox].maskedImage.clone()
-                    if np.any(np.isnan(cutout_mi.image.array)):
-                        lookupTable[record.getId()] = None
-                        continue
-                    cutout = image_footprints.addNew()
-                    cutout.setId(record.getId())
-                    cutout["modelFlux"] = flux
-                    cutout['base_SdssCentroid_x'] = xc
-                    cutout['base_SdssCentroid_y'] = yc
-                    foot = afwDet.Footprint(spans)
-                    foot.addPeak(xc, yc, flux)
-                    cutout_mi.image.array *= windowFunction
-                    cutout.setFootprint(afwDet.HeavyFootprintF(foot, cutout_mi, fp_ctrl))
-                    lookupTable[record.getId()] = {}
-                    lookupTable[record.getId()]['cutout'] = cutout
-                    lookupTable[record.getId()]['subfilterPsf'] = []
-                else:
-                    # Catch any records that were removed in an earlier 
-                    # iteration
-                    if lookupTable[record.getId()] is None:
-                        continue
-                # shift format is numpy (y,x)
-                xc += shift[1]
-                yc += shift[0]
-                src = cat.addNew()
-                src.setId(record.getId())
-                subFlux = 1/self.config.dcrNumSubfilters
-                src["modelFlux"] = subFlux
-                src['base_SdssCentroid_x'] = xc
-                src['base_SdssCentroid_y'] = yc
-                foot = afwDet.Footprint(spans)
-                foot.addPeak(xc, yc, subFlux)
-                # Note, we don't just use 
-                # afwImage.ImageF(warp.psf.computeImage(geom.Point2D(xc, yc)),
-                #                 deep=True)
-                # because we need the shifted bbox
-                bbox2 = bbox.clippedTo(warp.psf.computeImageBBox(geom.Point2D(xc, yc)))
-                psf_img = afwImage.ImageF(bbox)
-                psf_img[bbox2].array[:, :] = warp.psf.computeImage(geom.Point2D(xc, yc))[bbox2].array
-                psf_img.array *= windowFunction_shift
-                psf_mask = afwImage.Mask(bbox)
-                psf_variance = afwImage.ImageF(bbox)
-                psf_mimage = afwImage.MaskedImageF(psf_img, psf_mask, psf_variance)
-                
-                heavy_fp = afwDet.HeavyFootprintF(foot, psf_mimage, fp_ctrl)
-                src.setFootprint(heavy_fp)
-                lookupTable[record.getId()]['subfilterPsf'].append(src)
-
+            windowFunction = None
+        # Extract cutouts from the image centered on each source, and reject
+        # any with a bad fit to the catalog flux or containing invalid values.
+        lookupTable = self.build_image_lookup_table(self, catalog, warp, image_footprints,
+                                                    windowFunction=windowFunction, fp_ctrl=fp_ctrl)
+        # Update the lookup table with DCR-shifted PSFs for each source, for
+        # each subfilter.
+        self.update_subfilter_psf_lookup_table(lookupTable, catalog, warp, effectiveWavelength, bandwidth,
+                                               windowFunction=windowFunction, fp_ctrl=fp_ctrl)
+        # Determine the best fit scale factors for each source, using the
+        # flux of the source and the DCR-shifted PSFs for each subfilter
         for record in catalog:
             recId = record.getId()
             if lookupTable[recId] is not None:
@@ -481,6 +446,104 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 for psf_fp, scale in zip(psf_fps, scales):
                     psf_fp['modelFlux'] = scale
         return(lookupTable)
+
+    def update_subfilter_psf_lookup_table(self, lookupTable, catalog, warp, effectiveWavelength, bandwidth,
+                                          windowFunction=None, fp_ctrl=afwDet.HeavyFootprintCtrl()):
+        dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
+                                effectiveWavelength,
+                                bandwidth,
+                                self.config.dcrNumSubfilters,
+                                )
+        boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
+        for subfilter, shift in enumerate(dcrShift):
+            windowFunction_shift = None if windowFunction is None else ndimage.shift(windowFunction, shift)
+            # instantiate the catalog, and define the centroid
+            cat = self.initialize_dcr_catalog()
+            # Next define footprints
+            for record in catalog:
+                if lookupTable[record.getId()] is None:
+                    # Skip any records that we were not able to extract a clean
+                    # image cutout for.
+                    continue
+                xc, yc = record.getCentroid()
+                bbox = geom.Box2I.makeCenteredBox(center=record.getCentroid(), size=boxSize)
+                # shift format is numpy (y,x)
+                xc += shift[1]
+                yc += shift[0]
+                src = cat.addNew()
+                src.setId(record.getId())
+                subFlux = 1/self.config.dcrNumSubfilters
+                src["modelFlux"] = subFlux
+                src['base_SdssCentroid_x'] = xc
+                src['base_SdssCentroid_y'] = yc
+                foot = afwDet.Footprint(afwGeom.SpanSet(bbox))
+                foot.addPeak(xc, yc, subFlux)
+                # Note, we don't just use 
+                # afwImage.ImageF(warp.psf.computeImage(geom.Point2D(xc, yc)),
+                #                 deep=True)
+                # because we need the shifted bbox
+                bbox2 = bbox.clippedTo(warp.psf.computeImageBBox(geom.Point2D(xc, yc)))
+                psf_img = afwImage.ImageF(bbox)
+                psf_img[bbox2].array[:, :] = warp.psf.computeImage(geom.Point2D(xc, yc))[bbox2].array
+                if windowFunction_shift is not None:
+                    psf_img.array *= windowFunction_shift
+                psf_mask = afwImage.Mask(bbox)
+                psf_variance = afwImage.ImageF(bbox)
+                psf_mimage = afwImage.MaskedImageF(psf_img, psf_mask, psf_variance)
+                
+                heavy_fp = afwDet.HeavyFootprintF(foot, psf_mimage, fp_ctrl)
+                src.setFootprint(heavy_fp)
+                lookupTable[record.getId()]['subfilterPsf'].append(src)
+
+    def build_image_lookup_table(self, catalog, warp, image_footprints, windowFunction=None,
+                                 fp_ctrl=afwDet.HeavyFootprintCtrl()):
+
+        image_footprints = self.initialize_dcr_catalog()
+        lookupTable = {}
+        boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
+        coreBoxSize = geom.Extent2I(self.config.footprintSize//2, self.config.footprintSize//2)
+        # Next define footprints
+        for record in catalog:
+            xc, yc = record.getCentroid()
+            bbox = geom.Box2I.makeCenteredBox(center=record.getCentroid(), size=boxSize)
+            coreBBox = geom.Box2I.makeCenteredBox(center=record.getCentroid(), size=coreBoxSize)
+            if np.any(warp[coreBBox].mask.array & warp.mask.getPlaneBitMask('NO_DATA')):
+                lookupTable[record.getId()] = None
+                continue
+
+            spans = afwGeom.SpanSet(bbox)
+            base_psf = warp.psf.computeImage(geom.Point2D(xc, yc)).array
+            bbox_psf = warp.psf.computeImageBBox(geom.Point2D(xc, yc))
+            cutout_arr = warp[bbox_psf].image.array
+            flux = fit_footprints(base_psf, cutout_arr)
+            if not np.isfinite(flux):
+                lookupTable[record.getId()] = None
+                continue
+            deltaFlux = 2*abs(flux - record.getCalibInstFlux())/(flux + record.getCalibInstFlux())
+            if deltaFlux > .5:
+                # If the fit flux is much brighter than the calibration
+                # flux, skip the source since it is more likely to
+                # create artifacts.
+                lookupTable[record.getId()] = None
+                continue
+            cutout_mi = warp[bbox].maskedImage.clone()
+            if np.any(np.isnan(cutout_mi.image.array)):
+                lookupTable[record.getId()] = None
+                continue
+            cutout = image_footprints.addNew()
+            cutout.setId(record.getId())
+            cutout["modelFlux"] = flux
+            cutout['base_SdssCentroid_x'] = xc
+            cutout['base_SdssCentroid_y'] = yc
+            foot = afwDet.Footprint(spans)
+            foot.addPeak(xc, yc, flux)
+            if windowFunction is not None:
+                cutout_mi.image.array *= windowFunction
+            cutout.setFootprint(afwDet.HeavyFootprintF(foot, cutout_mi, fp_ctrl))
+            lookupTable[record.getId()] = {}
+            lookupTable[record.getId()]['cutout'] = cutout
+            lookupTable[record.getId()]['subfilterPsf'] = []
+        return lookupTable
 
     def minimize_footprint_residuals(self, image_fp, psf_fps):
         scales0 = [image_fp['modelFlux']*psf_fp['modelFlux'] for psf_fp in psf_fps]
