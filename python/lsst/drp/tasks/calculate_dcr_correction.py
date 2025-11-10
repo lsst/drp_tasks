@@ -456,7 +456,6 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                 )
         boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
         for subfilter, shift in enumerate(dcrShift):
-            windowFunction_shift = None if windowFunction is None else ndimage.shift(windowFunction, shift)
             # instantiate the catalog, and define the centroid
             cat = self.initialize_dcr_catalog()
             # Next define footprints
@@ -485,8 +484,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 bbox2 = bbox.clippedTo(warp.psf.computeImageBBox(geom.Point2D(xc, yc)))
                 psf_img = afwImage.ImageF(bbox)
                 psf_img[bbox2].array[:, :] = warp.psf.computeImage(geom.Point2D(xc, yc))[bbox2].array
-                if windowFunction_shift is not None:
-                    psf_img.array *= windowFunction_shift
+                if windowFunction is not None:
+                    psf_img.array *= windowFunction
                 psf_mask = afwImage.Mask(bbox)
                 psf_variance = afwImage.ImageF(bbox)
                 psf_mimage = afwImage.MaskedImageF(psf_img, psf_mask, psf_variance)
