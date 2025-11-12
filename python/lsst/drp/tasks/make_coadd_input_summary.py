@@ -50,7 +50,8 @@ class MakeCoaddInputSummaryTractConnections(
     )
     coadd_input_summary_tract = lsst.pipe.base.connectionTypes.Output(
         name="coadd_input_summary_tract",
-        doc="Summarized coadd inputs (by tract and band).",
+        doc="Summary table aggregating coaddInputs from multiple coadds (including "
+        "all coaddInputs tables in a tract for a single band).",
         storageClass="ArrowAstropy",
         dimensions=("skymap", "tract", "band"),
     )
@@ -82,6 +83,25 @@ class MakeCoaddInputSummaryTract(lsst.pipe.base.PipelineTask):
         result : `lsst.pipe.base.Struct`
             Result struct containing:
                 ``coadd_input_summary_tract`` : `astropy.table.Table`
+
+        Notes
+        -----
+        The output table contains the the following columns:
+
+        tract : `int`
+            The tract number.
+        patch : `int`
+            The patch number.
+        visit : `int`
+            The visit number.
+        detector : `int`
+            The detector number.
+        weight : `float`
+            The weight that was used as an input to the coadd.
+        goodpix : `int`
+            The number of pixels from the visit/detector in the patch.
+        band : `str`
+            The band for the visit.
         """
         self.log.info("Summarizing %d coadd input catalogs", len(coadd_inputs_handles))
         n_inputs = 0
@@ -135,7 +155,8 @@ class MakeCoaddInputSummaryConnections(
 ):
     coadd_input_summary_tract_handles = lsst.pipe.base.connectionTypes.Input(
         name="coadd_input_summary_tract",
-        doc="Summarized coadd inputs (by tract and band).",
+        doc="Summary table aggregating coaddInputs from multiple coadds (including "
+        "all coaddInputs tables in a tract for a single band).",
         storageClass="ArrowAstropy",
         dimensions=("skymap", "tract", "band"),
         deferLoad=True,
@@ -143,7 +164,7 @@ class MakeCoaddInputSummaryConnections(
     )
     coadd_input_summary = lsst.pipe.base.connectionTypes.Output(
         name="coadd_input_summary",
-        doc="Summarized coadd inputs.",
+        doc="Summary table aggregating coaddInputs from all coadds, including all tracts and bands.",
         storageClass="ArrowAstropy",
         dimensions=("skymap",),
     )
@@ -176,6 +197,25 @@ class MakeCoaddInputSummary(lsst.pipe.base.PipelineTask):
         result : `lsst.pipe.base.Struct`
             Result struct containing:
                 ``coadd_input_summary`` : `astropy.table.Table`
+
+        Notes
+        -----
+        The output table contains the the following columns:
+
+        tract : `int`
+            The tract number.
+        patch : `int`
+            The patch number.
+        visit : `int`
+            The visit number.
+        detector : `int`
+            The detector number.
+        weight : `float`
+            The weight that was used as an input to the coadd.
+        goodpix : `int`
+            The number of pixels from the visit/detector in the patch.
+        band : `str`
+            The band for the visit.
         """
         self.log.info("Combining %d summarized coadd input catalogs", len(coadd_input_summary_tract_handles))
 
