@@ -35,11 +35,7 @@ class CalculateDcrCorrectionConnections(
     },
 ):
     inputWarps = pipeBase.connectionTypes.Input(
-        doc=(
-            "Input list of warps to be assembled i.e. stacked."
-            "Note that this will often be different than the inputCoaddName."
-            "WarpType (e.g. direct, psfMatched) is controlled by the warpType config parameter"
-        ),
+        doc="Input list of warps to be assembled i.e. stacked.",
         name="{inputWarpName}Coadd_{warpType}Warp",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "visit", "instrument"),
@@ -106,41 +102,23 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
         doc="Number of sub-filters to forward model chromatic effects to fit the supplied exposures.",
         default=3,
     )
-    sigmaClip = pexConfig.Field(
-        dtype=float,
-        doc="Sigma for outlier rejection; ignored if non-clipping statistic " "selected.",
-        default=3.0,
-    )
-    clipIter = pexConfig.Field(
-        dtype=int,
-        doc="Number of iterations of outlier rejection; ignored if " "non-clipping statistic selected.",
-        default=2,
-    )
     minimumSNR = pexConfig.Field(
-        doc="Bandwidth of the physical filter, in nm."
-        "Required if transmission curves aren't used."
-        "Support for using transmission curves is to be added in DM-13668.",
+        doc="Minimum signal to noise of sources in the reference catalog to model.",
         dtype=float,
         default=30,
     )
     maximumSNR = pexConfig.Field(
-        doc="Bandwidth of the physical filter, in nm."
-        "Required if transmission curves aren't used."
-        "Support for using transmission curves is to be added in DM-13668.",
+        doc="Maximum signal to noise of sources in the reference catalog to model.",
         dtype=float,
         default=1000,
     )
     minimumModelFraction = pexConfig.Field(
-        doc="Bandwidth of the physical filter, in nm."
-        "Required if transmission curves aren't used."
-        "Support for using transmission curves is to be added in DM-13668.",
+        doc="Minimum fraction of the total flux to allow for the fit to each subfilter.",
         dtype=float,
         default=0.15,
     )
     maximumModelFraction = pexConfig.Field(
-        doc="Bandwidth of the physical filter, in nm."
-        "Required if transmission curves aren't used."
-        "Support for using transmission curves is to be added in DM-13668.",
+        doc="Minimum fraction of the total flux to allow for the fit to each subfilter.",
         dtype=float,
         default=0.7,
     )
@@ -149,14 +127,19 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
         doc="Size of the footprints to calculate the DCR correctionin around objects.",
         default=35,
     )
-    taperFootprint = pexConfig.Field(
+    doTaperFootprint = pexConfig.Field(
         dtype=bool,
-        doc="Weight the PSF model by a hanning window function to reduce edge artifacts.",
+        doc="Weight the PSF model by a hanning window function to reduce edge artifacts?",
         default=True,
+    )
+    minNVisits = pexConfig.Field(
+        dtype=int,
+        doc="Minimum number of times a source must be observed to be included.",
+        default=3,
     )
     doWriteDcrResidual = pexConfig.Field(
         dtype=bool,
-        doc="Write the residual coadd exposure after removing the DCR modeled sources.",
+        doc="Write the residual coadd exposure after removing the DCR modeled sources?",
         default=True,
     )
 
@@ -300,9 +283,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     dcrFpLookupTable[recId][visit] = lookupTableSingle[recId]['subfilterPsf']
                     cutoutLookupTable[recId][visit] = lookupTableSingle[recId]['cutout']
                     recordVisitCount[recId] += 1
-        # Drop any records that were removed from all visits
-        # Note: should this be a configurable minimum instead? E.g. min 3?
-        badRecords = np.array([recordVisitCount[record.getId()] == 0 for record in refCat])
+        # Drop any records that were removed from too many visits
+        badRecords = np.array([recordVisitCount[record.getId()] < self.config.minNVisits
+                              for record in refCat])
         if np.any(badRecords):
             for badRec in refCat[badRecords]:
                 recId = badRec.getId()
@@ -344,7 +327,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             Description
         """
         snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
-        goodSnr = snr > self.config.minimumSNR
+        goodSnr = self.config.maximumSNR > snr > self.config.minimumSNR
         # Exclude flagged objects that probably won't compute
         goodCentroid = ~objectCat['base_SdssCentroid_flag']
         goodShape = ~objectCat['base_SdssShape_flag']
@@ -422,7 +405,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
     def make_warp_footprints(self, catalog, warp, effectiveWavelength, bandwidth):
         image_footprints = self.initialize_dcr_catalog()
         fp_ctrl = afwDet.HeavyFootprintCtrl()
-        if self.config.taperFootprint:
+        if self.config.doTaperFootprint:
             windowFunction = np.outer(hann(self.config.footprintSize), hann(self.config.footprintSize))
             windowFunction /= np.max(windowFunction)
         else:
