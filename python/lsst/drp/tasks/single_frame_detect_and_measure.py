@@ -127,6 +127,7 @@ class SingleFrameDetectAndMeasureConfig(
         self.detection.doTempLocalBackground = False
 
         self.measurement.plugins = [
+            "base_SkyCoord",
             "base_PixelFlags",
             "base_SdssCentroid",
             "ext_shapeHSM_HsmSourceMoments",
