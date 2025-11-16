@@ -82,6 +82,12 @@ class ForcedPhotCoaddConnections(
         storageClass="SourceCatalog",
         dimensions=("band", "skymap", "tract", "patch"),
     )
+    objectParents = pipeBase.connectionTypes.Input(
+        doc="Parents of the deblended objects",
+        name="object_parents",
+        storageClass="SourceCatalog",
+        dimensions=("tract", "patch", "skymap"),
+    )
     scarletModels = pipeBase.connectionTypes.Input(
         doc="Multiband scarlet models produced by the deblender",
         name="{inputCoaddName}Coadd_scarletModelData",
@@ -246,6 +252,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
 
         refCat = inputs.pop("refCat")
         refWcs = inputs.pop("refWcs")
+        parenetCatalog = inputs.pop("objectParents")
 
         if self.config.useCellCoadds:
             multiple_cell_coadd = inputs.pop("exposure_cell")
@@ -269,6 +276,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
             refCatInBand=refCatInBand,
             refWcs=refWcs,
             footprintData=footprintData,
+            parentCatalog=parenetCatalog,
         )
         outputs = self.run(
             measCat=measCat,
@@ -285,7 +293,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
                 source.setFootprint(None)
         butlerQC.put(outputs, outputRefs)
 
-    def generateMeasCat(self, dataId, exposure, refCat, refCatInBand, refWcs, footprintData):
+    def generateMeasCat(self, dataId, exposure, refCat, refCatInBand, refWcs, footprintData, parentCatalog):
         """Generate a measurement catalog.
 
         Parameters
@@ -305,6 +313,8 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
             Either the scarlet data models or the deblended catalog containings
             footprints. If `footprintData` is `None` then the footprints
             contained in `refCatInBand` are used.
+        parentCatalog : `lsst.afw.table.SourceCatalog`
+            Catalog of parent sources corresponding to sources.
 
         Returns
         -------
@@ -328,7 +338,11 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         if self.config.footprintDatasetName == "LsstScarletModelData":
             # Load the scarlet models
             self._attachScarletFootprints(
-                catalog=measCat, modelData=footprintData, exposure=exposure, band=dataId["band"]
+                catalog=measCat,
+                parentCatalog=parentCatalog,
+                modelData=footprintData,
+                exposure=exposure,
+                band=dataId["band"],
             )
         else:
             if self.config.footprintDatasetName is None:
@@ -397,7 +411,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
 
         return pipeBase.Struct(measCat=measCat)
 
-    def _attachScarletFootprints(self, catalog, modelData, exposure, band):
+    def _attachScarletFootprints(self, catalog, parentCatalog, modelData, exposure, band):
         """Attach scarlet models as HeavyFootprints"""
         if self.config.doConserveFlux:
             redistributeImage = exposure
@@ -407,6 +421,7 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
         updateCatalogFootprints(
             modelData=modelData,
             catalog=catalog,
+            parentCatalog=parentCatalog,
             band=band,
             imageForRedistribution=redistributeImage,
             removeScarletData=True,
