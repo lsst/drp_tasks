@@ -37,7 +37,7 @@ from lsst.afw.math import FixedKernel
 from lsst.afw.table import SimpleCatalog
 from lsst.cell_coadds import MultipleCellCoadd, SingleCellCoadd
 from lsst.meas.algorithms import KernelPsf, LoadReferenceObjectsConfig, ReferenceObjectLoader
-from lsst.pex.config import ConfigField, ListField, Field
+from lsst.pex.config import ConfigField, ListField, Field, ConfigurableField
 from lsst.pipe.base import (
     InputQuantizedConnection,
     NoWorkFound,
@@ -49,6 +49,7 @@ from lsst.pipe.base import (
     Struct,
 )
 from metadetect.lsst.util import extract_multiband_coadd_data
+from metadetect.lsst.metadetect import MetadetectTask, MetadetectMultiFitTask
 
 
 class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"}):
@@ -146,6 +147,12 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         optional=False,
     )
 
+    # EAC: get the configuration for the MetadectTask
+    metadetect = ConfigurableField(
+        doc="Meta Detection Configuartion",
+        target=MetadetectMultiFitTask,
+    )
+
     ref_loader = ConfigField(
         dtype=LoadReferenceObjectsConfig,
         doc="Reference object loader used for bright-object masking.",
@@ -158,7 +165,7 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         default=0.01,
         optional=True,
     )
-    
+
     # TODO: expose more configuration options here.
 
 
@@ -172,16 +179,28 @@ class MetadetectionShearTask(PipelineTask):
 
     def __init__(self, *, initInputs: dict[str, Any] | None = None, **kwargs: Any):
         super().__init__(initInputs=initInputs, **kwargs)
-        self.object_schema = self.make_object_schema(self.config)
+        self.makeSubtask("metadetect")
+
+        # EAC, fill self.meas_types correctly, depending on the task-type
+        if isinstance(self.metadetect, MetadetectTask):
+            self.meas_types = [self.metadetect.config.meas_type]
+        elif isinstance(self.metadetect, MetadetectMultiFitTask):
+            self.meas_types = self.metadetect.config.meas_types
+
+        self.object_schema = self.make_object_schema(self.meas_types, self.config.required_bands)
+
 
     @classmethod
-    def make_object_schema(cls, config: MetadetectionShearConfig) -> pa.Schema:
+    def make_object_schema(cls, fitters: list[str], required_bands: list[str]) -> pa.Schema:
         """Construct a PyArrow Schema for this task's main output catalog.
 
         Parameters
         ----------
-        config : `MetadetectionShearConfig`
-            Configuration that may be used to control details of the schema.
+        fitter: list[str]
+            List of fitters, e.g., "wmom", "gauss", "pgauss"...
+
+        required_bands: list[str]
+            List of bands used, e.g., "g", "r", "i"
 
         Returns
         -------
@@ -189,6 +208,7 @@ class MetadetectionShearTask(PipelineTask):
             Schema for the object catalog produced by this task.  Each field's
             metadata should include both a 'doc' entry and a 'unit' entry.
         """
+
         pa_schema = pa.schema(
             [
                 pa.field(
@@ -257,15 +277,6 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
-                pa.field(
-                    "%s_flags" % (config.shape_fitter),
-                    pa.uint32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "Overall flags for %s measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
                 # Original PSF measurements
                 pa.field(
                     "psfrec_flags",
@@ -299,183 +310,11 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "admom %s T (<x^2> + <y^2>) measurement for PSF." % (config.shape_fitter),
+                        "doc": "admom T (<x^2> + <y^2>) measurement for PSF.",
                         "unit": "arcseconds squared",
                     },
                 ),
-                # reconvolved PSF measurements
-                pa.field(
-                    "%s_psf_flags" % (config.shape_fitter),
-                    pa.uint32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "Flags for %s reconvolved PSF measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_psf_g_1" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s g1 measurement for reconvolved PSF." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_psf_g_2" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s g2 measurement for reconvolved PSF." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_psf_T" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s T (<x^2> + <y^2>) measurement for reconvolved PSF." % (config.shape_fitter),
-                        "unit": "arcseconds squared",
-                    },
-                ),
-                # Object measurements
-                pa.field(
-                    "%s_obj_flags" % (config.shape_fitter),
-                    pa.uint32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "Flags for %s object measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_s2n" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s object s2n measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_g_1" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s object g1 measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_g_2" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s object g2 measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_g_cov_11" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s object g cov first element (1,1) measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_g_cov_12" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s object g cov off-diagonal (1,2) element measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_g_cov_21" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s object g cov off-diagonal (2,1) element measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_g_cov_22" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s object g cov last element (2,2) measurement." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_T_flags" % (config.shape_fitter),
-                    pa.uint32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "Flags for %s T measurement for object." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "%s_T" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s T (<x^2> + <y^2>) measurement for object." % (config.shape_fitter),
-                        "unit": "arcseconds squared",
-                    },
-                ),
-                pa.field(
-                    "%s_T_err" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s T uncertainty for object." % (config.shape_fitter),
-                        "unit": "arcseconds squared",
-                    },
-                ),
-                pa.field(
-                    "%s_T_ratio" % (config.shape_fitter),
-                    pa.float32(),
-                    nullable=False,
-                    metadata={
-                        "doc": "%s T/Tpsf for object." % (config.shape_fitter),
-                        "unit": "",
-                    },
-                ),
-                pa.field(
-                    "shear_bands",
-                    pa.string(),
-                    nullable=False,
-                    metadata={
-                        "doc": "bands used for shear measurement.",
-                        "unit": "",
-                    },
-                ),
-                # pa.field(
-                #     "row0",
-                #     pa.float32(),
-                #     nullable=False,
-                #     metadata={
-                #         "doc": "row start for stamp.",
-                #         "unit": "",
-                #     },
-                # ),
-                # pa.field(
-                #     "col0",
-                #     pa.float32(),
-                #     nullable=False,
-                #     metadata={
-                #         "doc": "column start for stamp.",
-                #         "unit": "",
-                #     },
-                # ),
+
                 pa.field(
                     "row",
                     pa.float32(),
@@ -557,43 +396,258 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
+
+
+                # pa.field(
+                #     "row0",
+                #     pa.float32(),
+                #     nullable=False,
+                #     metadata={
+                #         "doc": "row start for stamp.",
+                #         "unit": "",
+                #     },
+                # ),
+                # pa.field(
+                #     "col0",
+                #     pa.float32(),
+                #     nullable=False,
+                #     metadata={
+                #         "doc": "column start for stamp.",
+                #         "unit": "",
+                #     },
+                # ),
+
             ]
         )
 
-        for b in config.required_bands:
+        # Loop over the fitting algorithms
+        for shape_fitter in fitters:
+
             pa_schema = pa_schema.append(
-                            pa.field( 
-                                "%s_band_flux_flags_%s" % (config.shape_fitter, b),
-                                pa.uint32(),
-                                nullable=False,
-                                metadata={
-                                    "doc": "%s flux measurement flags for object in filter %s." % (config.shape_fitter, b),
-                                    "unit": "",
-                                },
-                            ),
-                        )
+                pa.field(
+                    "%s_flags" % (shape_fitter),
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Overall flags for %s measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
             pa_schema = pa_schema.append(
-                            pa.field(
-                                "%s_band_flux_%s" % (config.shape_fitter, b),
-                                pa.float32(),
-                                nullable=False,
-                                metadata={
-                                    "doc": "%s flux for object in filter %s." % (config.shape_fitter, b),
-                                    "unit": "",
-                                },
-                            ),
-                        )
+                pa.field(
+                    "%s_psf_flags" % (shape_fitter),
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Flags for %s reconvolved PSF measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
             pa_schema = pa_schema.append(
-                            pa.field(
-                                "%s_band_flux_err_%s" % (config.shape_fitter, b),
-                                pa.float32(),
-                                nullable=False,
-                                metadata={
-                                    "doc": "%s flux uncertainty for object in filter %s." % (config.shape_fitter, b),
-                                    "unit": "",
-                                },
-                            ),
-                        )
+                pa.field(
+                    "%s_psf_g_1" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s g1 measurement for reconvolved PSF." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_psf_g_2" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s g2 measurement for reconvolved PSF." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_psf_T" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s T (<x^2> + <y^2>) measurement for reconvolved PSF." % (shape_fitter),
+                        "unit": "arcseconds squared",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_obj_flags" % (shape_fitter),
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Flags for %s object measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_s2n" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object s2n measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_g_1" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g1 measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_g_2" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g2 measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_g_cov_11" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov first element (1,1) measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_g_cov_12" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov off-diagonal (1,2) element measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_g_cov_21" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov off-diagonal (2,1) element measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_g_cov_22" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s object g cov last element (2,2) measurement." % (shape_fitter),
+                        "unit": "",
+                    },
+                ),
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_T_flags" % (shape_fitter),
+                    pa.uint32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Flags for %s T measurement for object." % (shape_fitter),
+                        "unit": "",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_T" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s T (<x^2> + <y^2>) measurement for object." % (shape_fitter),
+                        "unit": "arcseconds squared",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_T_err" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s T uncertainty for object." % (shape_fitter),
+                        "unit": "arcseconds squared",
+                    },
+                )
+            )
+            pa_schema = pa_schema.append(
+                pa.field(
+                    "%s_T_ratio" % (shape_fitter),
+                    pa.float32(),
+                    nullable=False,
+                    metadata={
+                        "doc": "%s T/Tpsf for object." % (shape_fitter),
+                        "unit": "",
+                    },
+                ),
+            )
+
+            # Inner loop over the bands
+            for b in required_bands:
+                pa_schema = pa_schema.append(
+                    pa.field(
+                        "%s_band_flux_flags_%s" % (shape_fitter, b),
+                        pa.uint32(),
+                        nullable=False,
+                        metadata={
+                            "doc": "%s flux measurement flags for object in filter %s." % (shape_fitter, b),
+                            "unit": "",
+                        },
+                    ),
+                )
+                pa_schema = pa_schema.append(
+                    pa.field(
+                        "%s_band_flux_%s" % (shape_fitter, b),
+                        pa.float32(),
+                        nullable=False,
+                        metadata={
+                            "doc": "%s flux for object in filter %s." % (shape_fitter, b),
+                            "unit": "",
+                        },
+                    ),
+                )
+
+                pa_schema = pa_schema.append(
+                    pa.field(
+                        "%s_band_flux_err_%s" % (shape_fitter, b),
+                        pa.float32(),
+                        nullable=False,
+                        metadata={
+                            "doc": "%s flux uncertainty for object in filter %s." % (shape_fitter, b),
+                            "unit": "",
+                        },
+                    ),
+                )
+
 
         return pa_schema
 
@@ -729,23 +783,31 @@ class MetadetectionShearTask(PipelineTask):
             trim_pixels=0,
         )
 
-        update_config = {"meas_type" : self.config.shape_fitter}
-        mdet_config = get_mdet_config(update_config)
-        mdet_config['metacal']['types']=['noshear', '1p', '1m', '2p', '2m']
-        mdet_config['step_size'] = self.config.shear_step
-        
-        res = run_metadetect(
+        # Switch to use config directly from the MetadetectTask,
+        # so get rid of this code
+        #
+        # update_config = {"meas_types" : self.shape_fitters}
+        # mdet_config = get_mdet_config(update_config)
+        # mdet_config['metacal']['types']=['noshear', '1p', '1m', '2p', '2m']
+        # mdet_config['step_size'] = self.config.shear_step
+
+        #res = run_metadetect(
+        #    rng=self.rng,
+        #    config=mdet_config,
+        #    **coadd_data,
+        #)
+        res = self.metadetect.run(
             rng=self.rng,
-            config=mdet_config,
             **coadd_data,
         )
+
         comb_res = _make_comb_data(
             cell_coadd=cell_coadds[0],
             res=res,
-            meas_type=mdet_config["meas_type"],
+            meas_types=self.meas_types,
             mask_frac=mask_frac,
             bands=self.config.required_bands,
-            fitter=self.config.shape_fitter,
+            fitters=self.meas_types,
             full_output=True,
         )
 
@@ -783,19 +845,19 @@ class MetadetectionShearTask(PipelineTask):
 
     def _make_noise_exposure(self, cell_coadd: SingleCellCoadd, index: int) -> ExposureF:
         # TODO: cell coadds will have real noise realization
-        # fake_noise_image = ImageF(cell_coadd.outer.image, True)
-        # noise = np.median(cell_coadd.outer.variance.array[:, :])
-        # fake_noise_image.array[:, :] = self.rng.normal(
-        #     scale=np.sqrt(noise),
-        #     size=fake_noise_image.array.shape,
-        # )
-        # return self._make_cell_exposure(
-        #     fake_noise_image,
-        #     cell_coadd,
-        # )
-        return self._make_cell_exposure(
-                cell_coadd.outer.noise_realizations[index], cell_coadd,
+        fake_noise_image = ImageF(cell_coadd.outer.image, True)
+        noise = np.median(cell_coadd.outer.variance.array[:, :])
+        fake_noise_image.array[:, :] = self.rng.normal(
+            scale=np.sqrt(noise),
+            size=fake_noise_image.array.shape,
         )
+        return self._make_cell_exposure(
+            fake_noise_image,
+            cell_coadd,
+        )
+        #return self._make_cell_exposure(
+        #        cell_coadd.outer.noise_realizations[index], cell_coadd,
+        #)
 
     def _make_mfrac_exposure(self, cell_coadd: SingleCellCoadd) -> ExposureF:
         # TODO: cell coadds will have a real mfrac image
@@ -859,10 +921,10 @@ def _dictify(data):
 def _make_comb_data(
     cell_coadd,
     res,
-    meas_type,
+    meas_types,
     mask_frac,
     bands,
-    fitter,
+    fitters,
     full_output=False,
 ):
     import esutil as eu
@@ -873,21 +935,43 @@ def _make_comb_data(
         # we will copy out of arrays to these
         ("psfrec_g_1", "f4"),
         ("psfrec_g_2", "f4"),
-        ("%s_psf_g_1" % (fitter), "f4"),
-        ("%s_psf_g_2" % (fitter), "f4"),
-        ("%s_g_1" % (fitter), "f4"),
-        ("%s_g_2" % (fitter), "f4"),
-        ("%s_g_cov_11" % (fitter), "f4"),
-        ("%s_g_cov_12" % (fitter), "f4"),
-        ("%s_g_cov_21" % (fitter), "f4"),
-        ("%s_g_cov_22" % (fitter), "f4"),
     ]
 
-    for b in bands:
-        copy_dt.append(("%s_band_flux_flags_%s" % (fitter, b), "i4"))
-        copy_dt.append(("%s_band_flux_%s" % (fitter, b), "f4"))
-        copy_dt.append(("%s_band_flux_err_%s" % (fitter, b), "f4"))
+    first_fitter = True
 
+    for fitter in fitters:
+        # These columns are used to unroll multi-dimensional arrays
+        copy_dt.append(("%s_psf_g_1" % (fitter), "f4"))
+        copy_dt.append(("%s_psf_g_2" % (fitter), "f4"))
+        copy_dt.append(("%s_g_1" % (fitter), "f4"))
+        copy_dt.append(("%s_g_2" % (fitter), "f4"))
+        copy_dt.append(("%s_g_cov_11" % (fitter), "f4"))
+        copy_dt.append(("%s_g_cov_12" % (fitter), "f4"))
+        copy_dt.append(("%s_g_cov_21" % (fitter), "f4"))
+        copy_dt.append(("%s_g_cov_22" % (fitter), "f4"))
+
+        # similarly, we unroll the bands
+        for b in bands:
+            copy_dt.append(("%s_band_flux_flags_%s" % (fitter, b), "i4"))
+            copy_dt.append(("%s_band_flux_%s" % (fitter, b), "f4"))
+            copy_dt.append(("%s_band_flux_err_%s" % (fitter, b), "f4"))
+
+        if first_fitter:
+            first_fitter = False
+        else:
+            # The columns are defined for all the fitters
+            # and need to be copied for the later fitters
+            copy_dt.append(("%s_flags" % (fitter), "i4"))
+            copy_dt.append(("%s_psf_flags" % (fitter), "i4"))
+            copy_dt.append(("%s_obj_flags" % (fitter), "i4"))
+            copy_dt.append(("%s_s2n" % (fitter), "f4"))
+            copy_dt.append(("%s_psf_T" % (fitter), "f4"))
+            copy_dt.append(("%s_T" % (fitter), "f4"))
+            copy_dt.append(("%s_T_flags" % (fitter), "i4"))
+            copy_dt.append(("%s_T_err" % (fitter), "f4"))
+            copy_dt.append(("%s_T_ratio" % (fitter), "f4"))
+
+    # These are extra columns that apply to all the fitters
     add_dt = [
         ("id", "u8"),
         ("tract", "u4"),
@@ -904,41 +988,68 @@ def _make_comb_data(
         res = {"noshear": res}
 
     dlist = []
+
     for stype in res.keys():
         data = res[stype]
+
         if data is not None:
-            if not full_output:
-                data = _trim_output_columns(data, meas_type)
 
-            newdata = eu.numpy_util.add_fields(data, add_dt)
-            newdata["psfrec_g_1"] = newdata["psfrec_g"][:, 0]
-            newdata["psfrec_g_2"] = newdata["psfrec_g"][:, 1]
-            newdata["%s_psf_g_1" % (fitter)] = newdata["%s_psf_g" % (fitter)][:, 0]
-            newdata["%s_psf_g_2" % (fitter)] = newdata["%s_psf_g" % (fitter)][:, 1]
-            newdata["%s_g_1" % (fitter)] = newdata["%s_g" % (fitter)][:, 0]
-            newdata["%s_g_2" % (fitter)] = newdata["%s_g" % (fitter)][:, 1]
+            first_fitter = True
 
-            newdata["%s_g_cov_11" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 0, 0]
-            newdata["%s_g_cov_12" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 0, 1]
-            newdata["%s_g_cov_21" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 1, 0]
-            newdata["%s_g_cov_22" % (fitter)] = newdata["%s_g_cov" % (fitter)][:, 1, 1]
+            for meas_type, fitter in zip(meas_types, fitters):
 
-            # To-do make compatible with a single band
-            for i, b in enumerate(bands):
-                newdata["%s_band_flux_flags_%s" % (fitter, b)] = newdata["%s_band_flux_flags" % (fitter)][:, i]
-                newdata["%s_band_flux_%s" % (fitter, b)] = newdata["%s_band_flux" % (fitter)][:, i]
-                newdata["%s_band_flux_err_%s" % (fitter, b)] = newdata["%s_band_flux_err" % (fitter)][:, i]
+                sub_data = data[meas_type]
+                if not full_output:
+                    sub_data = _trim_output_columns(sub_data, meas_type)
 
-            newdata["tract"] = idinfo.tract
-            newdata["patch_x"] = idinfo.patch.x
-            newdata["patch_y"] = idinfo.patch.y
-            newdata["cell_x"] = idinfo.cell.x
-            newdata["cell_y"] = idinfo.cell.y
+                if first_fitter:
+                    # Copy data and attach stuff that is the same for
+                    # all the fitters
+                    newdata = eu.numpy_util.add_fields(sub_data, add_dt)
+                    newdata["psfrec_g_1"] = newdata["psfrec_g"][:, 0]
+                    newdata["psfrec_g_2"] = newdata["psfrec_g"][:, 1]
+                    newdata["tract"] = idinfo.tract
+                    newdata["patch_x"] = idinfo.patch.x
+                    newdata["patch_y"] = idinfo.patch.y
+                    newdata["cell_x"] = idinfo.cell.x
+                    newdata["cell_y"] = idinfo.cell.y
 
-            if stype == "noshear":
-                newdata["shear_type"] = "ns"
-            else:
-                newdata["shear_type"] = stype
+                    if stype == "noshear":
+                        newdata["shear_type"] = "ns"
+                    else:
+                        newdata["shear_type"] = stype
+
+                    first_fitter = False
+
+                else:
+                    # Copy the fitter dependent-columns
+                    newdata["%s_flags" % (fitter)] = sub_data["%s_flags" % (fitter)]
+                    newdata["%s_psf_flags" % (fitter)] = sub_data["%s_psf_flags" % (fitter)]
+                    newdata["%s_obj_flags" % (fitter)] = sub_data["%s_obj_flags" % (fitter)]
+                    newdata["%s_s2n" % (fitter)] = sub_data["%s_s2n" % (fitter)]
+                    newdata["%s_psf_T" % (fitter)] = sub_data["%s_psf_T" % (fitter)]
+                    newdata["%s_T" % (fitter)] = sub_data["%s_T" % (fitter)]
+                    newdata["%s_T_flags" % (fitter)] = sub_data["%s_T_flags" % (fitter)]
+                    newdata["%s_T_err" % (fitter)] = sub_data["%s_T_err" % (fitter)]
+                    newdata["%s_T_ratio" % (fitter)] = sub_data["%s_T_ratio" % (fitter)]
+
+                # On-roll the multi-dimensional arrays
+                newdata["%s_psf_g_1" % (fitter)] = sub_data["%s_psf_g" % (fitter)][:, 0]
+                newdata["%s_psf_g_2" % (fitter)] = sub_data["%s_psf_g" % (fitter)][:, 1]
+                newdata["%s_g_1" % (fitter)] = sub_data["%s_g" % (fitter)][:, 0]
+                newdata["%s_g_2" % (fitter)] = sub_data["%s_g" % (fitter)][:, 1]
+
+                newdata["%s_g_cov_11" % (fitter)] = sub_data["%s_g_cov" % (fitter)][:, 0, 0]
+                newdata["%s_g_cov_12" % (fitter)] = sub_data["%s_g_cov" % (fitter)][:, 0, 1]
+                newdata["%s_g_cov_21" % (fitter)] = sub_data["%s_g_cov" % (fitter)][:, 1, 0]
+                newdata["%s_g_cov_22" % (fitter)] = sub_data["%s_g_cov" % (fitter)][:, 1, 1]
+
+                # To-do make compatible with a single band
+                for i, b in enumerate(bands):
+                    newdata["%s_band_flux_flags_%s" % (fitter, b)] = sub_data["%s_band_flux_flags" % (fitter)][:, i]
+                    newdata["%s_band_flux_%s" % (fitter, b)] = sub_data["%s_band_flux" % (fitter)][:, i]
+                    newdata["%s_band_flux_err_%s" % (fitter, b)] = sub_data["%s_band_flux_err" % (fitter)][:, i]
+
             dlist.append(newdata)
 
     if len(dlist) > 0:
