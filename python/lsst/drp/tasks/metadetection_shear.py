@@ -183,8 +183,10 @@ class MetadetectionShearTask(PipelineTask):
 
         # EAC, fill self.meas_types correctly, depending on the task-type
         if isinstance(self.metadetect, MetadetectTask):
+            self.is_single = True
             self.meas_types = [self.metadetect.config.meas_type]
         elif isinstance(self.metadetect, MetadetectMultiFitTask):
+            self.is_single = False
             self.meas_types = self.metadetect.config.meas_types
 
         self.object_schema = self.make_object_schema(self.meas_types, self.config.required_bands)
@@ -800,6 +802,14 @@ class MetadetectionShearTask(PipelineTask):
             rng=self.rng,
             **coadd_data,
         )
+
+        # if we run in single-mode, restructure the dict
+        # to be keyed by [shear_type][meas_type]
+        if self.is_single:
+            result_dict = {}
+            for key, val in res.items():
+                result_dict[key] = {self.meas_types[0] : val}
+            res = result_dict
 
         comb_res = _make_comb_data(
             cell_coadd=cell_coadds[0],
