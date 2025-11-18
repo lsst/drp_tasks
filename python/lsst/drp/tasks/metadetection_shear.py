@@ -150,7 +150,7 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
     # EAC: get the configuration for the MetadectTask
     metadetect = ConfigurableField(
         doc="Meta Detection Configuartion",
-        target=MetadetectMultiFitTask,
+        target=MetadetectTask,
     )
 
     ref_loader = ConfigField(
@@ -1059,6 +1059,24 @@ def _make_comb_data(
         output = []
 
     return output
+
+
+class MetadetectionMultiFitShearConfig(MetadetectionShearConfig):
+    """Config for MetadetectionMultiFitShearTask
+
+    Overrides setDefaults to use MetadetectMultiFitTask
+    """
+
+    def setDefaults(self):
+        self.metadected.retarget(MetadectedMultiFitTask)
+
+
+class MetadetectionMultiFitShearTask(MetadetectionShearTask):
+    """Run metadection shear will multiple fitters"""
+
+    ConfigClass = MetadetectionMultiFitShearConfig
+    _DefaultName = "metadetect"
+
 
 
 def _trim_output_columns(data, meas_type):
