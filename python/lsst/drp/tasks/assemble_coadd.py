@@ -1580,6 +1580,11 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         staticSkyModelInputRefs = copy.deepcopy(inputRefs)
         staticSkyModelInputRefs.inputWarps = inputRefs.psfMatchedWarps
 
+        # self.assembleStaticSkyModel is not expecting psfMatchedWarps as
+        # input. But in its runQuantum, ButlerQC would try to be helpful and
+        # read all of them in to memory.
+        del staticSkyModelInputRefs.psfMatchedWarps
+
         # Because subtasks don't have connections we have to make one.
         # The main task's `templateCoadd` is the subtask's `coaddExposure`
         staticSkyModelOutputRefs = copy.deepcopy(outputRefs)
