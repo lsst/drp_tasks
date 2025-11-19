@@ -229,7 +229,7 @@ class MakeDirectWarpConnections(
         for n in range(config.numberOfNoiseRealizations):
             noise_warp = Output(
                 doc=f"Output direct warped noise exposure ({n})",
-                name=f"{config.connections.coaddName}Coadd_directWarp_noise{n}",
+                name=f"direct_warp_noise{n}",
                 # Store it as a MaskedImage to preserve the variance plane.
                 storageClass="MaskedImageF",
                 dimensions=("tract", "patch", "skymap", "instrument", "visit"),
