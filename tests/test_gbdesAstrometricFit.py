@@ -90,6 +90,7 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         cls.config.saveModelParams = True
         cls.config.allowSelfMatches = True
         cls.config.saveCameraModel = True
+        cls.config.applyRefCatProperMotion = False
         cls.task = GbdesAstrometricFitTask(config=cls.config)
 
         (
@@ -788,6 +789,7 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
         cls.config.fitReserveRandomSeed = 1234
         cls.config.saveModelParams = True
         cls.config.saveCameraModel = True
+        cls.config.applyRefCatProperMotion = False
         cls.task = GbdesGlobalAstrometricFitTask(config=cls.config)
 
         cls.fields, cls.fieldRegions = cls.task._prep_sky(cls.inputVisitSummary)
