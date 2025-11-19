@@ -273,7 +273,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         dtype=afwMath.Warper.ConfigClass,
     )
     psf_dimensions = Field[int](
-        default=21,
+        default=35,
         doc="Dimensions of the PSF image stamp size to be assigned to cells (must be odd).",
         check=lambda x: (x > 0) and (x % 2 == 1),
     )
