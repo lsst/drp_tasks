@@ -602,7 +602,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             cutout['base_SdssCentroid_y'] = yc
             foot = afwDet.Footprint(spans)
             foot.addPeak(xc, yc, flux)
-            cutout.setFootprint(afwDet.HeavyFootprintF(foot, model, fp_ctrl))
+            model_mi = templateCoadd[bbox].maskedImage.clone()
+            model_mi.image.array = model
+            cutout.setFootprint(afwDet.HeavyFootprintF(foot, model_mi, fp_ctrl))
         # return(modelExposure, residual, fluxLookupTable)
         return pipeBase.Struct(residual=residual,
                                fluxLookupTable=fluxLookupTable,
