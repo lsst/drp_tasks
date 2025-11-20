@@ -304,7 +304,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # per subfilter 
         dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
                                                      effectiveWavelength, bandwidth)
-        return pipeBase.Struct(dcrResidual=results.dcrResidual,
+        return pipeBase.Struct(dcrResidual=results.residual,
                                dcrCorrectionCatalog=dcrCorrectionCatalog,
                                modelCatalog=results.template_models)
 
