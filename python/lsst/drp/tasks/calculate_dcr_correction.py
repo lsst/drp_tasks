@@ -327,7 +327,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             Description
         """
         snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
-        goodSnr = self.config.maximumSNR > snr > self.config.minimumSNR
+        goodSnr = (snr > self.config.minimumSNR) & (snr < self.config.maximumSNR)
         # Exclude flagged objects that probably won't compute
         goodCentroid = ~objectCat['base_SdssCentroid_flag']
         goodShape = ~objectCat['base_SdssShape_flag']
@@ -412,7 +412,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             windowFunction = None
         # Extract cutouts from the image centered on each source, and reject
         # any with a bad fit to the catalog flux or containing invalid values.
-        lookupTable = self.build_image_lookup_table(self, catalog, warp, image_footprints,
+        lookupTable = self.build_image_lookup_table(catalog, warp, image_footprints,
                                                     windowFunction=windowFunction, fp_ctrl=fp_ctrl)
         # Update the lookup table with DCR-shifted PSFs for each source, for
         # each subfilter.
