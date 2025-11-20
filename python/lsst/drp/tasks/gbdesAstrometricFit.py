@@ -878,7 +878,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         )
 
         # Add the reference catalog to the associator
-        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="decimalyear").mjd
+        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="jyear").mjd
         refObjects, refCovariance = self._load_refcat(
             refObjectLoader,
             extensionInfo,
@@ -1203,7 +1203,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         else:
             medianMJD = self.config.setRefEpoch
             self.log.info(f"Ref epoch set by user: {medianMJD}")
-        medianEpoch = astropy.time.Time(medianMJD, format="mjd").decimalyear
+        medianEpoch = astropy.time.Time(medianMJD, format="mjd").jyear
 
         # Add information for the reference catalog. Most of the values are
         # not used. There needs to be a separate catalog for each field.
@@ -2532,7 +2532,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         )
 
         self.log.info("Load associated sources")
-        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="decimalyear").mjd
+        medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="jyear").mjd
         allRefObjects, allRefCovariances = {}, {}
         for f, fieldRegion in fieldRegions.items():
             refObjects, refCovariance = self._load_refcat(
@@ -2698,7 +2698,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         clusters = clustering.fit(np.array(radecs))
 
         medianMJD = np.median(mjds)
-        medianEpoch = astropy.time.Time(medianMJD, format="mjd").decimalyear
+        medianEpoch = astropy.time.Time(medianMJD, format="mjd").jyear
 
         fieldNames = []
         fieldRAs = []
