@@ -170,7 +170,7 @@ class AssembleCellCoaddConnections(
         for n in range(config.num_noise_realizations):
             noise_warps = Input(
                 doc="Input noise warps",
-                name=f"{config.connections.inputWarpName}Coadd_directWarp_noise{n}",
+                name=f"direct_warp_noise{n}",
                 storageClass="MaskedImageF",
                 dimensions=("tract", "patch", "skymap", "visit", "instrument"),
                 deferLoad=True,
@@ -273,7 +273,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         dtype=afwMath.Warper.ConfigClass,
     )
     psf_dimensions = Field[int](
-        default=21,
+        default=35,
         doc="Dimensions of the PSF image stamp size to be assigned to cells (must be odd).",
         check=lambda x: (x > 0) and (x % 2 == 1),
     )
