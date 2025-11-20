@@ -383,6 +383,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         subfilterEffectiveWavelengths = [np.mean(wl) for wl in dcrGen]
         for refSrc in refCat:
             srcId = refSrc.getId()
+            if srcId not in fluxLookupTable:
+                continue
             models = dcrFpLookupTable[srcId]
             visits = [visit for visit in models]
             # At this point the subfilter fractions are the same for each visit
