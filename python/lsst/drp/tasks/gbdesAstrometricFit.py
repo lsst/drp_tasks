@@ -29,6 +29,7 @@ import astshim
 import numpy as np
 import wcsfit
 import yaml
+from astropy.table import vstack
 from sklearn.cluster import AgglomerativeClustering
 from smatch.matcher import Matcher
 
@@ -936,7 +937,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             fixMaps=fixMaps,
             num_threads=nCores,
         )
-
         # Add the science and reference sources
         self._add_objects(wcsf, inputCatalogRefs, sourceIndices, extensionInfo, usedColumns)
         self._add_ref_objects(wcsf, refObjects, refCovariance, extensionInfo)
@@ -1325,26 +1325,75 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         else:
             formattedEpoch = None
 
-        if region is not None:
-            skyRegion = refObjectLoader.loadRegion(region, self.config.referenceFilter, epoch=formattedEpoch)
-        elif (center is not None) and (radius is not None):
-            skyRegion = refObjectLoader.loadSkyCircle(
-                center, radius, self.config.referenceFilter, epoch=formattedEpoch
+        neededColumns = ["coord_ra", "coord_dec", "coord_raErr", "coord_decErr"]
+        if self.config.applyRefCatProperMotion:
+            neededColumns += [
+                "pm_ra",
+                "pm_dec",
+                "parallax",
+                "pm_raErr",
+                "pm_decErr",
+                "parallaxErr",
+            ]
+        # Get refcat version from refcat metadata
+        refCatMetadata = refObjectLoader.refCats[0].get().getMetadata()
+        # DM-47181: Added this to work for LSSTComCam with
+        # the_monster_20240904 catalog that does not have this key.
+        if "REFCAT_FORMAT_VERSION" not in refCatMetadata:
+            refCatVersion = 2
+        else:
+            refCatVersion = refCatMetadata["REFCAT_FORMAT_VERSION"]
+        if refCatVersion == 2:
+            neededColumns += [
+                "coord_ra_coord_dec_Cov",
+                "coord_ra_pm_ra_Cov",
+                "coord_ra_pm_dec_Cov",
+                "coord_ra_parallax_Cov",
+                "coord_dec_pm_ra_Cov",
+                "coord_dec_pm_dec_Cov",
+                "coord_dec_parallax_Cov",
+                "pm_ra_pm_dec_Cov",
+                "pm_ra_parallax_Cov",
+                "pm_dec_parallax_Cov",
+            ]
+
+        # Load each shard of the reference catalog separately to avoid a spike
+        # in the memory load.
+        refCatShards = []
+        for dataId, cat in zip(refObjectLoader.dataIds, refObjectLoader.refCats):
+            miniRefObjectLoader = ReferenceObjectLoader(
+                dataIds=[dataId],
+                refCats=[cat],
+                config=refObjectLoader.config,
+                log=self.log,
             )
-        else:
-            raise RuntimeError("Either `region` or `center` and `radius` must be set.")
+            try:
+                if region is not None:
+                    skyRegion = miniRefObjectLoader.loadRegion(
+                        region, self.config.referenceFilter, epoch=formattedEpoch
+                    )
+                elif (center is not None) and (radius is not None):
+                    skyRegion = miniRefObjectLoader.loadSkyCircle(
+                        center, radius, self.config.referenceFilter, epoch=formattedEpoch
+                    )
+                else:
+                    raise RuntimeError("Either `region` or `center` and `radius` must be set.")
+            except RuntimeError:
+                self.log.debug("Reference catalog shard has no objects inside the region.")
+                continue
+            selected = self.referenceSelector.run(skyRegion.refCat)
+            # Need memory contiguity to get reference filters as a vector.
+            if not selected.sourceCat.isContiguous():
+                refCatShard = selected.sourceCat.copy(deep=True)
+            else:
+                refCatShard = selected.sourceCat
+            refCatShard = refCatShard.asAstropy()[neededColumns]
 
-        selected = self.referenceSelector.run(skyRegion.refCat)
-        # Need memory contiguity to get reference filters as a vector.
-        if not selected.sourceCat.isContiguous():
-            refCat = selected.sourceCat.copy(deep=True)
-        else:
-            refCat = selected.sourceCat
-        refCat = refCat.asAstropy()
-
-        # In Gaia DR3, missing values are denoted by NaNs.
-        finiteInd = np.isfinite(refCat["coord_ra"]) & np.isfinite(refCat["coord_dec"])
-        refCat = refCat[finiteInd]
+            # In Gaia DR3, missing values are denoted by NaNs.
+            finiteInd = np.isfinite(refCatShard["coord_ra"]) & np.isfinite(refCatShard["coord_dec"])
+            refCatShard = refCatShard[finiteInd]
+            refCatShards.append(refCatShard)
+        refCat = vstack(refCatShards)
 
         if self.config.excludeNonPMObjects and self.config.applyRefCatProperMotion:
             # Gaia DR2 has zeros for missing data, while Gaia DR3 has NaNs:
@@ -1358,20 +1407,10 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
         raCov = ((refCat["coord_raErr"]).to(u.degree).to_value() ** 2).tolist()
         decCov = ((refCat["coord_decErr"]).to(u.degree).to_value() ** 2).tolist()
 
-        # Get refcat version from refcat metadata
-        refCatMetadata = refObjectLoader.refCats[0].get().getMetadata()
-
-        # DM-47181: Added this to work for LSSTComCam with
-        # the_monster_20240904 catalog that has not this key.
-        if "REFCAT_FORMAT_VERSION" not in refCatMetadata:
-            refCatVersion = 2
+        if refCatVersion == 2:
             raDecCov = (refCat["coord_ra_coord_dec_Cov"]).to(u.degree**2).to_value().tolist()
         else:
-            refCatVersion = refCatMetadata["REFCAT_FORMAT_VERSION"]
-            if refCatVersion == 2:
-                raDecCov = (refCat["coord_ra_coord_dec_Cov"]).to(u.degree**2).to_value().tolist()
-            else:
-                raDecCov = np.zeros(len(ra))
+            raDecCov = np.zeros(len(ra))
 
         refObjects = {"ra": ra, "dec": dec, "raCov": raCov, "decCov": decCov, "raDecCov": raDecCov}
         refCovariance = []
