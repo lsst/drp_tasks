@@ -221,7 +221,7 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         # This has to be at least 0.5 to ensure that the an input overlaps the
         # cell center. Inputs will overlap fraction less than 0.25 will
         # definitely not overlap the cell center.
-        default=0.0,
+        default=1.0,
         min=0.0,
         max=1.0,
         inclusiveMin=True,
@@ -808,6 +808,13 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 psf_stacker = psf_stacker_gc[cellInfo.index]
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
+
+                if warped_psf_maskedImage.image.array.sum() < 0.995:
+                    self.log.warning(
+                        "PSF for %s in %s lost more than 0.5 per cent of flux",
+                        warp_input.dataId,
+                        cellInfo.index,
+                    )
 
                 if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
                     ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
