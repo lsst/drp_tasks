@@ -49,6 +49,8 @@ from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
 from lsst.geom import Angle, Box2I, SpherePoint, degrees
 from lsst.pex.config import ChoiceField, ConfigurableField, Field
 from lsst.pipe.base import (
+    AlgorithmError,
+    AnnotatedPartialOutputsError,
     InputQuantizedConnection,
     InvalidQuantumError,
     OutputQuantizedConnection,
@@ -722,11 +724,22 @@ class UpdateVisitSummaryTask(PipelineTask):
                         "constraint."
                     )
         # Actually run the task and write the results.
-        outputs = self.run(**inputs)
-        butlerQC.put(outputs, outputRefs)
+        result = Struct()
+        try:
+            self.run(**inputs, result=result)
+        except AlgorithmError as e:
+            error = AnnotatedPartialOutputsError.annotate(
+                e, self, result.output_summary_catalog, log=self.log
+            )
+            butlerQC.put(result, outputRefs)
+            raise error from e
+
+        butlerQC.put(result, outputRefs)
 
     def run(
         self,
+        *,
+        result: Struct,
         input_summary_catalog: ExposureCatalog,
         input_exposures: Mapping[int, DeferredDatasetHandle],
         psf_overrides: ExposureCatalog,
@@ -741,6 +754,8 @@ class UpdateVisitSummaryTask(PipelineTask):
 
         Parameters
         ----------
+        result : `lsst.pipe.base.Struct`
+            Output struct to modify in-place.
         input_summary_catalog : `lsst.afw.table.ExposureCatalog`
             Input catalog.  Each row in this catalog will be used to produce
             a row in the output catalog.  Any override parameter that is `None`
@@ -800,11 +815,11 @@ class UpdateVisitSummaryTask(PipelineTask):
         passing an override parameter at all will instead pass through the
         original component and values from the input catalog unchanged.
         """
-        output_summary_catalog = ExposureCatalog(self.schema)
-        output_summary_catalog.setMetadata(input_summary_catalog.getMetadata())
+        result.output_summary_catalog = ExposureCatalog(self.schema)
+        result.output_summary_catalog.setMetadata(input_summary_catalog.getMetadata())
         for input_record in input_summary_catalog:
             detector_id = input_record.getId()
-            output_record = output_summary_catalog.addNew()
+            output_record = result.output_summary_catalog.addNew()
 
             # Make a new ExposureSummaryStats from the input record.  These
             # might be full of NaNs if the summary stats were not computed
@@ -904,4 +919,4 @@ class UpdateVisitSummaryTask(PipelineTask):
             summary_stats.update_record(output_record)
             del exposure
 
-        return Struct(output_summary_catalog=output_summary_catalog)
+        return result
