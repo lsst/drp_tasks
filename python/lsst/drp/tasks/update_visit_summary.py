@@ -41,13 +41,15 @@ import astropy.table
 import numpy as np
 
 import lsst.pipe.base.connectionTypes as cT
+from lsst.afw.cameraGeom import Camera
 from lsst.afw.geom import SkyWcs
 from lsst.afw.image import ExposureSummaryStats
 from lsst.afw.math import BackgroundList
 from lsst.afw.table import ExposureCatalog, ExposureRecord, SchemaMapper
 from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
 from lsst.geom import Angle, Box2I, SpherePoint, degrees
-from lsst.pex.config import ChoiceField, ConfigurableField, Field
+from lsst.meas.astrom.refit_pointing import RefitPointingTask
+from lsst.pex.config import ChoiceField, ConfigurableField, Field, ListField
 from lsst.pipe.base import (
     AlgorithmError,
     AnnotatedPartialOutputsError,
@@ -357,6 +359,13 @@ class UpdateVisitSummaryConnections(
         "photoCalibName": "fgcm",
     },
 ):
+    camera = cT.PrerequisiteInput(
+        doc="Camera geometry.",
+        name="camera",
+        dimensions=("instrument",),
+        storageClass="Camera",
+        isCalibration=True,
+    )
     sky_map = cT.Input(
         doc="Description of tract/patch geometry.",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
@@ -474,6 +483,12 @@ class UpdateVisitSummaryConnections(
         dimensions=("instrument", "visit"),
         storageClass="ExposureCatalog",
     )
+    visit_geometry = cT.Output(
+        doc="Updated visit[, detector] regions that can be used to update butler dimensions records.",
+        name="visit_geometry",
+        dimensions=("instrument", "visit"),
+        storageClass="VisitGeometry",
+    )
 
     def __init__(self, *, config: UpdateVisitSummaryConfig | None = None):
         super().__init__(config=config)
@@ -514,6 +529,12 @@ class UpdateVisitSummaryConnections(
                 pass
             case bad:
                 raise ValueError(f"Invalid value background_provider={bad!r}; config was not validated.")
+        if self.config.do_refit_pointing:
+            self.camera = dataclasses.replace(self.camera, dimensions=config.camera_dimensions)
+        else:
+            del self.camera
+        if not self.config.do_write_visit_geometry:
+            del self.visit_geometry
 
 
 class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVisitSummaryConnections):
@@ -613,6 +634,31 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
     # Could imagine an option here to say that the original background has not
     # been subtracted from the input exposures, allowing postISRCCD to be used
     # as input exposures.  Can add later if needed.
+    refit_pointing = ConfigurableField(
+        "A subtask for refitting the boresight pointing and orientation, "
+        "and fitting WCS SIP approximations.",
+        target=RefitPointingTask,
+    )
+    camera_dimensions = ListField(
+        "The dimensions of the 'camera' prerequisite input connection.",
+        dtype=str,
+        default=["instrument"],
+    )
+    do_refit_pointing = Field(
+        "Whether to re-fit the pointing model and add TAN-SIP WCS approximations.",
+        dtype=bool,
+        default=True,
+    )
+    do_write_visit_geometry = Field(
+        "Whether to write refit-pointing regions that can be used to update " "butler dimension records.",
+        dtype=bool,
+        default=False,
+    )
+
+    def validate(self):
+        super().validate()
+        if self.do_write_visit_geometry and not self.do_refit_pointing:
+            raise ValueError("Cannot write visit_geometry without refitting the pointing.")
 
 
 class UpdateVisitSummaryTask(PipelineTask):
@@ -658,6 +704,8 @@ class UpdateVisitSummaryTask(PipelineTask):
                 type="L",
                 doc="ID of the tract that provided the PhotoCalib.",
             )
+        if self.config.do_refit_pointing:
+            self.makeSubtask("refit_pointing", schema=self.schema)
         self.output_summary_schema = ExposureCatalog(self.schema)
 
     def runQuantum(
@@ -745,6 +793,7 @@ class UpdateVisitSummaryTask(PipelineTask):
         psf_overrides: ExposureCatalog,
         psf_star_catalog: astropy.table.Table,
         ap_corr_overrides: ExposureCatalog,
+        camera: Camera,
         photo_calib_overrides: PossiblyMultipleInput | None = None,
         wcs_overrides: PossiblyMultipleInput | None = None,
         background_originals: Mapping[int, DeferredDatasetHandle] | None = None,
@@ -755,7 +804,15 @@ class UpdateVisitSummaryTask(PipelineTask):
         Parameters
         ----------
         result : `lsst.pipe.base.Struct`
-            Output struct to modify in-place.
+            Output struct to modify in-place.  On successful return, this will
+            have the following attributes:
+
+            - ``output_summary_catalog`` (`lsst.afw.table.ExposureCatalog`)
+                The output visit summary catalog.
+            - ``visit_geometry`` (`lsst.obs.base.visit_geometry.VisitGeometry`)
+                Updated visit[, detector] regions that can be used to update
+                butler dimension records.
+
         input_summary_catalog : `lsst.afw.table.ExposureCatalog`
             Input catalog.  Each row in this catalog will be used to produce
             a row in the output catalog.  Any override parameter that is `None`
@@ -778,6 +835,8 @@ class UpdateVisitSummaryTask(PipelineTask):
         ap_corr_overrides : `lsst.afw.table.ExposureCatalog`
             Catalog with attached `lsst.afw.image.ApCorrMap` objects that
             supersede the input catalog's aperture corrections.
+        camera : `lsst.afw.cameraGeom.Camera`
+            Camera geometry.
         photo_calib_overrides : `PossiblyMultipleInput`, optional
             Catalog wrappers with attached `lsst.afw.image.PhotoCalib`
             objects that supersede the input catalog's photometric
@@ -803,8 +862,8 @@ class UpdateVisitSummaryTask(PipelineTask):
 
         Returns
         -------
-        output_summary_catalog : `lsst.afw.table.ExposureCatalog`
-            Output visit summary catalog.
+        result : `lsst.pipe.base.Struct`
+            The same output struct passed in.
 
         Notes
         -----
@@ -919,4 +978,10 @@ class UpdateVisitSummaryTask(PipelineTask):
             summary_stats.update_record(output_record)
             del exposure
 
+        if self.config.do_refit_pointing:
+            refit_pointing_result = self.refit_pointing.run(
+                catalog=result.output_summary_catalog,
+                camera=camera,
+            )
+            result.visit_geometry = refit_pointing_result.regions
         return result

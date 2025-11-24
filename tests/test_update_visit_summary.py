@@ -22,7 +22,7 @@
 import unittest
 
 from lsst.afw.image import ExposureSummaryStats
-from lsst.afw.table import ExposureCatalog, ExposureTable
+from lsst.afw.table import ExposureCatalog, ExposureTable, Schema
 from lsst.drp.tasks.update_visit_summary import (
     UpdateVisitSummaryConfig,
     UpdateVisitSummaryConnections,
@@ -44,20 +44,20 @@ class UpdateVisitSummaryTestCase(unittest.TestCase):
         self.assertNotIn("wcs_overrides_tract", connections.inputs)
         self.assertNotIn("wcs_overrides_global", connections.inputs)
         task = UpdateVisitSummaryTask(config=config, initInputs=self.init_inputs)
-        self.assertEqual(task.schema, self.input_schema)
+        self.assertEqual(task.schema.contains(self.input_schema, Schema.IDENTICAL), Schema.IDENTICAL)
         config.wcs_provider = "tract"
         connections = UpdateVisitSummaryConnections(config=config)
         self.assertIn("wcs_overrides_tract", connections.inputs)
         self.assertNotIn("wcs_overrides_global", connections.inputs)
         task = UpdateVisitSummaryTask(config=config, initInputs=self.init_inputs)
-        self.assertTrue(task.schema.contains(self.input_schema))
+        self.assertTrue(task.schema.contains(self.input_schema, Schema.IDENTICAL), Schema.IDENTICAL)
         self.assertIn("wcsTractId", task.schema.getNames())
         config.wcs_provider = "global"
         connections = UpdateVisitSummaryConnections(config=config)
         self.assertNotIn("wcs_overrides_tract", connections.inputs)
         self.assertIn("wcs_overrides_global", connections.inputs)
         task = UpdateVisitSummaryTask(config=config, initInputs=self.init_inputs)
-        self.assertEqual(task.schema, self.input_schema)
+        self.assertEqual(task.schema.contains(self.input_schema, Schema.IDENTICAL), Schema.IDENTICAL)
 
     def test_photo_calib_provider(self) -> None:
         """Test the photo_calib_provider config's effect on connections."""
@@ -67,20 +67,20 @@ class UpdateVisitSummaryTestCase(unittest.TestCase):
         self.assertNotIn("photo_calib_overrides_tract", connections.inputs)
         self.assertNotIn("photo_calib_overrides_global", connections.inputs)
         task = UpdateVisitSummaryTask(config=config, initInputs=self.init_inputs)
-        self.assertEqual(task.schema, self.input_schema)
+        self.assertEqual(task.schema.contains(self.input_schema, Schema.IDENTICAL), Schema.IDENTICAL)
         config.photo_calib_provider = "tract"
         connections = UpdateVisitSummaryConnections(config=config)
         self.assertIn("photo_calib_overrides_tract", connections.inputs)
         self.assertNotIn("photo_calib_overrides_global", connections.inputs)
         task = UpdateVisitSummaryTask(config=config, initInputs=self.init_inputs)
-        self.assertTrue(task.schema.contains(self.input_schema))
+        self.assertTrue(task.schema.contains(self.input_schema, Schema.IDENTICAL))
         self.assertIn("photoCalibTractId", task.schema.getNames())
         config.photo_calib_provider = "global"
         connections = UpdateVisitSummaryConnections(config=config)
         self.assertNotIn("photo_calib_overrides_tract", connections.inputs)
         self.assertIn("photo_calib_overrides_global", connections.inputs)
         task = UpdateVisitSummaryTask(config=config, initInputs=self.init_inputs)
-        self.assertEqual(task.schema, self.input_schema)
+        self.assertEqual(task.schema.contains(self.input_schema, Schema.IDENTICAL), Schema.IDENTICAL)
 
     def test_background_provider(self) -> None:
         """Test the background_provider config's effect on connections."""
