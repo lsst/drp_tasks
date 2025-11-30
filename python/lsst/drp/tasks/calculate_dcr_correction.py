@@ -72,14 +72,6 @@ class CalculateDcrCorrectionConnections(
         storageClass="SourceCatalog",
         dimensions=("tract", "patch", "skymap", "band"),
     )
-    modelCatalog = pipeBase.connectionTypes.Output(
-        doc="Model catalog of the stacked dcrCorrectionCatalog."
-        "First subtract this model from the coadd template, then add the DCR"
-        " correction.",
-        name="{fakesType}dcr_model_catalog",
-        storageClass="SourceCatalog",
-        dimensions=("tract", "patch", "skymap", "band"),
-    )
     dcrResidual = pipeBase.connectionTypes.Output(
         doc="The template with DCR sources removed, so they can be added back"
         " using the DCR model.",
@@ -303,10 +295,11 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # location, and columns containing the overall flux and fractional flux
         # per subfilter 
         dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
-                                                     effectiveWavelength, bandwidth)
+                                                     results.template_models,
+                                                     effectiveWavelength=effectiveWavelength,
+                                                     bandwidth=bandwidth)
         return pipeBase.Struct(dcrResidual=results.residual,
-                               dcrCorrectionCatalog=dcrCorrectionCatalog,
-                               modelCatalog=results.template_models)
+                               dcrCorrectionCatalog=dcrCorrectionCatalog)
 
     def filter_object_catalog(self, objectCat):
         """Select sources to model from an input catalog.
@@ -355,7 +348,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         cat.defineCentroid(self.centroidName)
         return cat
 
-    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, effectiveWavelength, bandwidth):
+    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, template_models,
+                         effectiveWavelength=None, bandwidth=None):
         """Summary
 
         Parameters
@@ -386,6 +380,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             if srcId not in fluxLookupTable:
                 continue
             models = dcrFpLookupTable[srcId]
+            templateModel = template_models[srcId]
             visits = [visit for visit in models]
             # At this point the subfilter fractions are the same for each visit
             # so we can take the values from the first visit
@@ -397,6 +392,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             src['coord_ra'] = refSrc['coord_ra']
             src['coord_dec'] = refSrc['coord_dec']
             src['base_SdssCentroid_x'], src['base_SdssCentroid_y'] = refSrc.getCentroid()
+            src.setFootprint(templateModel.getFootprint())
 
             for subfilter in range(self.config.dcrNumSubfilters):
                 src[f'subfilterWeight_{subfilter}'] = model[subfilter]['modelFlux']
