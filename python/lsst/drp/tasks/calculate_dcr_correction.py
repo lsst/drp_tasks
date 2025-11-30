@@ -295,7 +295,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # location, and columns containing the overall flux and fractional flux
         # per subfilter 
         dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
-                                                     results.template_models,
+                                                     results.templateFootprints,
                                                      effectiveWavelength=effectiveWavelength,
                                                      bandwidth=bandwidth)
         return pipeBase.Struct(dcrResidual=results.residual,
@@ -348,7 +348,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         cat.defineCentroid(self.centroidName)
         return cat
 
-    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, template_models,
+    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, templateFootprints,
                          effectiveWavelength=None, bandwidth=None):
         """Summary
 
@@ -377,10 +377,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         subfilterEffectiveWavelengths = [np.mean(wl) for wl in dcrGen]
         for refSrc in refCat:
             srcId = refSrc.getId()
-            if srcId not in fluxLookupTable:
+            if srcId not in templateFootprints:
                 continue
             models = dcrFpLookupTable[srcId]
-            templateModel = template_models[srcId]
             visits = [visit for visit in models]
             # At this point the subfilter fractions are the same for each visit
             # so we can take the values from the first visit
@@ -392,7 +391,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             src['coord_ra'] = refSrc['coord_ra']
             src['coord_dec'] = refSrc['coord_dec']
             src['base_SdssCentroid_x'], src['base_SdssCentroid_y'] = refSrc.getCentroid()
-            src.setFootprint(templateModel.getFootprint())
+            src.setFootprint(templateFootprints[srcId])
 
             for subfilter in range(self.config.dcrNumSubfilters):
                 src[f'subfilterWeight_{subfilter}'] = model[subfilter]['modelFlux']
@@ -552,7 +551,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         scaleLookup = {}
         dcrFpLookupTableNew = dcrFpLookupTable.copy()
 
-        template_models = self.initialize_dcr_catalog()
+        template_models = self.initialize_dcr_catalog()  # NOTE: Not used except to make the source record
+        templateFootprints = {}
         fp_ctrl = afwDet.HeavyFootprintCtrl()
         residual = templateCoadd.clone()
         # modelExposure = templateCoadd.clone()
@@ -603,10 +603,11 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             model_mi = templateCoadd[bbox].maskedImage.clone()
             model_mi.image.array = model
             cutout.setFootprint(afwDet.HeavyFootprintF(foot, model_mi, fp_ctrl))
+            templateFootprints[recId] = afwDet.HeavyFootprintF(foot, model_mi, fp_ctrl)
         # return(modelExposure, residual, fluxLookupTable)
         return pipeBase.Struct(residual=residual,
                                fluxLookupTable=fluxLookupTable,
-                               template_models=template_models,
+                               templateFootprints=templateFootprints,
                                )
 
 
