@@ -47,7 +47,7 @@ from lsst.afw.image import ExposureSummaryStats
 from lsst.afw.math import BackgroundList
 from lsst.afw.table import ExposureCatalog, ExposureRecord, SchemaMapper
 from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
-from lsst.geom import Angle, Box2I, SpherePoint, degrees
+from lsst.geom import Angle, Box2D, Box2I, SpherePoint, arcseconds, degrees
 from lsst.meas.astrom.refit_pointing import RefitPointingTask
 from lsst.pex.config import ChoiceField, ConfigurableField, Field, ListField
 from lsst.pipe.base import (
@@ -634,9 +634,18 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
     # Could imagine an option here to say that the original background has not
     # been subtracted from the input exposures, allowing postISRCCD to be used
     # as input exposures.  Can add later if needed.
+    wcs_consistency_threshold = Field(
+        doc=(
+            "Maximum distance (in arcseconds) between the on-sky corners of a ``wcs_provider`` WCS "
+            "and the ``input_summary`` WCS.  When this threshold is exceeded, the WCS is set to None. "
+            "When this is not `None` and there is no input summary WCS, the WCS is also nulled."
+        ),
+        dtype=float,
+        optional=True,
+        default=None,
+    )
     refit_pointing = ConfigurableField(
-        "A subtask for refitting the boresight pointing and orientation, "
-        "and fitting WCS SIP approximations.",
+        "A subtask for refitting the boresight pointing and orientation, and fitting WCS SIP approximations.",
         target=RefitPointingTask,
     )
     camera_dimensions = ListField(
@@ -650,13 +659,15 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
         default=True,
     )
     do_write_visit_geometry = Field(
-        "Whether to write refit-pointing regions that can be used to update " "butler dimension records.",
+        "Whether to write refit-pointing regions that can be used to update butler dimension records.",
         dtype=bool,
         default=False,
     )
 
     def validate(self):
         super().validate()
+        if self.wcs_consistency_threshold is not None and self.wcs_provider == "input_summary":
+            raise ValueError("Cannot check for WCS consistency if there is only one WCS to consider.")
         if self.do_write_visit_geometry and not self.do_refit_pointing:
             raise ValueError("Cannot write visit_geometry without refitting the pointing.")
 
@@ -698,6 +709,15 @@ class UpdateVisitSummaryTask(PipelineTask):
             self.schema.addField("wcsTractId", type="L", doc="ID of the tract that provided the WCS.")
         elif "healpix" in self.config.wcs_provider:
             self.schema.addField("wcsSkypixId", type="L", doc="ID of the skypix pixel that provided the WCS.")
+        if self.config.wcs_provider != "input_summary":
+            self.schema.addField(
+                "wcs_corner_max_offset",
+                type="Angle",
+                doc=(
+                    "Maximum on-sky difference between the input-summary WCS and the wcs_provider WCS "
+                    "at detector corners."
+                ),
+            )
         if self.config.photo_calib_provider == "tract":
             self.schema.addField(
                 "photoCalibTractId",
@@ -707,6 +727,11 @@ class UpdateVisitSummaryTask(PipelineTask):
         if self.config.do_refit_pointing:
             self.makeSubtask("refit_pointing", schema=self.schema)
         self.output_summary_schema = ExposureCatalog(self.schema)
+        self._wcs_consistency_threshold = (
+            self.config.wcs_consistency_threshold * arcseconds
+            if self.config.wcs_consistency_threshold is not None
+            else None
+        )
 
     def runQuantum(
         self,
@@ -793,7 +818,7 @@ class UpdateVisitSummaryTask(PipelineTask):
         psf_overrides: ExposureCatalog,
         psf_star_catalog: astropy.table.Table,
         ap_corr_overrides: ExposureCatalog,
-        camera: Camera,
+        camera: Camera | None = None,
         photo_calib_overrides: PossiblyMultipleInput | None = None,
         wcs_overrides: PossiblyMultipleInput | None = None,
         background_originals: Mapping[int, DeferredDatasetHandle] | None = None,
@@ -835,7 +860,7 @@ class UpdateVisitSummaryTask(PipelineTask):
         ap_corr_overrides : `lsst.afw.table.ExposureCatalog`
             Catalog with attached `lsst.afw.image.ApCorrMap` objects that
             supersede the input catalog's aperture corrections.
-        camera : `lsst.afw.cameraGeom.Camera`
+        camera : `lsst.afw.cameraGeom.Camera`, optional
             Camera geometry.
         photo_calib_overrides : `PossiblyMultipleInput`, optional
             Catalog wrappers with attached `lsst.afw.image.PhotoCalib`
@@ -906,7 +931,7 @@ class UpdateVisitSummaryTask(PipelineTask):
                     output_record["wcsTractId"] = wcs_region
                 elif "healpix" in self.config.wcs_provider:
                     output_record["wcsSkypixId"] = wcs_region
-                output_record.setWcs(wcs)
+                wcs = self._finish_wcs_assignment(input_record, output_record, wcs)
                 self.compute_summary_stats.update_wcs_stats(
                     summary_stats, wcs, bbox, output_record.getVisitInfo()
                 )
@@ -985,3 +1010,29 @@ class UpdateVisitSummaryTask(PipelineTask):
             )
             result.visit_geometry = refit_pointing_result.regions
         return result
+
+    def _finish_wcs_assignment(
+        self, input_record: ExposureRecord, output_record: ExposureRecord, updated: SkyWcs
+    ) -> SkyWcs | None:
+        preliminary = input_record.getWcs()
+        if preliminary is None:
+            # We can't check consistency; don't trust the updated WCS.
+            output_record.setWcs(None)
+            return None
+        if updated is None:
+            # At present we assume all downstream code is "updated WCS or
+            # bust", because we know some code (e.g. coaddition) is, and we
+            # don't have a good way to mark a WCS as fallback preliminary
+            # downstream.
+            output_record.setWcs(None)
+            return None
+        pixel_corners = Box2D(input_record.getBBox()).getCorners()
+        preliminary_sky_corners = preliminary.pixelToSky(pixel_corners)
+        updated_sky_corners = updated.pixelToSky(pixel_corners)
+        max_offset = max(a.separation(b) for a, b in zip(preliminary_sky_corners, updated_sky_corners))
+        output_record["wcs_corner_max_offset"] = max_offset
+        if self._wcs_consistency_threshold is not None and max_offset > self._wcs_consistency_threshold:
+            output_record.setWcs(None)
+            return None
+        output_record.setWcs(updated)
+        return updated
