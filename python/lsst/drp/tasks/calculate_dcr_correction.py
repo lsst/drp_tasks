@@ -9,7 +9,7 @@ import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
 import lsst.geom as geom
-from lsst.ip.diffim.dcrModel import calculateDcr, wavelengthGenerator
+from lsst.ip.diffim.dcrModel import calculateDcr, wavelengthGenerator, fitThroughput
 import lsst.meas.base as measBase
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
@@ -179,7 +179,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         inputData = butlerQC.get(inputRefs)
         # Construct skyInfo expected by run
         skyMap = inputData.pop("skyMap")
-        throughput = fit_throughput(inputData.pop("throughput"))
+        throughput = fitThroughput(inputData.pop("throughput"))
         outputDataId = butlerQC.quantum.dataId
 
         skyInfo = makeSkyInfo(
@@ -612,18 +612,6 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                fluxLookupTable=fluxLookupTable,
                                template_models=template_models,
                                )
-
-
-def fit_throughput(throughput):
-    wl = np.asarray(throughput["wavelength"])
-    th = np.asarray(throughput["throughput"])
-    effectiveWavelength = np.sum(wl*th)/np.sum(th)
-    inBand = th >= np.max(th)/2
-
-    bandwidth = np.max(wl[inBand]) - np.min(wl[inBand])
-    return pipeBase.Struct(effectiveWavelength=effectiveWavelength,
-                           bandwidth=bandwidth,
-                           )
 
 
 def fit_footprints(model, image):
