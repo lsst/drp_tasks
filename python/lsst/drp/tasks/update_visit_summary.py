@@ -698,6 +698,12 @@ class UpdateVisitSummaryTask(PipelineTask):
             self.schema.addField("wcsTractId", type="L", doc="ID of the tract that provided the WCS.")
         elif "healpix" in self.config.wcs_provider:
             self.schema.addField("wcsSkypixId", type="L", doc="ID of the skypix pixel that provided the WCS.")
+        if self.config.wcs_provider != "input_summary":
+            self.schema.addField(
+                "wcsRecovered",
+                type="Flag",
+                doc="Flag set if the WCS is not None but the input summary's WCS was None.",
+            )
         if self.config.photo_calib_provider == "tract":
             self.schema.addField(
                 "photoCalibTractId",
@@ -910,6 +916,8 @@ class UpdateVisitSummaryTask(PipelineTask):
                 self.compute_summary_stats.update_wcs_stats(
                     summary_stats, wcs, bbox, output_record.getVisitInfo()
                 )
+                if wcs is not None and input_record.getWcs() is None:
+                    output_record["wcsRecovered"] = True
             else:
                 wcs = input_record.getWcs()
 
