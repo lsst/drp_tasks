@@ -659,6 +659,18 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
         super().validate()
         if self.do_write_visit_geometry and not self.do_refit_pointing:
             raise ValueError("Cannot write visit_geometry without refitting the pointing.")
+        if (
+            self.do_refit_pointing and self.wcs_provider == "input_summary"
+            and self.refit_pointing.pointing_rejection_flag == "wcsRecovered"
+        ):
+            raise ValueError(
+                "The 'wcsRecovered' flag will not be added (since WCSs are coming from the input "
+                "visit summary) but refit_pointing is configured to use that flag."
+            )
+
+    def setDefaults(self):
+        super().setDefaults()
+        self.refit_pointing.pointing_rejection_input_flag = "wcsRecovered"
 
 
 class UpdateVisitSummaryTask(PipelineTask):
