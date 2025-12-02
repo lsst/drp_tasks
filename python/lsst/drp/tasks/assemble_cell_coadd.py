@@ -323,6 +323,20 @@ class AssembleCellCoaddTask(PipelineTask):
             self.makeSubtask("scale_zero_point")
 
         self.psf_warper = afwMath.Warper.fromConfig(self.config.psf_warper)
+        if (warping_kernel_name := self.config.psf_warper.warpingKernelName.lower()).startswith("lanczos"):
+            psf_padding = 2 * int(warping_kernel_name.lstrip("lanczos")) - 1
+            self.log.debug(
+                "Padding PSF image by %d pixels since the warping kernel is %s.",
+                psf_padding,
+                self.config.psf_warper.warpingKernelName,
+            )
+        else:
+            psf_padding = 10
+            self.log.info(
+                "Padding PSF image by %d pixels since the warping kernel is not Lanczos.",
+                psf_padding,
+            )
+        self.psf_padding = psf_padding
 
     def runQuantum(self, butlerQC, inputRefs, outputRefs):
         # Docstring inherited.
@@ -790,8 +804,13 @@ class AssembleCellCoaddTask(PipelineTask):
                     undistorted_psf_im.getDimensions(),
                 ), "PSF image does not share the coordinates of the 'calexp'"
 
-                # Convert the PSF image from Image to MaskedImage.
-                undistorted_psf_maskedImage = afwImage.MaskedImageD(image=undistorted_psf_im)
+                # Convert the PSF image from Image to MaskedImage and
+                # zero-pad the image.
+                undistorted_psf_bbox = undistorted_psf_im.getBBox()
+                undistorted_psf_maskedImage = afwImage.MaskedImageD(
+                    undistorted_psf_bbox.dilatedBy(self.psf_padding)
+                )
+                undistorted_psf_maskedImage.image[undistorted_psf_bbox].array[:, :] = undistorted_psf_im.array
                 # TODO: In DM-43585, use the variance plane value from noise.
                 undistorted_psf_maskedImage.variance += 1.0  # Set variance to 1
 
