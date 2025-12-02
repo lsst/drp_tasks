@@ -284,6 +284,13 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         for _, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             self.checkSortOrder(singleCellCoadd.inputs)
 
+    def test_psf_normalization(self):
+        """Check that the sum of PSF images is close to 1."""
+        self.runTask()
+        for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
+            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
+                self.assertFloatsAlmostEqual(singleCellCoadd.psf_image.array.sum(), 1.0, rtol=None, atol=1e-7)
+
 
 class MyMemoryTestCase(lsst.utils.tests.MemoryTestCase):
     pass
