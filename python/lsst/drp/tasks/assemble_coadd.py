@@ -1453,13 +1453,13 @@ class CompareWarpAssembleCoaddConfig(
         self.assembleStaticSkyModel.statistic = "MEANCLIP"
         self.assembleStaticSkyModel.sigmaClip = 2.5
         self.assembleStaticSkyModel.clipIter = 3
-        self.assembleStaticSkyModel.calcErrorFromInputVariance = False
+        self.assembleStaticSkyModel.calcErrorFromInputVariance = True
         self.assembleStaticSkyModel.doWrite = False
         self.detect.doTempLocalBackground = False
         self.detect.reEstimateBackground = False
         self.detect.returnOriginalFootprints = False
         self.detect.thresholdPolarity = "both"
-        self.detect.thresholdValue = 5
+        self.detect.thresholdValue = 7.5
         self.detect.minPixels = 4
         self.detect.isotropicGrow = True
         self.detect.thresholdType = "pixel_stdev"
@@ -1468,10 +1468,11 @@ class CompareWarpAssembleCoaddConfig(
         # Explicitly restating because ratio with detect.nSigmaToGrow matters
         self.detectTemplate.nSigmaToGrow = 2.4
         # Higher thresholds make smaller and fewer protected zones around
-        # bright stars. Sources with snr < 50 tend to subtract OK empirically
-        self.detectTemplate.thresholdValue = 50
-        self.detectTemplate.doTempLocalBackground = False
-        self.detectTemplate.reEstimateBackground = False
+        # bright stars. Sources with snr < 300 tend to subtract OK empirically
+        self.detectTemplate.thresholdValue = 300
+        self.detectTemplate.doTempLocalBackground = True
+        self.detectTemplate.reEstimateBackground = True
+        self.detectTemplate.background.useApprox = False
         self.detectTemplate.returnOriginalFootprints = False
 
     def validate(self):
