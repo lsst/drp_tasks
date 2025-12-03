@@ -1764,7 +1764,9 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         templateCoadd.mask.clearAllMaskPlanes()
 
         if self.config.doPreserveContainedBySource:
-            templateFootprints = self.detectTemplate.detectFootprints(templateCoadd)
+            sacrificeToDetection = templateCoadd.clone()
+            templateFootprints = self.detectTemplate.detectFootprints(sacrificeToDetection)
+            del sacrificeToDetection
         else:
             templateFootprints = None
 
