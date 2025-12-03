@@ -680,10 +680,6 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
                 "visit summary) but refit_pointing is configured to use that flag."
             )
 
-    def setDefaults(self):
-        super().setDefaults()
-        self.refit_pointing.pointing_rejection_input_flag = "wcsRecovered"
-
 
 class UpdateVisitSummaryTask(PipelineTask):
     """A pipeline task that creates a new visit-summary table after all
