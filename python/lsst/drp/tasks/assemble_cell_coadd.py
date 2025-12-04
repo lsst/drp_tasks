@@ -623,6 +623,11 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
 
             removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
+            # Instead of using self.config.bad_mask_planes, we explicitly
+            # ask statsCtrl which pixels are going to be ignored/rejected.
+            rejected = afwImage.Mask.getPlaneBitMask(
+                ["CLIPPED", "REJECTED"] + afwImage.Mask.interpret(statsCtrl.getAndMask()).split(",")
+            )
 
             # Compute the weight for each CCD in the warp from the visitSummary
             # or from the warp itself, if not provided. Computing the weight
@@ -886,6 +891,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
                     varArray[:] = np.where(varArray > 0, varArray, np.inf)
+
+            afwImage.Mask.addMaskPlane("INEXACT_PSF")
+            cell_masked_image.mask.array[
+                (cell_masked_image.mask.array & rejected) > 0
+            ] |= cell_masked_image.mask.getPlaneBitMask("INEXACT_PSF")
 
             image_planes = OwnedImagePlanes.from_masked_image(
                 masked_image=cell_masked_image,
