@@ -1891,7 +1891,10 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         returnSpanSetList : `list` [`lsst.afw.geom.SpanSet`]
             List of SpanSets with artifacts.
         """
-        badPixelMask = exp.mask.getPlaneBitMask(self.config.prefilterArtifactsMaskPlanes)
+        existingMaskPlanes = [
+            m for m in self.config.prefilterArtifactsMaskPlanes if m in exp.mask.getMaskPlaneDict()
+        ]
+        badPixelMask = exp.mask.getPlaneBitMask(existingMaskPlanes)
         goodArr = (exp.mask.array & badPixelMask) == 0
         returnSpanSetList = []
         bbox = exp.getBBox()
