@@ -1016,9 +1016,14 @@ class UpdateVisitSummaryTask(PipelineTask):
     ) -> SkyWcs | None:
         preliminary = input_record.getWcs()
         if preliminary is None:
-            # We can't check consistency; don't trust the updated WCS.
-            output_record.setWcs(None)
-            return None
+            # We can't compare to preliminary, so shortcut early.
+            if self._wcs_consistency_threshold is not None:
+                # We can't check consistency, so don't trust the updated WCS.
+                output_record.setWcs(None)
+                return None
+            else:
+                output_record.setWcs(updated)
+                return updated
         if updated is None:
             # At present we assume all downstream code is "updated WCS or
             # bust", because we know some code (e.g. coaddition) is, and we
