@@ -623,6 +623,11 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
 
             removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
+            # Instead of using self.config.bad_mask_planes, we explicitly
+            # ask statsCtrl which pixels are going to be ignored/rejected.
+            rejected = afwImage.Mask.getPlaneBitMask(
+                ["CLIPPED", "REJECTED"] + afwImage.Mask.interpret(statsCtrl.getAndMask()).split(",")
+            )
 
             # Compute the weight for each CCD in the warp from the visitSummary
             # or from the warp itself, if not provided. Computing the weight
@@ -692,8 +697,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 overlap_fraction = (detector_map[inner_bbox].array == ccd_row["ccd"]).mean()
                 assert -1e-4 < overlap_fraction < 1.0001, "Overlap fraction is not within [0, 1]."
                 if (overlap_fraction < self.config.min_overlap_fraction) or (overlap_fraction <= 0.0):
-                    self.log.log(
-                        self.log.DEBUG if overlap_fraction == 0.0 else self.log.INFO,
+                    self.log.debug(
                         "Skipping %s in cell %s because it had only %.3f < %.3f fractional overlap.",
                         warp_input.dataId,
                         cellInfo.index,
@@ -751,7 +755,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 psf_shape_flag = True
                 psf_eval_point = None
                 try:
-                    if overlap_fraction < 1.0:
+                    # The `if` branch is buggy. `dest_polygon` is technically
+                    # out of scope, but Python does not raise an error.
+                    # TODO: Fix this properly in DM-53479, but sweep it under
+                    # the rug for now.
+                    if overlap_fraction < 0.5:
                         psf_eval_point = dest_polygon.intersectionSingle(
                             geom.Box2D(inner_bbox)
                         ).calculateCenter()
@@ -883,6 +891,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
                     varArray[:] = np.where(varArray > 0, varArray, np.inf)
+
+            afwImage.Mask.addMaskPlane("INEXACT_PSF")
+            cell_masked_image.mask.array[
+                (cell_masked_image.mask.array & rejected) > 0
+            ] |= cell_masked_image.mask.getPlaneBitMask("INEXACT_PSF")
 
             image_planes = OwnedImagePlanes.from_masked_image(
                 masked_image=cell_masked_image,
