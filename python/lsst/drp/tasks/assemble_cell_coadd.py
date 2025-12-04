@@ -750,7 +750,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 psf_shape_flag = True
                 psf_eval_point = None
                 try:
-                    if overlap_fraction < 1.0:
+                    # The `if` branch is buggy. `dest_polygon` is technically
+                    # out of scope, but Python does not raise an error.
+                    # TODO: Fix this properly in DM-53479, but sweep it under
+                    # the rug for now.
+                    if overlap_fraction < 0.5:
                         psf_eval_point = dest_polygon.intersectionSingle(
                             geom.Box2D(inner_bbox)
                         ).calculateCenter()
