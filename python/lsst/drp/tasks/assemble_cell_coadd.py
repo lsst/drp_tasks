@@ -692,8 +692,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 overlap_fraction = (detector_map[inner_bbox].array == ccd_row["ccd"]).mean()
                 assert -1e-4 < overlap_fraction < 1.0001, "Overlap fraction is not within [0, 1]."
                 if (overlap_fraction < self.config.min_overlap_fraction) or (overlap_fraction <= 0.0):
-                    self.log.log(
-                        self.log.DEBUG if overlap_fraction == 0.0 else self.log.INFO,
+                    self.log.debug(
                         "Skipping %s in cell %s because it had only %.3f < %.3f fractional overlap.",
                         warp_input.dataId,
                         cellInfo.index,
