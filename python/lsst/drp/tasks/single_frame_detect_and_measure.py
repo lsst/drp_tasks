@@ -133,6 +133,9 @@ class SingleFrameDetectAndMeasureConfig(
             "ext_shapeHSM_HsmSourceMoments",
             "ext_shapeHSM_HsmPsfMoments",
             "base_GaussianFlux",
+            "base_LocalPhotoCalib",
+            "base_LocalBackground",
+            "base_LocalWcs",
             "base_PsfFlux",
             "base_CircularApertureFlux",
             "base_ClassificationSizeExtendedness",
@@ -270,6 +273,10 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
                 exposure when detecting ``sources``, in the same nJy units as
                 ``exposure``. (`lsst.afw.math.BackgroundList`)
         """
+        if exposure.apCorrMap is None:
+            raise pipeBase.NoWorkFound("Exposure is missing an aperture correction map.")
+        if exposure.wcs is None:
+            raise pipeBase.NoWorkFound("Exposure is missing a WCS.")
         if result is None:
             result = pipeBase.Struct()
         if id_generator is None:
