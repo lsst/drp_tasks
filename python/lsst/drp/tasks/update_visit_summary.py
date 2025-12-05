@@ -41,14 +41,18 @@ import astropy.table
 import numpy as np
 
 import lsst.pipe.base.connectionTypes as cT
+from lsst.afw.cameraGeom import Camera
 from lsst.afw.geom import SkyWcs
 from lsst.afw.image import ExposureSummaryStats
 from lsst.afw.math import BackgroundList
 from lsst.afw.table import ExposureCatalog, ExposureRecord, SchemaMapper
 from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
-from lsst.geom import Angle, Box2I, SpherePoint, degrees
-from lsst.pex.config import ChoiceField, ConfigurableField, Field
+from lsst.geom import Angle, Box2D, Box2I, SpherePoint, arcseconds, degrees
+from lsst.meas.astrom.refit_pointing import RefitPointingTask
+from lsst.pex.config import ChoiceField, ConfigurableField, Field, ListField
 from lsst.pipe.base import (
+    AlgorithmError,
+    AnnotatedPartialOutputsError,
     InputQuantizedConnection,
     InvalidQuantumError,
     OutputQuantizedConnection,
@@ -355,6 +359,13 @@ class UpdateVisitSummaryConnections(
         "photoCalibName": "fgcm",
     },
 ):
+    camera = cT.PrerequisiteInput(
+        doc="Camera geometry.",
+        name="camera",
+        dimensions=("instrument",),
+        storageClass="Camera",
+        isCalibration=True,
+    )
     sky_map = cT.Input(
         doc="Description of tract/patch geometry.",
         name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
@@ -472,6 +483,12 @@ class UpdateVisitSummaryConnections(
         dimensions=("instrument", "visit"),
         storageClass="ExposureCatalog",
     )
+    visit_geometry = cT.Output(
+        doc="Updated visit[, detector] regions that can be used to update butler dimensions records.",
+        name="visit_geometry",
+        dimensions=("instrument", "visit"),
+        storageClass="VisitGeometry",
+    )
 
     def __init__(self, *, config: UpdateVisitSummaryConfig | None = None):
         super().__init__(config=config)
@@ -512,6 +529,12 @@ class UpdateVisitSummaryConnections(
                 pass
             case bad:
                 raise ValueError(f"Invalid value background_provider={bad!r}; config was not validated.")
+        if self.config.do_refit_pointing:
+            self.camera = dataclasses.replace(self.camera, dimensions=config.camera_dimensions)
+        else:
+            del self.camera
+        if not self.config.do_write_visit_geometry:
+            del self.visit_geometry
 
 
 class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVisitSummaryConnections):
@@ -611,6 +634,42 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
     # Could imagine an option here to say that the original background has not
     # been subtracted from the input exposures, allowing postISRCCD to be used
     # as input exposures.  Can add later if needed.
+    wcs_consistency_threshold = Field(
+        doc=(
+            "Maximum distance (in arcseconds) between the on-sky corners of a ``wcs_provider`` WCS "
+            "and the ``input_summary`` WCS.  When this threshold is exceeded, the WCS is set to None. "
+            "When this is not `None` and there is no input summary WCS, the WCS is also nulled."
+        ),
+        dtype=float,
+        optional=True,
+        default=None,
+    )
+    refit_pointing = ConfigurableField(
+        "A subtask for refitting the boresight pointing and orientation, and fitting WCS SIP approximations.",
+        target=RefitPointingTask,
+    )
+    camera_dimensions = ListField(
+        "The dimensions of the 'camera' prerequisite input connection.",
+        dtype=str,
+        default=["instrument"],
+    )
+    do_refit_pointing = Field(
+        "Whether to re-fit the pointing model and add TAN-SIP WCS approximations.",
+        dtype=bool,
+        default=True,
+    )
+    do_write_visit_geometry = Field(
+        "Whether to write refit-pointing regions that can be used to update butler dimension records.",
+        dtype=bool,
+        default=False,
+    )
+
+    def validate(self):
+        super().validate()
+        if self.wcs_consistency_threshold is not None and self.wcs_provider == "input_summary":
+            raise ValueError("Cannot check for WCS consistency if there is only one WCS to consider.")
+        if self.do_write_visit_geometry and not self.do_refit_pointing:
+            raise ValueError("Cannot write visit_geometry without refitting the pointing.")
 
 
 class UpdateVisitSummaryTask(PipelineTask):
@@ -650,13 +709,29 @@ class UpdateVisitSummaryTask(PipelineTask):
             self.schema.addField("wcsTractId", type="L", doc="ID of the tract that provided the WCS.")
         elif "healpix" in self.config.wcs_provider:
             self.schema.addField("wcsSkypixId", type="L", doc="ID of the skypix pixel that provided the WCS.")
+        if self.config.wcs_provider != "input_summary":
+            self.schema.addField(
+                "wcs_corner_max_offset",
+                type="Angle",
+                doc=(
+                    "Maximum on-sky difference between the input-summary WCS and the wcs_provider WCS "
+                    "at detector corners."
+                ),
+            )
         if self.config.photo_calib_provider == "tract":
             self.schema.addField(
                 "photoCalibTractId",
                 type="L",
                 doc="ID of the tract that provided the PhotoCalib.",
             )
+        if self.config.do_refit_pointing:
+            self.makeSubtask("refit_pointing", schema=self.schema)
         self.output_summary_schema = ExposureCatalog(self.schema)
+        self._wcs_consistency_threshold = (
+            self.config.wcs_consistency_threshold * arcseconds
+            if self.config.wcs_consistency_threshold is not None
+            else None
+        )
 
     def runQuantum(
         self,
@@ -722,16 +797,28 @@ class UpdateVisitSummaryTask(PipelineTask):
                         "constraint."
                     )
         # Actually run the task and write the results.
-        outputs = self.run(**inputs)
-        butlerQC.put(outputs, outputRefs)
+        result = Struct()
+        try:
+            self.run(**inputs, result=result)
+        except AlgorithmError as e:
+            error = AnnotatedPartialOutputsError.annotate(
+                e, self, result.output_summary_catalog, log=self.log
+            )
+            butlerQC.put(result, outputRefs)
+            raise error from e
+
+        butlerQC.put(result, outputRefs)
 
     def run(
         self,
+        *,
+        result: Struct,
         input_summary_catalog: ExposureCatalog,
         input_exposures: Mapping[int, DeferredDatasetHandle],
         psf_overrides: ExposureCatalog,
         psf_star_catalog: astropy.table.Table,
         ap_corr_overrides: ExposureCatalog,
+        camera: Camera | None = None,
         photo_calib_overrides: PossiblyMultipleInput | None = None,
         wcs_overrides: PossiblyMultipleInput | None = None,
         background_originals: Mapping[int, DeferredDatasetHandle] | None = None,
@@ -741,6 +828,16 @@ class UpdateVisitSummaryTask(PipelineTask):
 
         Parameters
         ----------
+        result : `lsst.pipe.base.Struct`
+            Output struct to modify in-place.  On successful return, this will
+            have the following attributes:
+
+            - ``output_summary_catalog`` (`lsst.afw.table.ExposureCatalog`)
+                The output visit summary catalog.
+            - ``visit_geometry`` (`lsst.obs.base.visit_geometry.VisitGeometry`)
+                Updated visit[, detector] regions that can be used to update
+                butler dimension records.
+
         input_summary_catalog : `lsst.afw.table.ExposureCatalog`
             Input catalog.  Each row in this catalog will be used to produce
             a row in the output catalog.  Any override parameter that is `None`
@@ -763,6 +860,8 @@ class UpdateVisitSummaryTask(PipelineTask):
         ap_corr_overrides : `lsst.afw.table.ExposureCatalog`
             Catalog with attached `lsst.afw.image.ApCorrMap` objects that
             supersede the input catalog's aperture corrections.
+        camera : `lsst.afw.cameraGeom.Camera`, optional
+            Camera geometry.
         photo_calib_overrides : `PossiblyMultipleInput`, optional
             Catalog wrappers with attached `lsst.afw.image.PhotoCalib`
             objects that supersede the input catalog's photometric
@@ -788,8 +887,8 @@ class UpdateVisitSummaryTask(PipelineTask):
 
         Returns
         -------
-        output_summary_catalog : `lsst.afw.table.ExposureCatalog`
-            Output visit summary catalog.
+        result : `lsst.pipe.base.Struct`
+            The same output struct passed in.
 
         Notes
         -----
@@ -800,11 +899,11 @@ class UpdateVisitSummaryTask(PipelineTask):
         passing an override parameter at all will instead pass through the
         original component and values from the input catalog unchanged.
         """
-        output_summary_catalog = ExposureCatalog(self.schema)
-        output_summary_catalog.setMetadata(input_summary_catalog.getMetadata())
+        result.output_summary_catalog = ExposureCatalog(self.schema)
+        result.output_summary_catalog.setMetadata(input_summary_catalog.getMetadata())
         for input_record in input_summary_catalog:
             detector_id = input_record.getId()
-            output_record = output_summary_catalog.addNew()
+            output_record = result.output_summary_catalog.addNew()
 
             # Make a new ExposureSummaryStats from the input record.  These
             # might be full of NaNs if the summary stats were not computed
@@ -832,7 +931,7 @@ class UpdateVisitSummaryTask(PipelineTask):
                     output_record["wcsTractId"] = wcs_region
                 elif "healpix" in self.config.wcs_provider:
                     output_record["wcsSkypixId"] = wcs_region
-                output_record.setWcs(wcs)
+                wcs = self._finish_wcs_assignment(input_record, output_record, wcs)
                 self.compute_summary_stats.update_wcs_stats(
                     summary_stats, wcs, bbox, output_record.getVisitInfo()
                 )
@@ -904,4 +1003,41 @@ class UpdateVisitSummaryTask(PipelineTask):
             summary_stats.update_record(output_record)
             del exposure
 
-        return Struct(output_summary_catalog=output_summary_catalog)
+        if self.config.do_refit_pointing:
+            refit_pointing_result = self.refit_pointing.run(
+                catalog=result.output_summary_catalog,
+                camera=camera,
+            )
+            result.visit_geometry = refit_pointing_result.regions
+        return result
+
+    def _finish_wcs_assignment(
+        self, input_record: ExposureRecord, output_record: ExposureRecord, updated: SkyWcs
+    ) -> SkyWcs | None:
+        preliminary = input_record.getWcs()
+        if preliminary is None:
+            # We can't compare to preliminary, so shortcut early.
+            if self._wcs_consistency_threshold is not None:
+                # We can't check consistency, so don't trust the updated WCS.
+                output_record.setWcs(None)
+                return None
+            else:
+                output_record.setWcs(updated)
+                return updated
+        if updated is None:
+            # At present we assume all downstream code is "updated WCS or
+            # bust", because we know some code (e.g. coaddition) is, and we
+            # don't have a good way to mark a WCS as fallback preliminary
+            # downstream.
+            output_record.setWcs(None)
+            return None
+        pixel_corners = Box2D(input_record.getBBox()).getCorners()
+        preliminary_sky_corners = preliminary.pixelToSky(pixel_corners)
+        updated_sky_corners = updated.pixelToSky(pixel_corners)
+        max_offset = max(a.separation(b) for a, b in zip(preliminary_sky_corners, updated_sky_corners))
+        output_record["wcs_corner_max_offset"] = max_offset
+        if self._wcs_consistency_threshold is not None and max_offset > self._wcs_consistency_threshold:
+            output_record.setWcs(None)
+            return None
+        output_record.setWcs(updated)
+        return updated
