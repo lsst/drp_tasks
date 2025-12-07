@@ -596,6 +596,46 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         scales = [scale/image_fp['modelFlux'] for scale in scaleFit.x]
         return scales
 
+    @staticmethod
+    def stacked_fps(fp_list, normalize=True):
+        output_list = []
+        for visit in fp_list:
+            img = fp_list[visit].getFootprint().extractImage().array
+            # for cutouts /modelFlux, not for the psf
+            if normalize:
+                output_list.append(img/fp_list[visit]['modelFlux'])
+            else:
+                output_list.append(img)
+
+        return np.vstack(output_list)
+
+    def simultaneus_fit(self, image_fps_list, psf_fps_list):
+
+        # scales0 = [image_fp['modelFlux']*psf_fp['modelFlux'] for psf_fp in psf_fps]
+        nSubfilters = self.config.dcrNumSubfilters
+        scales0 = [1/nSubfilters]*nSubfilters  # starting point
+
+        img = self.stacked_fps(image_fps_list, normalize=True)
+
+        psf_arrays = [self.stacked_fps(psf_fps_list[subfilter], normalize=False) for subfilter in range(nSubfilters)]
+        # img = image_fp.getFootprint().extractImage().array
+        # psf_arrays = [psf.getFootprint().extractImage().array for psf in psf_fps]
+
+        def minimize_residual(scales):
+            residual = img.copy()
+            for psf, scale in zip(psf_arrays, scales):
+                # ValueError: operands could not be broadcast together with shapes (175,35) (35,35) (175,35)
+                # need (175, 35)
+                residual -= scale*psf
+            return np.std(residual)
+        # FIX THIS
+        minFluxFit = self.config.minimumModelFraction  # *image_fp['modelFlux']
+        maxFluxFit = self.config.maximumModelFraction  # *image_fp['modelFlux']
+        scaleFit = least_squares(minimize_residual, scales0,
+                                 bounds=[[minFluxFit]*nSubfilters, [maxFluxFit]*nSubfilters])
+        scales = [scale for scale in scaleFit.x]
+        return scales
+
     def calculateTemplateResidual(self, templateCoadd, dcrFpLookupTable, cutoutLookupTable):
         inputs = templateCoadd.getInfo().getCoaddInputs()
         weightLookup = {}
@@ -612,12 +652,33 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # modelExposure = templateCoadd.clone()
         # modelExposure.image.array *= 0
         fluxLookupTable = {}
+        # record, for loop: visit, subfilter, need lists over subfilter
         for recId in dcrFpLookupTable:
-            scales = []
-            for visit in dcrFpLookupTable[recId]:
-                scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
-            recScales = np.median(scales, axis=0)
+            # scales = []
+            # subfilter_psf_list = [[dcrFpLookupTable[recId][visit][subfilter] for visit in
+            #                        dcrFpLookupTable[recId]] for subfilter in
+            #                       range(self.config.dcrNumSubfilters)]
+            subfilter_psf_list = []
+            for subfilter in range(self.config.dcrNumSubfilters):
+                singleDict = {}
+                for visit in dcrFpLookupTable[recId]:
+                    singleDict["visit"] = dcrFpLookupTable[recId][visit][subfilter]
+                subfilter_psf_list.append(singleDict)
+            # stack image + stack subfilter psf
+            # NORMALIZATION
+            recScales = self.simultaneus_fit(cutoutLookupTable[recId], subfilter_psf_list)
+
+            # for visit in dcrFpLookupTable[recId]:
+            #     scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
+            # recScales = np.median(scales, axis=0)
             scalesSingle = recScales/np.sum(recScales)
+
+            # ORIGINAL: Per-Visit Fitting
+            # scales = []
+            # for visit in dcrFpLookupTable[recId]:
+            #     scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
+            # recScales = np.median(scales, axis=0)
+            # scalesSingle = recScales/np.sum(recScales)
             # Update the modelFlux entries to be the same for all visits
             # for each record
             for visit in dcrFpLookupTableNew[recId]:
