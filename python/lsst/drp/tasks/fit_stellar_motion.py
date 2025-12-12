@@ -261,6 +261,9 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
         """
         # Load needed columns for associated sources.
         starSources = starSourceRef.get(parameters={"columns": ["visit", "sourceId", "obj_index"]})
+        if not starSources:
+            raise pipeBase.NoWorkFound("No isolated stars found in this region.")
+
         starSources.add_index("sourceId")
 
         # Load reference objects.
