@@ -259,15 +259,17 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             dcrFpLookupTable[recId] = {}
             cutoutLookupTable[recId] = {}
             recordVisitCount[recId] = 0
+        bad_psf_threshold = 0.2
         for warpRef in warpRefList:
             visit = warpRef.dataId['visit']
             warp = warpRef.get()
             psf_metric, psf_gaussian = self.check_psf(warp)
-            bad_psf_threshold = 0.2
             if psf_metric > bad_psf_threshold:
                 self.log.info("Skipping visit %d due to bad PSF fit (metric %f > %f threshold)",
                               visit, psf_metric, bad_psf_threshold)
                 continue
+            else:
+                self.log.info("Using visit %d with PSF fit metric %f", visit, psf_metric)
 
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
