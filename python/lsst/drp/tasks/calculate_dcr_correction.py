@@ -365,7 +365,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             xc += shift[1]
             yc += shift[0]
             subfilter_img = self.create_psf_image_in_bbox(psf_gaussian, psf_bbox, xc, yc).array
-            fit_img += subfilter_img.array
+            fit_img += subfilter_img
 
         windowFunction = np.outer(hann(self.config.footprintSize), hann(self.config.footprintSize))
         windowFunction /= np.max(windowFunction)
