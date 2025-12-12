@@ -1,6 +1,5 @@
 
 import numpy as np
-from scipy import ndimage
 from scipy.optimize import least_squares
 from scipy.signal.windows import hann
 
@@ -10,7 +9,6 @@ import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
 import lsst.geom as geom
 from lsst.ip.diffim.dcrModel import calculateDcr, wavelengthGenerator, fitThroughput
-from lsst.ip.diffim.utils import getPsfFwhm
 import lsst.meas.base as measBase
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
@@ -263,13 +261,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             recordVisitCount[recId] = 0
         for warpRef in warpRefList:
             visit = warpRef.dataId['visit']
-            detector = warpRef.dataId['detector']
             warp = warpRef.get()
             psf_metric, psf_gaussian = self.check_psf(warp)
             bad_psf_threshold = 0.2
             if psf_metric > bad_psf_threshold:
-                self.log.info("Skipping visit %d detector %d due to bad PSF fit (metric %f > %f threshold)",
-                              visit, detector, psf_metric, bad_psf_threshold)
+                self.log.info("Skipping visit %d due to bad PSF fit (metric %f > %f threshold)",
+                              visit, psf_metric, bad_psf_threshold)
                 continue
 
             # Generate a lookup table with the shifted PSF models for each
@@ -304,7 +301,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # Convert the lookup table to a source catalog with heavy footprints
         # containing the unshifted PSF model of the coadd at the source
         # location, and columns containing the overall flux and fractional flux
-        # per subfilter 
+        # per subfilter
         dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
                                                      results.templateFootprints)
         return pipeBase.Struct(dcrResidual=results.residual,
@@ -445,7 +442,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             for subfilter in range(self.config.dcrNumSubfilters):
                 src[f'subfilterWeight_{subfilter}'] = model[subfilter]['modelFlux']
                 src[f'subfilterWavelength_{subfilter}'] = subfilterEffectiveWavelengths[subfilter]
-            
+
         return dcrCorrectionCatalog
 
     def make_warp_footprints(self, catalog, warp, psf):
@@ -479,11 +476,11 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 scales = self.minimize_footprint_residuals(image_fp, psf_fps)
                 for psf_fp, scale in zip(psf_fps, scales):
                     psf_fp['modelFlux'] = scale
-        return(lookupTable)
+        return lookupTable
 
     def update_subfilter_psf_lookup_table(self, lookupTable, catalog, psf, dcrShift,
                                           fp_ctrl=afwDet.HeavyFootprintCtrl(), windowFunction=None):
-        
+
         boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
         for subfilter, shift in enumerate(dcrShift):
             # instantiate the catalog, and define the centroid
@@ -507,7 +504,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 src['base_SdssCentroid_y'] = yc
                 foot = afwDet.Footprint(afwGeom.SpanSet(bbox))
                 foot.addPeak(xc, yc, subFlux)
-                # Note, we don't just use 
+                # Note, we don't just use
                 # afwImage.ImageF(warp.psf.computeImage(geom.Point2D(xc, yc)),
                 #                 deep=True)
                 # because we need the shifted bbox
@@ -517,7 +514,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 psf_mask = afwImage.Mask(bbox)
                 psf_variance = afwImage.ImageF(bbox)
                 psf_mimage = afwImage.MaskedImageF(psf_img, psf_mask, psf_variance)
-                
+
                 heavy_fp = afwDet.HeavyFootprintF(foot, psf_mimage, fp_ctrl)
                 src.setFootprint(heavy_fp)
                 lookupTable[record.getId()]['subfilterPsf'].append(src)
@@ -708,6 +705,6 @@ def getPsfMajorMinorAxes(psf, position=None, useFwhm=False):
     major_sigma = np.sqrt(lam_major) if lam_major > 0 else 0.
     minor_sigma = np.sqrt(lam_minor) if lam_minor > 0 else 0.
     if useFwhm:
-        return(sigmaToFwhm*major_sigma, sigmaToFwhm*minor_sigma)
+        return (sigmaToFwhm*major_sigma, sigmaToFwhm*minor_sigma)
     else:
-        return(major_sigma, minor_sigma)
+        return (major_sigma, minor_sigma)
