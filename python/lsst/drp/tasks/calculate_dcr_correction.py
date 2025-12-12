@@ -10,6 +10,7 @@ import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
 import lsst.geom as geom
 from lsst.ip.diffim.dcrModel import calculateDcr, wavelengthGenerator, fitThroughput
+from lsst.ip.diffim.utils import getPsfFwhm
 import lsst.meas.base as measBase
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
@@ -75,7 +76,7 @@ class CalculateDcrCorrectionConnections(
     dcrResidual = pipeBase.connectionTypes.Output(
         doc="The template with DCR sources removed, so they can be added back"
         " using the DCR model.",
-        name="{fakesType}dcrCoadd{warpTypeSuffix}",
+        name="{fakesType}dcr_residual_coadd",
         storageClass="ExposureF",
         dimensions=("tract", "patch", "skymap", "band"),
     )
@@ -102,7 +103,7 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
     maximumSNR = pexConfig.Field(
         doc="Maximum signal to noise of sources in the reference catalog to model.",
         dtype=float,
-        default=1000,
+        default=10000,
     )
     minimumModelFraction = pexConfig.Field(
         doc="Minimum fraction of the total flux to allow for the fit to each subfilter.",
@@ -247,6 +248,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
     def run(self, warpRefList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth):
         self.metadata['effectiveWavelength'] = effectiveWavelength
         self.metadata['bandwidth'] = bandwidth
+        self.effectiveWavelength = effectiveWavelength
+        self.bandwidth = bandwidth
         self.log.info("Dividing %fnm bandwidth into %d subfilters with %fnm effective wavelength",
                       bandwidth, self.config.dcrNumSubfilters, effectiveWavelength)
         refCat = self.filter_object_catalog(objectCatalog)
@@ -260,10 +263,18 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             recordVisitCount[recId] = 0
         for warpRef in warpRefList:
             visit = warpRef.dataId['visit']
+            detector = warpRef.dataId['detector']
+            warp = warpRef.get()
+            psf_metric, psf_gaussian = self.check_psf(warp)
+            bad_psf_threshold = 0.2
+            if psf_metric > bad_psf_threshold:
+                self.log.info("Skipping visit %d detector %d due to bad PSF fit (metric %f > %f threshold)",
+                              visit, detector, psf_metric, bad_psf_threshold)
+                continue
+
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
-            lookupTableSingle = self.make_warp_footprints(refCat, warpRef.get(),
-                                                          effectiveWavelength, bandwidth)
+            lookupTableSingle = self.make_warp_footprints(refCat, warp, psf_gaussian)
             # Reformat the per-visit lookup table into two new tables with a
             # different ordering, both indexed by source record first and
             # having an inner lookup table over visit.
@@ -295,9 +306,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # location, and columns containing the overall flux and fractional flux
         # per subfilter 
         dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
-                                                     results.templateFootprints,
-                                                     effectiveWavelength=effectiveWavelength,
-                                                     bandwidth=bandwidth)
+                                                     results.templateFootprints)
         return pipeBase.Struct(dcrResidual=results.residual,
                                dcrCorrectionCatalog=dcrCorrectionCatalog)
 
@@ -336,6 +345,51 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
         return objectCat[srcUse].copy(deep=True)
 
+    def check_psf(self, warp):
+        psf = warp.psf
+        psf_pos = geom.Point2I(psf.getAveragePosition())
+
+        psf_major, psf_minor = getPsfMajorMinorAxes(psf, useFwhm=False)
+        psf_gaussian = afwDet.GaussianPsf(self.config.footprintSize, self.config.footprintSize, psf_minor)
+        # xc, yc = self.config.footprintSize//2
+
+        dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
+                                self.effectiveWavelength,
+                                self.bandwidth,
+                                self.config.dcrNumSubfilters,
+                                )
+        boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
+        psf_bbox = geom.Box2I(psf_pos, boxSize)
+        psf_img = self.create_psf_image_in_bbox(psf, psf_bbox, psf_pos[0], psf_pos[1]).array
+        fit_img = np.zeros_like(psf_img)
+        for subfilter, shift in enumerate(dcrShift):
+            xc, yc = psf_pos
+            # shift format is numpy (y,x)
+            xc += shift[1]
+            yc += shift[0]
+            subfilter_img = self.create_psf_image_in_bbox(psf_gaussian, psf_bbox, xc, yc).array
+            fit_img += subfilter_img.array
+
+        windowFunction = np.outer(hann(self.config.footprintSize), hann(self.config.footprintSize))
+        windowFunction /= np.max(windowFunction)
+
+        psf_img *= windowFunction
+        fit_img *= windowFunction
+        psf_norm = np.sum(psf_img[psf_img > np.max(psf_img)/4])
+        psf_img /= psf_norm
+        fit_norm = np.sum(fit_img[fit_img > np.max(fit_img)/4])
+        fit_img /= fit_norm
+        psf_metric = 2*np.sum(psf_img - fit_img)/np.sum(psf_img + fit_img)
+        return (psf_metric, psf_gaussian)
+
+    @staticmethod
+    def create_psf_image_in_bbox(psf, bbox, xc, yc):
+
+        bbox2 = bbox.clippedTo(psf.computeImageBBox(geom.Point2D(xc, yc)))
+        psf_img = afwImage.ImageF(bbox)
+        psf_img[bbox2].array[:, :] = psf.computeImage(geom.Point2D(xc, yc))[bbox2].array
+        return psf_img
+
     def initialize_dcr_catalog(self):
         """Create an empty catalog with the columns defined for the DCR schema
 
@@ -348,8 +402,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         cat.defineCentroid(self.centroidName)
         return cat
 
-    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, templateFootprints,
-                         effectiveWavelength=None, bandwidth=None):
+    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, templateFootprints):
         """Summary
 
         Parameters
@@ -360,10 +413,6 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             Description
         fluxLookupTable : TYPE
             Description
-        effectiveWavelength : TYPE
-            Description
-        bandwidth : TYPE
-            Description
 
         Returns
         -------
@@ -371,8 +420,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             Description
         """
         dcrCorrectionCatalog = self.initialize_dcr_catalog()
-        dcrGen = wavelengthGenerator(effectiveWavelength,
-                                     bandwidth,
+        dcrGen = wavelengthGenerator(self.effectiveWavelength,
+                                     self.bandwidth,
                                      self.config.dcrNumSubfilters)
         subfilterEffectiveWavelengths = [np.mean(wl) for wl in dcrGen]
         for refSrc in refCat:
@@ -399,7 +448,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             
         return dcrCorrectionCatalog
 
-    def make_warp_footprints(self, catalog, warp, effectiveWavelength, bandwidth):
+    def make_warp_footprints(self, catalog, warp, psf):
         image_footprints = self.initialize_dcr_catalog()
         fp_ctrl = afwDet.HeavyFootprintCtrl()
         if self.config.doTaperFootprint:
@@ -413,8 +462,13 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                                     windowFunction=windowFunction, fp_ctrl=fp_ctrl)
         # Update the lookup table with DCR-shifted PSFs for each source, for
         # each subfilter.
-        self.update_subfilter_psf_lookup_table(lookupTable, catalog, warp, effectiveWavelength, bandwidth,
-                                               windowFunction=windowFunction, fp_ctrl=fp_ctrl)
+        dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
+                                self.effectiveWavelength,
+                                self.bandwidth,
+                                self.config.dcrNumSubfilters,
+                                )
+        self.update_subfilter_psf_lookup_table(lookupTable, catalog, psf, dcrShift,
+                                               fp_ctrl=fp_ctrl, windowFunction=windowFunction)
         # Determine the best fit scale factors for each source, using the
         # flux of the source and the DCR-shifted PSFs for each subfilter
         for record in catalog:
@@ -427,13 +481,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     psf_fp['modelFlux'] = scale
         return(lookupTable)
 
-    def update_subfilter_psf_lookup_table(self, lookupTable, catalog, warp, effectiveWavelength, bandwidth,
-                                          windowFunction=None, fp_ctrl=afwDet.HeavyFootprintCtrl()):
-        dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
-                                effectiveWavelength,
-                                bandwidth,
-                                self.config.dcrNumSubfilters,
-                                )
+    def update_subfilter_psf_lookup_table(self, lookupTable, catalog, psf, dcrShift,
+                                          fp_ctrl=afwDet.HeavyFootprintCtrl(), windowFunction=None):
+        
         boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
         for subfilter, shift in enumerate(dcrShift):
             # instantiate the catalog, and define the centroid
@@ -461,9 +511,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 # afwImage.ImageF(warp.psf.computeImage(geom.Point2D(xc, yc)),
                 #                 deep=True)
                 # because we need the shifted bbox
-                bbox2 = bbox.clippedTo(warp.psf.computeImageBBox(geom.Point2D(xc, yc)))
-                psf_img = afwImage.ImageF(bbox)
-                psf_img[bbox2].array[:, :] = warp.psf.computeImage(geom.Point2D(xc, yc))[bbox2].array
+                psf_img = self.create_psf_image_in_bbox(psf, bbox, xc, yc)
                 if windowFunction is not None:
                     psf_img.array *= windowFunction
                 psf_mask = afwImage.Mask(bbox)
@@ -643,3 +691,23 @@ def stack_dcr_footprints(dcrFootprints, cutouts, weightLookup):
     if bbox is None:
         raise RuntimeError
     return (np.sum(models, axis=0)/np.sum(weights), np.sum(fluxes)/np.sum(weights))
+
+
+def getPsfMajorMinorAxes(psf, position=None, useFwhm=False):
+    sigmaToFwhm = 2*np.log(2*np.sqrt(2))
+    if position is None:
+        position = psf.getAveragePosition()
+    shape = psf.computeShape(position)
+    trace = shape.getIxx() + shape.getIyy()
+    diff = (shape.getIxx() - shape.getIyy())/2.
+    det = np.sqrt(diff**2 + shape.getIxy()**2)
+
+    lam_major = trace/2. + det
+    lam_minor = trace/2. - det
+
+    major_sigma = np.sqrt(lam_major) if lam_major > 0 else 0.
+    minor_sigma = np.sqrt(lam_minor) if lam_minor > 0 else 0.
+    if useFwhm:
+        return(sigmaToFwhm*major_sigma, sigmaToFwhm*minor_sigma)
+    else:
+        return(major_sigma, minor_sigma)
