@@ -378,7 +378,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         psf_img /= psf_norm
         fit_norm = np.sum(fit_img[fit_img > np.max(fit_img)/4])
         fit_img /= fit_norm
-        psf_metric = 2*np.sum(psf_img - fit_img)/np.sum(psf_img + fit_img)
+        psf_metric = 2*np.sum(np.abs(psf_img - fit_img))/np.sum(psf_img + fit_img)
         return (psf_metric, psf_gaussian)
 
     @staticmethod
