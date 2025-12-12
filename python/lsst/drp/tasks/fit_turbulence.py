@@ -266,6 +266,11 @@ class GaussianProcessesTurbulenceFitConfig(
         doc="Number of nodes to use for the spline expressing Gaussian Processes prediction.",
         default=30,
     )
+    splineBuffer = pexConfig.Field(
+        dtype=float,
+        doc="Minimum distance in degrees to extend spline map outside the detector boundary.",
+        default=0.1,
+    )
 
 
 class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
@@ -536,8 +541,16 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
             skyFrame = initWcsRow.wcs.getFrameDict().getFrame("SKY")
             tangentPlaneX, tangentPlaneY = pixToTPMap.applyForward(corners)
 
-            xs = np.linspace(tangentPlaneX.min(), tangentPlaneX.max(), self.config.splineNNodes)
-            ys = np.linspace(tangentPlaneY.min(), tangentPlaneY.max(), self.config.splineNNodes)
+            xs = np.linspace(
+                tangentPlaneX.min() - self.config.splineBuffer,
+                tangentPlaneX.max() + self.config.splineBuffer,
+                self.config.splineNNodes,
+            )
+            ys = np.linspace(
+                tangentPlaneY.min() - self.config.splineBuffer,
+                tangentPlaneY.max() + self.config.splineBuffer,
+                self.config.splineNNodes,
+            )
 
             xx, yy = np.meshgrid(xs, ys)
             inArray = np.array([xx.ravel(), yy.ravel()]).T
