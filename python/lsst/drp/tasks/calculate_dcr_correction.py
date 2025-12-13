@@ -118,6 +118,11 @@ class CalculateDcrCorrectionConfig(pipeBase.PipelineTaskConfig,
         doc="Size of the footprints to calculate the DCR correctionin around objects.",
         default=35,
     )
+    bad_psf_threshold = pexConfig.Field(
+        dtype=float,
+        doc="Maximum relative difference between the PSF and a gaussian approximation.",
+        default=0.2,
+    )
     doTaperFootprint = pexConfig.Field(
         dtype=bool,
         doc="Weight the PSF model by a hanning window function to reduce edge artifacts?",
@@ -264,7 +269,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             visit = warpRef.dataId['visit']
             warp = warpRef.get()
             psf_metric, psf_gaussian = self.check_psf(warp)
-            if psf_metric > bad_psf_threshold:
+            if psf_metric > self.config.bad_psf_threshold:
                 self.log.info("Skipping visit %d due to bad PSF fit (metric %f > %f threshold)",
                               visit, psf_metric, bad_psf_threshold)
                 continue
@@ -339,7 +344,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # The source needs to fit in the defined footprint.
         # If it's larger, it's either trailed, extended, or just very bright
         # None of those cases will be fit well by the DCR model
-        maxFootprintArea = self.config.footprintSize**2
+        # Currently allow a slightly larger footprint, since the wings of the
+        # footprint will extend beyond the core of the source we are fitting.
+        maxFootprintArea = 2*self.config.footprintSize**2
         goodArea = objectCat['base_FootprintArea_value'] < maxFootprintArea
         srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
         return objectCat[srcUse].copy(deep=True)
