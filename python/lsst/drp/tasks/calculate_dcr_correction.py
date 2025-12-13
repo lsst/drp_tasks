@@ -358,7 +358,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                 self.config.dcrNumSubfilters,
                                 )
         boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
-        psf_bbox = geom.Box2I(psf_pos, boxSize)
+        psf_bbox = geom.Box2I.makeCenteredBox(center=psf.getAveragePosition(), size=boxSize)
         psf_img = self.create_psf_image_in_bbox(psf, psf_bbox, psf_pos[0], psf_pos[1]).array
         fit_img = np.zeros_like(psf_img)
         for subfilter, shift in enumerate(dcrShift):
