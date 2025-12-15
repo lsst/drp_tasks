@@ -597,9 +597,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         return scales
 
     @staticmethod
-    def stacked_fps(fp_list, normalize=True):
+    def stacked_fps(fp_list, normalize=True, keep_visits=None):
         output_list = []
         for visit in fp_list:
+            if keep_visits is not None:
+                if visit not in keep_visits:
+                    continue
             img = fp_list[visit].getFootprint().extractImage().array
             # for cutouts /modelFlux, not for the psf
             if normalize:
@@ -609,15 +612,14 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
 
         return np.vstack(output_list)
 
-    def simultaneus_fit(self, image_fps_list, psf_fps_list):
-
+    def simultaneus_fit(self, image_fps_list, psf_fps_list, keep_visits=None):
         # scales0 = [image_fp['modelFlux']*psf_fp['modelFlux'] for psf_fp in psf_fps]
         nSubfilters = self.config.dcrNumSubfilters
         scales0 = [1/nSubfilters]*nSubfilters  # starting point
 
-        img = self.stacked_fps(image_fps_list, normalize=True)
+        img = self.stacked_fps(image_fps_list, normalize=True, keep_visits=keep_visits)
 
-        psf_arrays = [self.stacked_fps(psf_fps_list[subfilter], normalize=False) for subfilter in range(nSubfilters)]
+        psf_arrays = [self.stacked_fps(psf_fps_list[subfilter], normalize=False, keep_visits=keep_visits) for subfilter in range(nSubfilters)]
         # img = image_fp.getFootprint().extractImage().array
         # psf_arrays = [psf.getFootprint().extractImage().array for psf in psf_fps]
 
@@ -654,23 +656,35 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         fluxLookupTable = {}
         # record, for loop: visit, subfilter, need lists over subfilter
         for recId in dcrFpLookupTable:
-            # scales = []
+            scales = []
             # subfilter_psf_list = [[dcrFpLookupTable[recId][visit][subfilter] for visit in
             #                        dcrFpLookupTable[recId]] for subfilter in
             #                       range(self.config.dcrNumSubfilters)]
+
+            for visit in dcrFpLookupTable[recId]:
+                scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
+            medianScales = np.median(scales, axis=0)
+            stdevScales = np.std(scales, axis=0)
+
+            # include those that have elements within 1-2 standard dev
+            keepVisits = []
+            for i, visit in enumerate(dcrFpLookupTable[recId]):
+                scale = scales[i]
+                deviation = []
+                for j in range(self.config.dcrNumSubfilters):
+                    deviation.append((scale[j] - medianScales[j])/stdevScales[j])
+                if not np.any(np.abs(deviation) > 2):
+                    keepVisits.append(visit)
+
             subfilter_psf_list = []
             for subfilter in range(self.config.dcrNumSubfilters):
                 singleDict = {}
                 for visit in dcrFpLookupTable[recId]:
-                    singleDict["visit"] = dcrFpLookupTable[recId][visit][subfilter]
+                    singleDict[visit] = dcrFpLookupTable[recId][visit][subfilter]
                 subfilter_psf_list.append(singleDict)
             # stack image + stack subfilter psf
             # NORMALIZATION
-            recScales = self.simultaneus_fit(cutoutLookupTable[recId], subfilter_psf_list)
-
-            # for visit in dcrFpLookupTable[recId]:
-            #     scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
-            # recScales = np.median(scales, axis=0)
+            recScales = self.simultaneus_fit(cutoutLookupTable[recId], subfilter_psf_list, keepVisits)
             scalesSingle = recScales/np.sum(recScales)
 
             # ORIGINAL: Per-Visit Fitting
