@@ -26,6 +26,7 @@ import unittest
 import warnings
 from typing import TYPE_CHECKING, Iterable
 
+import galsim
 import numpy as np
 from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 
@@ -290,6 +291,19 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
                 self.assertFloatsAlmostEqual(singleCellCoadd.psf_image.array.sum(), 1.0, rtol=None, atol=1e-7)
+
+    def test_psf_centering(self):
+        """Check that the PSF images are centered."""
+        self.runTask()
+        for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
+            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
+                shape = galsim.hsm.FindAdaptiveMom(galsim.Image(singleCellCoadd.psf_image.array))
+                self.assertFloatsAlmostEqual(
+                    shape.moments_centroid.x, round(shape.moments_centroid.x), rtol=None, atol=0.01
+                )
+                self.assertFloatsAlmostEqual(
+                    shape.moments_centroid.y, round(shape.moments_centroid.y), rtol=None, atol=0.01
+                )
 
 
 class MyMemoryTestCase(lsst.utils.tests.MemoryTestCase):
