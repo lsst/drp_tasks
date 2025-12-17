@@ -137,6 +137,21 @@ def plot_visit(x, y, dx, dy, predx, predy):
     return fig
 
 
+class SingularMatrixError(pipeBase.AlgorithmError):
+    """Raised if the Gaussian Processes fit raises a Singular Matrix linear
+    algebra error."""
+
+    def __init__(self, nSources) -> None:
+        super().__init__("The Gaussian Processes fit failed with a singular matrix linear algebra error.")
+        self._nSources = nSources
+
+    @property
+    def metadata(self):
+        return {
+            "nSources": self._nSources,
+        }
+
+
 class GaussianProcessesTurbulenceFitConnections(
     pipeBase.PipelineTaskConnections,
     dimensions=("instrument", "visit", "healpix3"),
@@ -374,7 +389,6 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
         )
 
         gpx.initialize(allTPCoords[trainInds], dx[trainInds], y_err=dxErr[trainInds])
-        gpx.solve()
 
         # Solve Gaussian Processes in dy direction.
         gpy = treegp.GPInterpolation(
@@ -388,7 +402,20 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
         )
 
         gpy.initialize(allTPCoords[trainInds], dy[trainInds], y_err=dyErr[trainInds])
-        gpy.solve()
+
+        try:
+            gpx.solve()
+            gpy.solve()
+        except np.linalg.LinAlgError as e:
+            if "Singular matrix" in str(e):
+                error = pipeBase.AnnotatedPartialOutputsError.annotate(
+                    SingularMatrixError(len(allTPCoords[trainInds])),
+                    self,
+                    log=self.log,
+                )
+                raise error from e
+            else:
+                raise
 
         hyperparameters = Table(
             {"x": np.array(gpx._optimizer._results_robust), "y": np.array(gpy._optimizer._results_robust)}
