@@ -33,6 +33,7 @@ from lsst.drp.tasks.fit_turbulence import (
 )
 from lsst.obs.base import createInitialSkyWcsFromBoresight
 from lsst.obs.base.instrument_tests import DummyCam
+from lsst.pipe.base import AnnotatedPartialOutputsError
 
 
 class FitTurbulenceTestCase(lsst.utils.tests.TestCase):
@@ -154,6 +155,13 @@ class FitTurbulenceTestCase(lsst.utils.tests.TestCase):
 
             np.testing.assert_allclose(ra, sources["coord_ra"])
             np.testing.assert_allclose(dec, sources["coord_dec"], rtol=1e-6)
+
+    def test_raiseError(self):
+        """Check that fitting insufficient data raises an
+        AnnotatedPartialOutputsError."""
+        # Try fitting GP with only a small amount of data, which should fail.
+        with self.assertRaises(AnnotatedPartialOutputsError):
+            self.task.runGP(self.wcsCatalog, self.positions[:5])
 
 
 if __name__ == "__main__":
