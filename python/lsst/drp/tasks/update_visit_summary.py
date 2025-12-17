@@ -48,6 +48,7 @@ from lsst.afw.math import BackgroundList
 from lsst.afw.table import ExposureCatalog, ExposureRecord, SchemaMapper
 from lsst.daf.butler import Butler, DatasetRef, DeferredDatasetHandle
 from lsst.geom import Angle, Box2D, Box2I, SpherePoint, arcseconds, degrees
+from lsst.meas.astrom.fit_sip_approximation import FitSipApproximationTask
 from lsst.meas.astrom.refit_pointing import RefitPointingTask
 from lsst.pex.config import ChoiceField, ConfigurableField, Field, ListField
 from lsst.pipe.base import (
@@ -663,6 +664,17 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
         dtype=bool,
         default=False,
     )
+    do_fit_sip_approximations = Field(
+        "Whether to fit TAN-SIP WCS approximations for use in FITS headers. "
+        "This also causes the 'wcs_sip_delta_sky' and 'wcs_sip_delta_pixel' fields to be added "
+        "to track the precision of these approximations.",
+        dtype=bool,
+        default=True,
+    )
+    fit_sip_approximations = ConfigurableField(
+        "Configuration for fitting TAN-SIP WCS approximations for use in FITS headers.",
+        target=FitSipApproximationTask,
+    )
 
     def validate(self):
         super().validate()
@@ -732,6 +744,19 @@ class UpdateVisitSummaryTask(PipelineTask):
             if self.config.wcs_consistency_threshold is not None
             else None
         )
+        if self.config.do_fit_sip_approximations:
+            self.makeSubtask("fit_sip_approximations")
+            self.schema.addField(
+                "wcs_sip_delta_sky",
+                type="Angle",
+                doc="Maximum pixel-to-sky difference between the WCS and its FITS TAN-SIP approximation.",
+            )
+            self.schema.addField(
+                "wcs_sip_delta_pixel",
+                type=np.float64,
+                units="pixel",
+                doc="Maximum sky-to-pixl difference between the WCS and its FITS TAN-SIP approximation.",
+            )
 
     def runQuantum(
         self,
@@ -1009,6 +1034,17 @@ class UpdateVisitSummaryTask(PipelineTask):
                 camera=camera,
             )
             result.visit_geometry = refit_pointing_result.regions
+
+        if self.config.do_fit_sip_approximations:
+            for output_record in result.output_summary_catalog:
+                wcs = output_record.getWcs()
+                if wcs is None:
+                    continue
+                sip = self.fit_sip_approximations.run(wcs=wcs, bbox=output_record.getBBox())
+                output_record.setWcs(sip.wcs)
+                output_record["wcs_sip_delta_sky"] = sip.delta_sky
+                output_record["wcs_sip_delta_pixel"] = sip.delta_pixel
+
         return result
 
     def _finish_wcs_assignment(
