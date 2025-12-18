@@ -553,9 +553,10 @@ class AssembleCellCoaddTask(PipelineTask):
         for cellInfo in skyInfo.patchInfo:
             # Make a list to hold the observation identifiers for each cell.
             observation_identifiers_gc[cellInfo.index] = {}
-            cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cellInfo.inner_bbox.getCenter())
+            cell_center_pixel = geom.Point2D(geom.Point2I(cellInfo.inner_bbox.getCenter()))
+            cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cell_center_pixel)
             psf_bbox_gc[cellInfo.index] = geom.Box2I.makeCenteredBox(
-                geom.Point2D(cellInfo.inner_bbox.getCenter()),
+                cell_center_pixel,
                 geom.Extent2I(self.config.psf_dimensions, self.config.psf_dimensions),
             )
             psf_stacker_gc[cellInfo.index] = AccumulatorMeanStack(
@@ -764,7 +765,7 @@ class AssembleCellCoaddTask(PipelineTask):
                             geom.Box2D(inner_bbox)
                         ).calculateCenter()
                     else:
-                        psf_eval_point = geom.Point2D(inner_bbox.getCenter())
+                        psf_eval_point = geom.Point2D(geom.Point2I(inner_bbox.getCenter()))
                     psf_shape = warp.psf.computeShape(psf_eval_point)
                     psf_shape_flag = False
                 except SinglePolygonException:
