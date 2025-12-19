@@ -884,9 +884,15 @@ class AssembleCellCoaddTask(PipelineTask):
                 cell_masked_image.image.array[:, :] = 0.0
                 cell_masked_image.variance.array[:, :] = np.inf
             elif self.config.do_interpolate_coadd:
-                self.interpolate_coadd.run(cell_masked_image, planeName="NO_DATA")
-                for noise_image in cell_noise_images:
-                    self.interpolate_coadd.run(noise_image, planeName="NO_DATA")
+                # TODO: Deprecate do_interpolate_coadd and replace with a
+                # int field specifying number of times to iterate.
+                for _ in range(5):
+                    if np.isnan(cell_masked_image.image.array).any() | np.isnan(noise_image.array).any():
+                        self.interpolate_coadd.run(cell_masked_image, planeName="NO_DATA")
+                        for noise_image in cell_noise_images:
+                            self.interpolate_coadd.run(noise_image, planeName="NO_DATA")
+                    else:
+                        break
                 # The variance must be positive; work around for DM-3201.
                 varArray = cell_masked_image.variance.array
                 with np.errstate(invalid="ignore"):
