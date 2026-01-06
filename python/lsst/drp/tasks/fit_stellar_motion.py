@@ -356,7 +356,7 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
         allVisitStars = []
         finalVisits = []
         for visit in visits:
-            if visit not in visitSummaries:
+            if (visit not in visitSummaries) or (visit not in inputSources):
                 continue
 
             visitSummary = visitSummaries[visit].get()
