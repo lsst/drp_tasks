@@ -119,8 +119,8 @@ class FitTurbulenceTestCase(lsst.utils.tests.TestCase):
         dx = self.rng.multivariate_normal(np.zeros(totPoints), K)
         dy = self.rng.multivariate_normal(np.zeros(totPoints), K)
 
-        dx += np.random.normal(scale=self.noise, size=totPoints)
-        dy += np.random.normal(scale=self.noise, size=totPoints)
+        dx += self.rng.normal(scale=self.noise, size=totPoints)
+        dy += self.rng.normal(scale=self.noise, size=totPoints)
 
         residError = np.ones(totPoints) * self.noise
         visitPositions["xresw"] = dx
