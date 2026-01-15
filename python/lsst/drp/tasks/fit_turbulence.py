@@ -152,6 +152,23 @@ class SingularMatrixError(pipeBase.AlgorithmError):
         }
 
 
+class NotPositiveDefiniteMatrixError(pipeBase.AlgorithmError):
+    """Raised if the Gaussian Processes fit raises a not positive definite
+    linear algebra error."""
+
+    def __init__(self, nSources) -> None:
+        super().__init__(
+            "The Gaussian Processes fit failed with a not-positive-definite linear algebra" " error."
+        )
+        self._nSources = nSources
+
+    @property
+    def metadata(self):
+        return {
+            "nSources": self._nSources,
+        }
+
+
 class GaussianProcessesTurbulenceFitConnections(
     pipeBase.PipelineTaskConnections,
     dimensions=("instrument", "visit", "healpix3"),
@@ -415,6 +432,13 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
             if "Singular matrix" in str(e):
                 error = pipeBase.AnnotatedPartialOutputsError.annotate(
                     SingularMatrixError(len(allTPCoords[trainInds])),
+                    self,
+                    log=self.log,
+                )
+                raise error from e
+            elif "not positive definite" in str(e):
+                error = pipeBase.AnnotatedPartialOutputsError.annotate(
+                    NotPositiveDefiniteMatrixError(len(allTPCoords[trainInds])),
                     self,
                     log=self.log,
                 )
