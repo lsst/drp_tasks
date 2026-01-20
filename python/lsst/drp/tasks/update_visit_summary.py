@@ -646,7 +646,8 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
         default=None,
     )
     refit_pointing = ConfigurableField(
-        "A subtask for refitting the boresight pointing and orientation, and fitting WCS SIP approximations.",
+        "A subtask for refitting the boresight pointing and orientation, "
+        "and using those to produce new regions for butler dimensions.",
         target=RefitPointingTask,
     )
     camera_dimensions = ListField(
@@ -655,7 +656,7 @@ class UpdateVisitSummaryConfig(PipelineTaskConfig, pipelineConnections=UpdateVis
         default=["instrument"],
     )
     do_refit_pointing = Field(
-        "Whether to re-fit the pointing model and add TAN-SIP WCS approximations.",
+        "Whether to re-fit the pointing model.",
         dtype=bool,
         default=True,
     )
