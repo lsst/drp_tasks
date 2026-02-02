@@ -252,7 +252,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "patch",
-                    pa.uint32(),
+                    pa.uint64(),
                     nullable=False,
                     metadata={
                         "doc": "ID of the patch within the tract on which this measurement was made.",
