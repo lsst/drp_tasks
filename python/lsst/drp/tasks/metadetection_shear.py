@@ -291,11 +291,11 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "stamp_flags",
+                    "image_flags",
                     pa.uint32(),
                     nullable=False,
                     metadata={
-                        "doc": "Flags for the stamp on which this measurement was made.",
+                        "doc": "Flags for the image on which this measurement was made.",
                         "unit": "",
                     },
                 ),
@@ -840,7 +840,7 @@ class MetadetectionShearTask(PipelineTask):
             "row": "y",
             "row_diff": "y_offset",  # dropped.
             "shear_type": "metaStep",
-            "stamp_flags": "stamp_flags",
+            "stamp_flags": "image_flags",
         }
 
         for b, alg_name in product(self.config.photometry_bands, ("gauss", "pgauss")):
