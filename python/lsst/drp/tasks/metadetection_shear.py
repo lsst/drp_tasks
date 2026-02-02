@@ -318,7 +318,7 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "coord_ra",
+                    "ra",
                     pa.float64(),
                     nullable=False,
                     metadata={
@@ -327,7 +327,7 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "coord_dec",
+                    "dec",
                     pa.float64(),
                     nullable=False,
                     metadata={
@@ -805,7 +805,7 @@ class MetadetectionShearTask(PipelineTask):
             "cell_y": "cell_y",
             "col": "x",
             "col_diff": "x_offset",  # dropped.
-            "dec": "coord_dec",
+            "dec": "dec",
             "gauss_flags": "gauss_flags",
             "gauss_g_1": "gauss_g1",
             "gauss_g_2": "gauss_g2",
@@ -836,7 +836,7 @@ class MetadetectionShearTask(PipelineTask):
             "psfrec_g_1": "psfOriginal_e1",
             "psfrec_g_2": "psfOriginal_e2",
             "psfrec_T": "psfOriginal_T",
-            "ra": "coord_ra",
+            "ra": "ra",
             "row": "y",
             "row_diff": "y_offset",  # dropped.
             "shear_type": "metaStep",
