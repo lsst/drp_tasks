@@ -449,14 +449,19 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
             raise pipeBase.NoWorkFound("No coadd temporary exposures found")
 
         supplementaryData = self._makeSupplementaryData(butlerQC, inputRefs, outputRefs)
-        retStruct = self.run(
-            inputData["skyInfo"],
-            warpRefList=inputs.warpRefList,
-            imageScalerList=inputs.imageScalerList,
-            weightList=inputs.weightList,
-            psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
-            supplementaryData=supplementaryData,
-        )
+
+        try:
+            retStruct = self.run(
+                inputData["skyInfo"],
+                warpRefList=inputs.warpRefList,
+                imageScalerList=inputs.imageScalerList,
+                weightList=inputs.weightList,
+                psfMatchedWarpRefList=inputs.psfMatchedWarpRefList,
+                supplementaryData=supplementaryData,
+            )
+        except pipeBase.AlgorithmError as e:
+            error = pipeBase.AnnotatedPartialOutputsError.annotate(e, self, log=self.log)
+            raise error from e
 
         inputData.setdefault("brightObjectMask", None)
         if self.config.doMaskBrightObjects and inputData["brightObjectMask"] is None:
