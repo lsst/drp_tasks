@@ -373,7 +373,7 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "bmask",
+                    "bmask_flags",
                     pa.uint32(),
                     nullable=False,
                     metadata={
@@ -382,7 +382,7 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "ormask",
+                    "ormask_flags",
                     pa.int32(),
                     nullable=False,
                     metadata={
@@ -800,7 +800,7 @@ class MetadetectionShearTask(PipelineTask):
         output = {}
         # TODO: Move this to a better location after DP2.
         mapping = {
-            "bmask": "bmask",
+            "bmask": "bmask_flags",
             "cell_x": "cell_x",
             "cell_y": "cell_y",
             "col": "x",
@@ -824,7 +824,7 @@ class MetadetectionShearTask(PipelineTask):
             "gauss_T_ratio": "gauss_T_ratio",  # dropped.
             "id": "shearObjectId",
             "mfrac": "mfrac",
-            "ormask": "ormask",
+            "ormask": "ormask_flags",
             "pgauss_flags": "pgauss_flags",
             "pgauss_obj_flags": "pgauss_object_flags",
             "pgauss_s2n": "pgauss_snr",
