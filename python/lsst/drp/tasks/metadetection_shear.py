@@ -231,7 +231,7 @@ class MetadetectionShearTask(PipelineTask):
                 # Fields from pipeline bookkeeping.
                 pa.field(
                     "shearObjectId",
-                    pa.uint64(),
+                    pa.int64(),
                     nullable=False,
                     metadata={
                         "doc": (
@@ -243,7 +243,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "tract",
-                    pa.uint64(),
+                    pa.int64(),
                     nullable=False,
                     metadata={
                         "doc": "ID of the tract on which this measurement was made.",
@@ -252,7 +252,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "patch",
-                    pa.uint64(),
+                    pa.int64(),
                     nullable=False,
                     metadata={
                         "doc": "ID of the patch within the tract on which this measurement was made.",
@@ -261,7 +261,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "cell_x",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Column of the cell within the patch on which this measurement was made.",
@@ -270,7 +270,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "cell_y",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Row of the cell within the patch on which this measurement was made.",
@@ -292,7 +292,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "image_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Flags for the image on which this measurement was made.",
@@ -338,7 +338,7 @@ class MetadetectionShearTask(PipelineTask):
                 # Original PSF measurements
                 pa.field(
                     "psfOriginal_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Flags for the original PSF measurement.",
@@ -374,7 +374,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "bmask_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "`bmask` flags for the ShearObject",
@@ -403,7 +403,7 @@ class MetadetectionShearTask(PipelineTask):
                 # Reconvolved PSF measurements (gauss)
                 pa.field(
                     "gauss_psfReconvolved_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Flags for reconvolved PSF (measured with gauss algorithm).",
@@ -553,7 +553,7 @@ class MetadetectionShearTask(PipelineTask):
             pa_schema = pa_schema.append(
                 pa.field(
                     f"{alg_name}_shape_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": (
@@ -567,7 +567,7 @@ class MetadetectionShearTask(PipelineTask):
             pa_schema = pa_schema.append(
                 pa.field(
                     f"{alg_name}_object_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": f"Flags for the ShearObject measurement (measured with {alg_name} algorithm).",
@@ -578,7 +578,7 @@ class MetadetectionShearTask(PipelineTask):
             pa_schema = pa_schema.append(
                 pa.field(
                     f"{alg_name}_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": f"Overall flags for {alg_name} measurement algorithm.",
@@ -592,7 +592,7 @@ class MetadetectionShearTask(PipelineTask):
                 pa_schema = pa_schema.append(
                     pa.field(
                         f"{b}_{alg_name}Flux_flags",
-                        pa.uint32(),
+                        pa.int32(),
                         nullable=False,
                         metadata={
                             "doc": f"Flags set for flux in {b} band measured with {alg_name} algorithm.",
@@ -858,8 +858,8 @@ class MetadetectionShearTask(PipelineTask):
                     output[mapping.get(name, name)] = np.ones_like(data["id"], dtype=np.float32)
                     output[mapping.get(name, name)] *= np.nan
 
-        output["tract"] = tract * np.ones_like(data["id"], dtype=np.uint64)
-        output["patch"] = patch * np.ones_like(data["id"], dtype=np.uint32)
+        output["tract"] = tract * np.ones_like(data["id"], dtype=np.int64)
+        output["patch"] = patch * np.ones_like(data["id"], dtype=np.int32)
 
         return output
 
