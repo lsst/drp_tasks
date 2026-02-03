@@ -552,12 +552,12 @@ class MetadetectionShearTask(PipelineTask):
             )
             pa_schema = pa_schema.append(
                 pa.field(
-                    f"{alg_name}_T_flags",
+                    f"{alg_name}_shape_flags",
                     pa.uint32(),
                     nullable=False,
                     metadata={
                         "doc": (
-                            "Flags for the trace (<x^2> + <y^2>) measurement of the ShearObject "
+                            "Flags for the second order moments measurement of the ShearObject "
                             f"(measured with {alg_name} algorithm)."
                         ),
                         "unit": "",
@@ -820,7 +820,7 @@ class MetadetectionShearTask(PipelineTask):
             "gauss_s2n": "gauss_snr",
             "gauss_T": "gauss_T",
             "gauss_T_err": "gauss_TErr",
-            "gauss_T_flags": "gauss_T_flags",
+            "gauss_T_flags": "gauss_shape_flags",
             "gauss_T_ratio": "gauss_T_ratio",  # dropped.
             "id": "shearObjectId",
             "mfrac": "mfrac",
@@ -830,7 +830,7 @@ class MetadetectionShearTask(PipelineTask):
             "pgauss_s2n": "pgauss_snr",
             "pgauss_T": "pgauss_T",
             "pgauss_T_err": "pgauss_TErr",
-            "pgauss_T_flags": "pgauss_T_flags",
+            "pgauss_T_flags": "pgauss_shape_flags",
             "pgauss_T_ratio": "pgauss_T_ratio",  # dropped.
             "psfrec_flags": "psfOriginal_flags",
             "psfrec_g_1": "psfOriginal_e1",
