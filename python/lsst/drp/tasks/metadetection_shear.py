@@ -231,7 +231,7 @@ class MetadetectionShearTask(PipelineTask):
                 # Fields from pipeline bookkeeping.
                 pa.field(
                     "shearObjectId",
-                    pa.uint64(),
+                    pa.int64(),
                     nullable=False,
                     metadata={
                         "doc": (
@@ -243,7 +243,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "tract",
-                    pa.uint64(),
+                    pa.int64(),
                     nullable=False,
                     metadata={
                         "doc": "ID of the tract on which this measurement was made.",
@@ -252,7 +252,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "patch",
-                    pa.uint32(),
+                    pa.int64(),
                     nullable=False,
                     metadata={
                         "doc": "ID of the patch within the tract on which this measurement was made.",
@@ -261,7 +261,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "cell_x",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Column of the cell within the patch on which this measurement was made.",
@@ -270,7 +270,7 @@ class MetadetectionShearTask(PipelineTask):
                 ),
                 pa.field(
                     "cell_y",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Row of the cell within the patch on which this measurement was made.",
@@ -291,11 +291,11 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "stamp_flags",
-                    pa.uint32(),
+                    "image_flags",
+                    pa.int32(),
                     nullable=False,
                     metadata={
-                        "doc": "Flags for the stamp on which this measurement was made.",
+                        "doc": "Flags for the image on which this measurement was made.",
                         "unit": "",
                     },
                 ),
@@ -318,7 +318,7 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "coord_ra",
+                    "ra",
                     pa.float64(),
                     nullable=False,
                     metadata={
@@ -327,7 +327,7 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "coord_dec",
+                    "dec",
                     pa.float64(),
                     nullable=False,
                     metadata={
@@ -338,7 +338,7 @@ class MetadetectionShearTask(PipelineTask):
                 # Original PSF measurements
                 pa.field(
                     "psfOriginal_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Flags for the original PSF measurement.",
@@ -373,8 +373,8 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "bmask",
-                    pa.uint32(),
+                    "bmask_flags",
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "`bmask` flags for the ShearObject",
@@ -382,7 +382,7 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "ormask",
+                    "ormask_flags",
                     pa.int32(),
                     nullable=False,
                     metadata={
@@ -403,7 +403,7 @@ class MetadetectionShearTask(PipelineTask):
                 # Reconvolved PSF measurements (gauss)
                 pa.field(
                     "gauss_psfReconvolved_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": "Flags for reconvolved PSF (measured with gauss algorithm).",
@@ -552,12 +552,12 @@ class MetadetectionShearTask(PipelineTask):
             )
             pa_schema = pa_schema.append(
                 pa.field(
-                    f"{alg_name}_T_flags",
-                    pa.uint32(),
+                    f"{alg_name}_shape_flags",
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": (
-                            "Flags for the trace (<x^2> + <y^2>) measurement of the ShearObject "
+                            "Flags for the second order moments measurement of the ShearObject "
                             f"(measured with {alg_name} algorithm)."
                         ),
                         "unit": "",
@@ -567,7 +567,7 @@ class MetadetectionShearTask(PipelineTask):
             pa_schema = pa_schema.append(
                 pa.field(
                     f"{alg_name}_object_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": f"Flags for the ShearObject measurement (measured with {alg_name} algorithm).",
@@ -578,7 +578,7 @@ class MetadetectionShearTask(PipelineTask):
             pa_schema = pa_schema.append(
                 pa.field(
                     f"{alg_name}_flags",
-                    pa.uint32(),
+                    pa.int32(),
                     nullable=False,
                     metadata={
                         "doc": f"Overall flags for {alg_name} measurement algorithm.",
@@ -592,7 +592,7 @@ class MetadetectionShearTask(PipelineTask):
                 pa_schema = pa_schema.append(
                     pa.field(
                         f"{b}_{alg_name}Flux_flags",
-                        pa.uint32(),
+                        pa.int32(),
                         nullable=False,
                         metadata={
                             "doc": f"Flags set for flux in {b} band measured with {alg_name} algorithm.",
@@ -800,12 +800,12 @@ class MetadetectionShearTask(PipelineTask):
         output = {}
         # TODO: Move this to a better location after DP2.
         mapping = {
-            "bmask": "bmask",
+            "bmask": "bmask_flags",
             "cell_x": "cell_x",
             "cell_y": "cell_y",
             "col": "x",
             "col_diff": "x_offset",  # dropped.
-            "dec": "coord_dec",
+            "dec": "dec",
             "gauss_flags": "gauss_flags",
             "gauss_g_1": "gauss_g1",
             "gauss_g_2": "gauss_g2",
@@ -820,27 +820,27 @@ class MetadetectionShearTask(PipelineTask):
             "gauss_s2n": "gauss_snr",
             "gauss_T": "gauss_T",
             "gauss_T_err": "gauss_TErr",
-            "gauss_T_flags": "gauss_T_flags",
+            "gauss_T_flags": "gauss_shape_flags",
             "gauss_T_ratio": "gauss_T_ratio",  # dropped.
             "id": "shearObjectId",
             "mfrac": "mfrac",
-            "ormask": "ormask",
+            "ormask": "ormask_flags",
             "pgauss_flags": "pgauss_flags",
             "pgauss_obj_flags": "pgauss_object_flags",
             "pgauss_s2n": "pgauss_snr",
             "pgauss_T": "pgauss_T",
             "pgauss_T_err": "pgauss_TErr",
-            "pgauss_T_flags": "pgauss_T_flags",
+            "pgauss_T_flags": "pgauss_shape_flags",
             "pgauss_T_ratio": "pgauss_T_ratio",  # dropped.
             "psfrec_flags": "psfOriginal_flags",
             "psfrec_g_1": "psfOriginal_e1",
             "psfrec_g_2": "psfOriginal_e2",
             "psfrec_T": "psfOriginal_T",
-            "ra": "coord_ra",
+            "ra": "ra",
             "row": "y",
             "row_diff": "y_offset",  # dropped.
             "shear_type": "metaStep",
-            "stamp_flags": "stamp_flags",
+            "stamp_flags": "image_flags",
         }
 
         for b, alg_name in product(self.config.photometry_bands, ("gauss", "pgauss")):
@@ -858,8 +858,8 @@ class MetadetectionShearTask(PipelineTask):
                     output[mapping.get(name, name)] = np.ones_like(data["id"], dtype=np.float32)
                     output[mapping.get(name, name)] *= np.nan
 
-        output["tract"] = tract * np.ones_like(data["id"], dtype=np.uint64)
-        output["patch"] = patch * np.ones_like(data["id"], dtype=np.uint32)
+        output["tract"] = tract * np.ones_like(data["id"], dtype=np.int64)
+        output["patch"] = patch * np.ones_like(data["id"], dtype=np.int32)
 
         return output
 
