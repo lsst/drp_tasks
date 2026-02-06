@@ -137,6 +137,7 @@ class SingleFrameDetectAndMeasureConfig(
             "base_LocalBackground",
             "base_LocalWcs",
             "base_PsfFlux",
+            "base_Jacobian",
             "base_CircularApertureFlux",
             "base_ClassificationSizeExtendedness",
             "base_CompensatedTophatFlux",
