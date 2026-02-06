@@ -95,9 +95,18 @@ def calculate_apparent_motion(catalog, refEpoch):
     properMotionRA = catalog["pmRA"].to(u.deg / u.yr) * dt
     properMotionDec = catalog["pmDec"].to(u.deg / u.yr) * dt
 
-    sun = astropy.coordinates.get_body("sun", time=catalog["MJD"])
-    frame = astropy.coordinates.GeocentricTrueEcliptic(equinox=catalog["MJD"])
-    sunLongitudes = sun.transform_to(frame).lon.radian
+    # Just do calculations for unique mjds:
+    mjds = astropy.time.Time(
+        np.unique(catalog["MJD"].mjd), scale=catalog["MJD"][0].scale, format=catalog["MJD"][0].format
+    )
+    sun = astropy.coordinates.get_body("sun", time=mjds)
+    frame = astropy.coordinates.GeocentricTrueEcliptic(equinox=mjds)
+    tmpSunLongitudes = sun.transform_to(frame).lon.radian
+
+    # Project back to full table:
+    newTable = astropy.table.Table({"MJD": mjds, "SL": tmpSunLongitudes})
+    joined = astropy.table.join(catalog[["MJD"]], newTable, keys="MJD", keep_order=True)
+    sunLongitudes = joined["SL"]
 
     # These equations for parallax come from Equations 5.2 in Van de Kamp's
     # book Stellar Paths. They differ from the parallax calculated in gbdes by
