@@ -50,7 +50,9 @@ __all__ = (
 
 
 class MockAssembleCellCoaddConfig(AssembleCellCoaddConfig):
-    pass
+    def setDefaults(self):
+        super().setDefaults()
+        self.require_artifact_mask = False
 
 
 class MockAssembleCellCoaddTask(AssembleCellCoaddTask):

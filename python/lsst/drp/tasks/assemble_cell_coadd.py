@@ -277,6 +277,11 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Dimensions of the PSF image stamp size to be assigned to cells (must be odd).",
         check=lambda x: (x > 0) and (x % 2 == 1),
     )
+    require_artifact_mask = Field[bool](
+        default=True,
+        doc="Require presence of artifact mask for each warp? Use true if using artifact rejection outputs"
+        " from CompareWarpTask",
+    )
 
 
 class AssembleCellCoaddTask(PipelineTask):
@@ -580,6 +585,16 @@ class AssembleCellCoaddTask(PipelineTask):
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
         for _, warp_input in inputs.items():
+            # warps that have been excluded from CompareWarp via visit
+            # selection from SelectVisitsTasks will not have artifact masks.
+            # Exclude them from the cell coadds too.
+            if self.config.require_artifact_mask and warp_input.artifact_mask is None:
+                self.log.info(
+                    "Excluding warp %s from cell coadds because it has no artifact mask",
+                    warp_input.dataId["visit"],
+                )
+                continue
+
             warp = warp_input.warp.get(parameters={"bbox": skyInfo.bbox})
             masked_fraction_image = (
                 warp_input.masked_fraction.get(parameters={"bbox": skyInfo.bbox})
