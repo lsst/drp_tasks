@@ -651,13 +651,13 @@ class AssembleCellCoaddTask(PipelineTask):
             # weight per warp and not bother with per-detector weights.
             full_ccd_table = warp.getInfo().getCoaddInputs().ccds
             weights: dict[int, float] = dict.fromkeys(
-                full_ccd_table["ccd"],
+                full_ccd_table["ccd"].tolist(),
                 0.0,
             )  # Mapping from detector to weight.
 
             if visitSummaryRef := visitSummaryRefDict.get(warp_input.dataId["visit"]):
                 visitSummary = visitSummaryRef.get()
-                for detector in full_ccd_table["ccd"]:
+                for detector in full_ccd_table["ccd"].tolist():
                     visitSummaryRow = visitSummary.find(detector)
                     mean_variance = visitSummaryRow["meanVar"]
                     mean_variance *= zero_point_scale_factor**2
@@ -722,7 +722,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                weight = weights[ccd_row["ccd"]]
+                weight = weights[int(ccd_row["ccd"])]
                 if not np.isfinite(weight):
                     self.log.warn(
                         "Non-finite weight for %s in cell %s: skipping", warp_input.dataId, cellInfo.index
@@ -802,7 +802,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warp_input.dataId,
-                    backup_detector=ccd_row["ccd"],
+                    backup_detector=int(ccd_row["ccd"]),
                 )
                 observation_identifiers_gc[cellInfo.index][observation_identifier] = CoaddInputs(
                     overlaps_center=overlaps_center,
