@@ -65,6 +65,7 @@ from lsst.pipe.base import (
 )
 from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejectedMaskMapping
+from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
 from lsst.pipe.tasks.interpImage import InterpImageTask
 from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
@@ -153,6 +154,13 @@ class AssembleCellCoaddConnections(
         dimensions=("tract", "patch", "band", "skymap"),
     )
 
+    inputMap = Output(
+        doc="Output healsparse map of input images",
+        name="{inputWarpName}Coadd_inputMap{outputCoaddSuffix}",
+        storageClass="HealSparseMap",
+        dimensions=("tract", "patch", "band", "skymap"),
+    )
+
     def __init__(self, *, config=None):
         super().__init__(config=config)
 
@@ -164,6 +172,9 @@ class AssembleCellCoaddConnections(
 
         if not config.do_use_artifact_mask:
             del self.artifactMasks
+
+        if not config.do_input_map:
+            del self.inputMap
 
         # Dynamically set input connections for noise images, depending on the
         # number of noise realizations specified in the config.
@@ -282,6 +293,14 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         doc="Require presence of artifact mask for each warp? Use true if using artifact rejection outputs"
         " from CompareWarpTask",
     )
+    do_input_map = Field[bool](
+        default=False,
+        doc="Create a bitwise map of coadd inputs.",
+    )
+    input_mapper = ConfigurableField(
+        target=HealSparseInputMapTask,
+        doc="Input map creation subtask.",
+    )
 
 
 class AssembleCellCoaddTask(PipelineTask):
@@ -326,6 +345,8 @@ class AssembleCellCoaddTask(PipelineTask):
             self.makeSubtask("interpolate_coadd")
         if self.config.do_scale_zero_point:
             self.makeSubtask("scale_zero_point")
+        if self.config.do_input_map:
+            self.makeSubtask("input_mapper")
 
         self.psf_warper = afwMath.Warper.fromConfig(self.config.psf_warper)
         if (warping_kernel_name := self.config.psf_warper.warpingKernelName.lower()).startswith("lanczos"):
@@ -554,6 +575,21 @@ class AssembleCellCoaddTask(PipelineTask):
         cell_centers_sky = GridContainer[geom.SpherePoint](warp_stacker_gc.shape)
         # Make a container to hold the observation identifiers for each cell.
         observation_identifiers_gc = GridContainer[dict](warp_stacker_gc.shape)
+
+        if self.config.do_input_map:
+            # We need to know all the visit + detector pairs in the inputs.
+            warp_input_list = [warp_ref.warp.get(component="coaddInputs") for warp_ref in inputs.values()]
+            visit_detectors = []
+            for warp_input in warp_input_list:
+                for row in warp_input.ccds:
+                    visit_detectors.append((int(row["visit"]), int(row["ccd"])))
+
+            self.input_mapper.initialize_cell_input_map(
+                skyInfo.patchInfo.getOuterBBox(),
+                skyInfo.patchInfo.wcs,
+                visit_detectors,
+            )
+
         # Populate them.
         for cellInfo in skyInfo.patchInfo:
             # Make a list to hold the observation identifiers for each cell.
@@ -571,6 +607,9 @@ class AssembleCellCoaddTask(PipelineTask):
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
             )
+
+            if self.config.do_input_map:
+                self.input_mapper.build_cell_input_map(cellInfo)
 
         # visit_summary do not have (tract, patch, band, skymap) dimensions.
         if not visitSummaryList:
@@ -863,7 +902,19 @@ class AssembleCellCoaddTask(PipelineTask):
                 if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
                     ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
 
+                if self.config.do_input_map:
+                    self.input_mapper.add_warp_to_cell_input_map(
+                        ccd_row,
+                        weight,
+                        cellInfo,
+                    )
+
             del warp
+
+        if self.config.do_input_map:
+            inputMap = self.input_mapper.cell_input_map
+        else:
+            inputMap = None
 
         # Update common with the visit polygons.
         self.common = dataclasses.replace(
@@ -953,6 +1004,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         return Struct(
             multipleCellCoadd=multipleCellCoadd,
+            inputMap=inputMap,
         )
 
 
