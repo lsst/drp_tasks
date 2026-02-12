@@ -27,9 +27,11 @@ import warnings
 from typing import TYPE_CHECKING, Iterable
 
 import galsim
+import hpgeom as hpg
 import numpy as np
 from assemble_coadd_test_utils import MockCoaddTestData, makeMockSkyInfo
 
+import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
@@ -165,6 +167,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
     ) -> None:
         if config is None:
             config = MockAssembleCellCoaddConfig()
+        config.do_input_map = True
         assembleTask = MockAssembleCellCoaddTask(config=config)
         if warpRefList is None:
             warpRefList = self.handleList
@@ -232,6 +235,27 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.runTask()
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
+        self.assertTrue(self.result.inputMap is not None)
+
+        # Check the input map.
+        inputMap = self.result.inputMap
+
+        warp_input_list = [handle.get() for handle in self.handleList]
+        visit_detectors = []
+        for warp_input in warp_input_list:
+            for row in warp_input.getInfo().getCoaddInputs().ccds:
+                visit_detectors.append((int(row["visit"]), int(row["ccd"])))
+
+        for bit, (visit, detector) in enumerate(visit_detectors):
+            self.assertEqual(inputMap.metadata[f"B{bit:04d}VIS"], visit)
+            self.assertEqual(inputMap.metadata[f"B{bit:04d}CCD"], detector)
+            self.assertGreater(inputMap.metadata[f"B{bit:04d}WT"], 0.0)
+
+        coadd_poly = afwGeom.Polygon(lsst.geom.Box2D(self.result.multipleCellCoadd.outer_bbox))
+        sph_pts = self.result.multipleCellCoadd.wcs.pixelToSky(coadd_poly)
+        radec = np.asarray([(sph.getRa().asDegrees(), sph.getDec().asDegrees()) for sph in sph_pts])
+        pixels = hpg.query_polygon(inputMap.nside_sparse, radec[:-1, 0], radec[:-1, 1])
+        np.testing.assert_array_equal(pixels, inputMap.valid_pixels)
 
     def test_assemble_empty(self):
         """Test that AssembleCellCoaddTask runs successfully without errors
@@ -247,6 +271,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.runTask(visitSummaryList=[])
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
+        self.assertTrue(self.result.inputMap is not None)
 
     # TODO: Remove this test in DM-49401
     @lsst.utils.tests.methodParameters(do_scale_zero_point=[False, True])
@@ -258,6 +283,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
             self.runTask(config)
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
+        self.assertTrue(self.result.inputMap is not None)
 
     @lsst.utils.tests.methodParameters(do_calculate_weight_from_warp=[False, True])
     def test_do_calculate_weight_from_warp(self, do_calculate_weight_from_warp):
@@ -266,6 +292,7 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.runTask(config)
         # Check that we produced an exposure.
         self.assertTrue(self.result.multipleCellCoadd is not None)
+        self.assertTrue(self.result.inputMap is not None)
 
     def test_visit_count(self):
         """Check that the visit_count method returns a number less than or
