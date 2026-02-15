@@ -29,6 +29,7 @@ __all__ = (
 
 import dataclasses
 import itertools
+import logging
 
 import numpy as np
 
@@ -319,6 +320,8 @@ class AssembleCellCoaddTask(PipelineTask):
         super().__init__(*args, **kwargs)
         if self.config.do_interpolate_coadd:
             self.makeSubtask("interpolate_coadd")
+            # Suppress the warning message about fallback.
+            self.interpolate_coadd.log.setLevel(logging.ERROR)
         if self.config.do_scale_zero_point:
             self.makeSubtask("scale_zero_point")
 
