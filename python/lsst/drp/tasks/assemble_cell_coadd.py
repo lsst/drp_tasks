@@ -677,7 +677,12 @@ class AssembleCellCoaddTask(PipelineTask):
                         f"Warp {warp_input.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
                     )
 
-            removeMaskPlanes(warp.mask, self.config.remove_mask_planes, self.log)
+            # Only try to remove maks planes that have been registered.
+            to_remove = []
+            for plane in self.config.remove_mask_planes:
+                if plane in warp.mask.getMaskPlaneDict():
+                    to_remove.append(plane)
+            removeMaskPlanes(warp.mask, to_remove, self.log)
             # Instead of using self.config.bad_mask_planes, we explicitly
             # ask statsCtrl which pixels are going to be ignored/rejected.
             rejected = afwImage.Mask.getPlaneBitMask(
