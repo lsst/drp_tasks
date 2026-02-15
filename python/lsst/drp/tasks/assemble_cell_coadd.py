@@ -156,7 +156,7 @@ class AssembleCellCoaddConnections(
 
     inputMap = Output(
         doc="Output healsparse map of input images",
-        name="{inputWarpName}Coadd_inputMap{outputCoaddSuffix}",
+        name="{inputWarpName}Coadd_inputMap",
         storageClass="HealSparseMap",
         dimensions=("tract", "patch", "band", "skymap"),
     )
