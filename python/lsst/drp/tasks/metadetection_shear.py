@@ -49,6 +49,7 @@ from lsst.meas.base import FullIdGenerator, SkyMapIdGeneratorConfig
 from lsst.pex.config import ConfigField, ConfigurableField, Field, FieldValidationError, ListField
 from lsst.pipe.base import (
     AlgorithmError,
+    AnnotatedPartialOutputsError,
     InputQuantizedConnection,
     NoWorkFound,
     OutputQuantizedConnection,
@@ -659,11 +660,16 @@ class MetadetectionShearTask(PipelineTask):
             if ref.dataId["band"] in self.config.photometry_bands
         }
 
-        outputs = self.run(
-            patch_coadds=coadds_by_band,
-            id_generator=id_generator,
-            ref_cat=ref_cat,
-        )
+        try:
+            outputs = self.run(
+                patch_coadds=coadds_by_band,
+                id_generator=id_generator,
+                ref_cat=ref_cat,
+            )
+        except AlgorithmError as err:
+            # We know there are no actual outputs in this case, but this is
+            # still the right exception to raise (it's just badly named).
+            raise AnnotatedPartialOutputsError.annotate(err, self, log=self.log) from err
         qc.put(outputs, outputRefs)
 
     def run(
