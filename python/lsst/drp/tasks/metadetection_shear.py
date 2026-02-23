@@ -704,7 +704,7 @@ class MetadetectionShearTask(PipelineTask):
         self.rng = np.random.RandomState(seed)
         idstart = 0
 
-        grid = patch_coadds[self.config.photometry_bands[0]].grid
+        grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
         nx_cells, ny_cells = grid.shape
         single_cell_tables: list[pa.Table] = []
         for nx, ny in product(range(nx_cells), range(ny_cells)):
