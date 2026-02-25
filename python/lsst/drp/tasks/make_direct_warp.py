@@ -432,11 +432,23 @@ class MakeDirectWarpTask(PipelineTask):
         # they're present for the same detectors we got image handles for, in
         # case of upstream errors.
         for ref in getattr(inputRefs, "background_revert_list", []):
-            inputs[ref.dataId["detector"]].background_revert = butlerQC.get(ref)
+            detector_id = ref.dataId["detector"]
+            if detector_id in inputs:
+                inputs[detector_id].background_revert = butlerQC.get(ref)
+            else:
+                self.log.info("Got %s for detector %d but no image", ref.datasetType.name, detector_id)
         for ref in getattr(inputRefs, "background_apply_list", []):
-            inputs[ref.dataId["detector"]].background_apply = butlerQC.get(ref)
+            detector_id = ref.dataId["detector"]
+            if detector_id in inputs:
+                inputs[detector_id].background_apply = butlerQC.get(ref)
+            else:
+                self.log.info("Got %s for detector %d but no image", ref.datasetType.name, detector_id)
         for ref in getattr(inputRefs, "background_to_photometric_ratio_list", []):
-            inputs[ref.dataId["detector"]].background_ratio_or_handle = butlerQC.get(ref)
+            detector_id = ref.dataId["detector"]
+            if detector_id in inputs:
+                inputs[detector_id].background_ratio_or_handle = butlerQC.get(ref)
+            else:
+                self.log.info("Got %s for detector %d but no image", ref.datasetType.name, detector_id)
 
         visit_summary = butlerQC.get(inputRefs.visit_summary)
         sky_map = butlerQC.get(inputRefs.sky_map)
