@@ -1402,8 +1402,9 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             finiteInd = np.isfinite(refCatShard["coord_ra"]) & np.isfinite(refCatShard["coord_dec"])
             refCatShard = refCatShard[finiteInd]
             refCatShards.append(refCatShard)
+            print(f"Finished {len(refCatShards)} out of {len(refObjectLoader.refCats)} refCat shards")
         refCat = vstack(refCatShards)
-
+        print("Refcat made")
         if self.config.excludeNonPMObjects and self.config.applyRefCatProperMotion:
             # Gaia DR2 has zeros for missing data, while Gaia DR3 has NaNs:
             hasPM = (
@@ -1432,7 +1433,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
             pmDict = {"raPM": raPM, "decPM": decPM, "parallax": parallax}
             refObjects.update(pmDict)
             refCovariance = cov
-
+        print("Associate refcat")
         if associations is not None:
             extensionIndex = np.flatnonzero(extensionInfo.extensionType == "REFERENCE")[0]
             visitIndex = extensionInfo.visitIndex[extensionIndex]
@@ -1453,7 +1454,7 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 dec,
                 np.arange(len(ra)),
             )
-
+        print("load refcat done")
         return refObjects, refCovariance
 
     @staticmethod
@@ -2592,12 +2593,13 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         medianEpoch = astropy.time.Time(exposureInfo.medianEpoch, format="jyear").mjd
         allRefObjects, allRefCovariances = {}, {}
         for f, fieldRegion in fieldRegions.items():
+            print(f"field {f} out of {len(fieldRegions)}")
             refObjects, refCovariance = self._load_refcat(
                 refObjectLoader, extensionInfo, epoch=medianEpoch, region=fieldRegion
             )
             allRefObjects[f] = refObjects
             allRefCovariances[f] = refCovariance
-
+        print("start all associations")
         associations, sourceDict = self._associate_from_isolated_sources(
             isolatedStarSources, isolatedStarCatalogs, extensionInfo, allRefObjects
         )
@@ -2827,19 +2829,39 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
         extensions = []
         object_indices = []
 
+        altsequences = []
+        altextensions = []
+        altobject_indices = []
+
         sourceColumns = ["x", "y", "xErr", "yErr", "ixx", "ixy", "iyy", "obj_index", "visit", "detector"]
         catalogColumns = ["ra", "dec"]
 
         sourceDict = dict([(visit, {}) for visit in np.unique(extensionInfo.visit)])
         for visit, detector in zip(extensionInfo.visit, extensionInfo.detector):
             sourceDict[visit][detector] = {"x": [], "y": [], "xCov": [], "yCov": [], "xyCov": []}
-
+        sourceDictAlt = dict([(visit, {}) for visit in np.unique(extensionInfo.visit)])
+        for visit, detector in zip(extensionInfo.visit, extensionInfo.detector):
+            sourceDictAlt[visit][detector] = {"x": [], "y": [], "xCov": [], "yCov": [], "xyCov": []}
+        print(f"starting big loop over {len(isolatedStarSourceRefs)} tracts")
+        import time
         for isolatedStarCatalogRef, isolatedStarSourceRef in zip(
-            isolatedStarCatalogRefs, isolatedStarSourceRefs
+            isolatedStarCatalogRefs[:10], isolatedStarSourceRefs[:10]
         ):
+            print(isolatedStarCatalogRef.dataId)
+            t0 = time.time()
             isolatedStarCatalog = isolatedStarCatalogRef.get(parameters={"columns": catalogColumns})
             isolatedStarSources = isolatedStarSourceRef.get(parameters={"columns": sourceColumns})
-            if len(isolatedStarCatalog) == 0:
+            """goodInd = np.zeros(len(isolatedStarSources), dtype=bool)
+            for visit in np.unique(isolatedStarSources['visit']):
+                for detector in np.unique(isolatedStarSources[isolatedStarSources['visit'] == visit]["detector"]):
+                    extensionIndex = np.flatnonzero(
+                    (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                    )
+                    if len(extensionIndex) != 0:
+                        goodInd[(isolatedStarSources['visit'] == visit) & (isolatedStarSources['detector'] == detector)] = True
+            print(len(goodInd), goodInd.sum())
+            isolatedStarSources = isolatedStarSources[goodInd]"""
+            if (len(isolatedStarCatalog) == 0) or (len(isolatedStarSources) == 0):
                 # This is expected when only one visit overlaps with a given
                 # tract, meaning that no sources can be associated.
                 self.log.debug(
@@ -2854,6 +2876,7 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
             allDetectors = np.copy(isolatedStarSources["detector"])
             allObjectIndices = np.copy(isolatedStarSources["obj_index"])
             issIndices = np.copy(isolatedStarSources.index)
+            t1 = time.time()
             for f, regionRefObjects in refObjects.items():
                 # Use the same matching technique that is done in
                 # isolatedStarAssociation and fgcmBuildFromIsolatedStars.
@@ -2868,21 +2891,26 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                     )
 
                 refSort = np.searchsorted(isolatedStarSources["obj_index"], idx_isoStarCat)
+                sub1 = np.clip(refSort, 0, len(isolatedStarSources) - 1)
+                goodMatches = isolatedStarSources["obj_index"].iloc[sub1] == idx_isoStarCat
+                
                 refDetector = np.ones(len(idx_isoStarCat)) * -1
                 # The "visit" for the reference catalogs is the field times -1.
                 refVisit = np.ones(len(idx_isoStarCat)) * f * -1
 
-                allVisits = np.insert(allVisits, refSort, refVisit)
-                allDetectors = np.insert(allDetectors, refSort, refDetector)
-                allObjectIndices = np.insert(allObjectIndices, refSort, idx_isoStarCat)
-                issIndices = np.insert(issIndices, refSort, idx_refObjects)
-
+                allVisits = np.insert(allVisits, refSort[goodMatches], refVisit[goodMatches])
+                allDetectors = np.insert(allDetectors, refSort[goodMatches], refDetector[goodMatches])
+                allObjectIndices = np.insert(allObjectIndices, refSort[goodMatches], idx_isoStarCat[goodMatches])
+                issIndices = np.insert(issIndices, refSort[goodMatches], idx_refObjects[goodMatches])
+            t2 = time.time()
             # Loop through the associated sources to convert them to the gbdes
             # format, which requires the extension index, the source's index in
             # the input table, and a sequence number corresponding to the
             # object with which it is associated.
+            #"#""
             sequence = 0
             obj_index = allObjectIndices[0]
+            #print("prev len sequence: ", len(sequences))
             for visit, detector, row, obj_ind in zip(allVisits, allDetectors, issIndices, allObjectIndices):
                 extensionIndex = np.flatnonzero(
                     (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
@@ -2918,7 +2946,70 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                 else:
                     sequences.append(sequence)
                     sequence += 1
+            #"#""
+            t3 = time.time()
 
+            # alt method
+            tractExtensions = np.zeros(len(allObjectIndices), dtype=int)
+            tractObjIndices = np.zeros(len(allObjectIndices), dtype=int)
+            notInInputs = np.zeros(len(allObjectIndices), dtype=bool)
+            #uniqueObjects = np.arange(allObjectIndices.max() + 2)
+            #sorted = np.searchsorted(allObjectIndices, uniqueObjects)
+            #objectCount = np.diff(sorted)
+            #tractSequence = np.concatenate([np.arange(count) for count in objectCount])
+            for visit in np.unique(isolatedStarSources['visit']):
+                for detector in np.unique(isolatedStarSources[isolatedStarSources['visit'] == visit]["detector"]):
+                    outputInds = (allVisits == visit) & (allDetectors == detector)
+                    extensionIndex = np.flatnonzero(
+                        (extensionInfo.visit == visit) & (extensionInfo.detector == detector)
+                    )
+                    if len(extensionIndex) == 0:
+                        notInInputs[outputInds] = True
+                        continue
+                    extensionIndex = extensionIndex[0]
+                    sourceInds = (isolatedStarSources['visit'] == visit) & (isolatedStarSources['detector'] == detector)
+                    
+                    tractExtensions[outputInds] = extensionIndex
+                    objIndices = np.arange(sourceInds.sum()) + len(sourceDictAlt[visit][detector]["x"])
+                    tractObjIndices[outputInds] = objIndices
+
+                    source = isolatedStarSources[sourceInds]
+                    sourceDictAlt[visit][detector]["x"].extend(list(source["x"]))
+                    sourceDictAlt[visit][detector]["y"].extend(list(source["y"]))
+                    xCov = source["xErr"] ** 2
+                    yCov = source["yErr"] ** 2
+                    xyCov = source["ixy"] * (xCov + yCov) / (source["ixx"] + source["iyy"])
+                    # TODO: add correct xyErr if DM-7101 is ever done.
+                    sourceDict[visit][detector]["xCov"].extend(list(xCov))
+                    sourceDict[visit][detector]["yCov"].extend(list(yCov))
+                    sourceDict[visit][detector]["xyCov"].extend(list(xyCov))
+
+            # Add ref objects:
+            for refField in np.unique(allVisits[allVisits < 0]):
+                extensionIndex = np.flatnonzero(
+                    (extensionInfo.detector == -1) & (extensionInfo.visit == refField)
+                )
+                extensionIndex = extensionIndex[0]
+                #sourceInds = (isolatedStarSources['visit'] == visit) & (isolatedStarSources['detector'] == detector)
+                outputInds = (allVisits == refField) & (allDetectors == -1)
+                tractExtensions[outputInds] = extensionIndex
+                tractObjIndices[outputInds] = issIndices[outputInds]
+            if notInInputs.all():
+                continue
+            uniqueObjects = np.arange(np.array(allObjectIndices)[~notInInputs].max() + 2)
+            sorted = np.searchsorted(np.array(allObjectIndices)[~notInInputs], uniqueObjects)
+            objectCount = np.diff(sorted)
+            tractSequence = np.concatenate([np.arange(count) for count in objectCount])
+            t4 = time.time()
+            print("loading time: ", t1 - t0)
+            print("ref assoc:", t2 - t1)
+            print("reformatting:", t3 - t2)
+            print("alt reformatting:", t4 - t3)
+            #import ipdb; ipdb.set_trace()
+            altextensions.extend(list(tractExtensions[~notInInputs]))
+            altobject_indices.extend(list(tractObjIndices[~notInInputs]))
+            altsequences.extend(list(tractSequence))
+        import ipdb; ipdb.set_trace()
         associations = pipeBase.Struct(extn=extensions, obj=object_indices, sequence=sequences)
         return associations, sourceDict
 
@@ -2964,14 +3055,17 @@ class GbdesGlobalAstrometricFitTask(GbdesAstrometricFitTask):
                     "yCov": np.array(sourceCat["yCov"]),
                     "xyCov": np.array(sourceCat["xyCov"]),
                 }
-                wcsf.setObjects(
-                    extensionIndex,
-                    d,
-                    "x",
-                    "y",
-                    ["xCov", "yCov", "xyCov"],
-                    defaultColor=self.config.referenceColor,
-                )
+                try:
+                    wcsf.setObjects(
+                        extensionIndex,
+                        d,
+                        "x",
+                        "y",
+                        ["xCov", "yCov", "xyCov"],
+                        defaultColor=self.config.referenceColor,
+                    )
+                except:
+                    import ipdb; ipdb.set_trace()
 
 
 class GbdesGlobalAstrometricMultibandFitConnections(
