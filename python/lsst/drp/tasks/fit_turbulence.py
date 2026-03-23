@@ -229,6 +229,12 @@ class GaussianProcessesTurbulenceFitConnections(
             self.inputPositions = dataclasses.replace(
                 self.inputPositions, dimensions=["instrument", "band", "physical_filter"] + extra_dimensions
             )
+            self.outputWcs = dataclasses.replace(
+                self.outputWcs, dimensions=["instrument", "visit"] + extra_dimensions
+            )
+            self.hyperparameters = dataclasses.replace(
+                self.hyperparameters, dimensions=["instrument", "visit"] + extra_dimensions
+            )
 
 
 class GaussianProcessesTurbulenceFitConfig(
