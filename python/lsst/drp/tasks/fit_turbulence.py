@@ -158,7 +158,7 @@ class NotPositiveDefiniteMatrixError(pipeBase.AlgorithmError):
 
     def __init__(self, nSources) -> None:
         super().__init__(
-            "The Gaussian Processes fit failed with a not-positive-definite linear algebra" " error."
+            "The Gaussian Processes fit failed with a not-positive-definite linear algebra error."
         )
         self._nSources = nSources
 
@@ -218,13 +218,16 @@ class GaussianProcessesTurbulenceFitConnections(
 
         if not self.config.healpix:
             self.dimensions.remove("healpix3")
-            self.dimensions.add("tract")
-            self.dimensions.add("skymap")
+            if self.config.healpix is None:
+                extra_dimensions = []
+            else:
+                extra_dimensions = ["tract", "skymap"]
+            self.dimensions.update(extra_dimensions)
             self.inputWcs = dataclasses.replace(
-                self.inputWcs, dimensions=("instrument", "visit", "tract", "skymap")
+                self.inputWcs, dimensions=["instrument", "visit"] + extra_dimensions
             )
             self.inputPositions = dataclasses.replace(
-                self.inputPositions, dimensions=("instrument", "tract", "skymap", "band", "physical_filter")
+                self.inputPositions, dimensions=["instrument", "band", "physical_filter"] + extra_dimensions
             )
 
 
@@ -272,6 +275,7 @@ class GaussianProcessesTurbulenceFitConfig(
         dtype=bool,
         doc="Use input WCS calculated over healpix-based region. If false, use tract-based WCS.",
         default=True,
+        optional=True,
     )
     splineDegree = pexConfig.Field(
         dtype=int,
