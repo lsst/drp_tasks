@@ -151,6 +151,7 @@ class FitStellarMotionTestCase(unittest.TestCase):
 
     def _make_refCat(self, nObjects):
         """Make a reference catalog."""
+        referenceIds = np.arange(nObjects)
         covariance = np.zeros((nObjects, 5, 5))
         covariance[:, 0, 0] = 1
         covariance[:, 1, 1] = 1
@@ -164,6 +165,7 @@ class FitStellarMotionTestCase(unittest.TestCase):
             "decPM": self.pmDecs * u.mas / u.yr,
             "parallax": self.parallaxes * u.mas,
             "covariance": covariance,
+            "id": referenceIds,
         }
         return astropy.table.Table(refCat)
 
