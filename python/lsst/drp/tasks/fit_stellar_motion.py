@@ -20,7 +20,12 @@
 # see <https://www.lsstcorp.org/LegalNotices/>.
 #
 
-__all__ = ["FitStellarMotionConfig", "FitStellarMotionConnections", "FitStellarMotionTask"]
+__all__ = [
+    "FitStellarMotionConfig",
+    "FitStellarMotionConnections",
+    "FitStellarMotionTask",
+    "assemble_position_covariance",
+]
 
 import astropy.coordinates
 import astropy.units as u
@@ -32,8 +37,39 @@ import lsst.afw.geom as afwGeom
 import lsst.geom
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
+from lsst.daf.butler import DatasetProvenance
 from lsst.meas.algorithms import LoadReferenceObjectsConfig, ReferenceObjectLoader
 from lsst.skymap import BaseSkyMap
+
+
+def assemble_position_covariance(table, names=("ra", "dec", "raPM", "decPM", "parallax")):
+    """Assemble the position covariance matrices, given a table with the error
+    and covariance values.
+
+    Parameters
+    ----------
+    table : `astropy.table.Table`
+        Table with covariance values.
+    names : `list` [`string`]
+        List of names for the coordinates, proper motion, and parallax values.
+
+    Returns
+    -------
+    covariance : `np.ndarray`
+        Array with covariance in matrix format, following the ordering in
+        `names`.
+    """
+    outArray = np.zeros((len(table), len(names), len(names)))
+    for i, name1 in enumerate(names):
+        for j, name2 in enumerate(names[: i + 1]):
+            if i == j:
+                columnName = f"{name1}Err"
+                outArray[:, i, i] = table[columnName] ** 2
+            else:
+                columnName = f"{name2}_{name1}_Cov"
+                outArray[:, i, j] = table[columnName]
+                outArray[:, j, i] = table[columnName]
+    return outArray
 
 
 class FitStellarMotionConnections(
@@ -162,6 +198,11 @@ class FitStellarMotionConfig(pipeBase.PipelineTaskConfig, pipelineConnections=Fi
         default=None,
         optional=True,
     )
+    positionNames = pexConfig.ListField(
+        dtype=str,
+        default=["ra", "dec", "raPM", "decPM", "parallax"],
+        doc="Names of position, proper motion, and parallax columns.",
+    )
 
 
 class FitStellarMotionTask(pipeBase.PipelineTask):
@@ -264,6 +305,7 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
         if not starSources:
             raise pipeBase.NoWorkFound("No isolated stars found in this region.")
 
+        DatasetProvenance.strip_provenance_from_flat_dict(starSources.meta)
         starSources.add_index("sourceId")
 
         # Load reference objects.
@@ -275,7 +317,7 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
         # Load needed columns from source catalogs and get visit info.
         visitStars, visitInfo = self._load_sources(starSources, visitSummaries, inputSources)
 
-        # Fit postion, proper motion and parallax for all objects.
+        # Fit position, proper motion and parallax for all objects.
         outCat, predictedRADec = self._fit_objects(
             visitStars, starCatalogRef, starSources, visitInfo, epoch, refCatalog=refCatalog
         )
@@ -325,7 +367,15 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
                 else:
                     cov[:, i, j] = (refCat[f"{pi}_{pj}_Cov"].value * u.radian**2).to_value(u.marcsec**2)
         refCatalog = Table(
-            {"ra": ra, "dec": dec, "raPM": raPM, "decPM": decPM, "parallax": parallax, "covariance": cov}
+            {
+                "id": refCat["id"],
+                "ra": ra,
+                "dec": dec,
+                "raPM": raPM,
+                "decPM": decPM,
+                "parallax": parallax,
+                "covariance": cov,
+            }
         )
         return refCatalog
 
@@ -391,6 +441,7 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
                     ]
                 }
             )
+            DatasetProvenance.strip_provenance_from_flat_dict(visitSources.meta)
             visitStars = join(
                 visitSources,
                 starSources[starSources["visit"] == visit],
@@ -456,14 +507,13 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
         objectPositions = np.ones((len(starCatalog), 5)) * np.nan
         objectCovariances = np.ones((len(starCatalog), 5, 5)) * np.nan
         predictedRADec = np.ones((len(starSources), 2)) * np.nan
-        includesReference = np.zeros(len(starCatalog), dtype=bool)
+        referenceId = np.zeros(len(starCatalog), dtype=int)
         nSources = np.zeros(len(starCatalog), dtype=int)
         refPositions = Table(
             np.ones((len(starCatalog), 5)) * np.nan,
-            names=("ref_ra", "ref_dec", "ref_raPM", "ref_decPM", "ref_covariance"),
+            names=("ref_ra", "ref_dec", "ref_raPM", "ref_decPM", "ref_parallax"),
             dtype=("f8", "f8", "f8", "f8", "f8"),
         )
-        refCovariances = np.ones((len(starCatalog), 5, 5)) * np.nan
         for object in objects:
             # Get all detections for this object.
             detectionInds = visitStars["obj_index"] == object
@@ -510,9 +560,8 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
                     refWcs,
                 )
                 scienceDetections = np.append(scienceDetections, False)
-                includesReference[object] = True
+                referenceId[object] = refMatch["id"]
                 refPositions[object] = refMatch[["ra", "dec", "raPM", "decPM", "parallax"]]
-                refCovariances[object] = refMatch["covariance"]
 
             elif nDetections < 3:
                 # If there is no associated reference object, there must be at
@@ -531,13 +580,20 @@ class FitStellarMotionTask(pipeBase.PipelineTask):
                 scienceDetections
             ]
 
-        outCat = Table(objectPositions, names=("ra", "dec", "raPM", "decPM", "parallax"))
-        outCat["hasReference"] = includesReference
-        outCat["covariance"] = objectCovariances
+        outCat = Table(objectPositions, names=self.config.positionNames)
+        outCat["referenceId"] = referenceId
+        for i, name1 in enumerate(self.config.positionNames):
+            for j, name2 in enumerate(self.config.positionNames[: i + 1]):
+                if i == j:
+                    columnName = f"{name1}Err"
+                    outCat[columnName] = objectCovariances[:, i, i] ** 0.5
+                else:
+                    columnName = f"{name2}_{name1}_Cov"
+                    outCat[columnName] = objectCovariances[:, i, j]
+
         outCat = hstack([outCat, refPositions])
-        outCat["ref_covariance"] = refCovariances
         outCat["isolated_star_id"] = starCatalog["isolated_star_id"]
-        outCat.meta["epoch"] = fitEpoch
+        outCat["epoch"] = fitEpoch.mjd
 
         predictedRADec = Table(predictedRADec, names=("ra", "dec"))
         predictedRADec["sourceId"] = starSources["sourceId"]
