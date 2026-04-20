@@ -31,7 +31,7 @@ from lsst.afw.image import ExposureF, Image, Mask, PhotoCalib
 from lsst.afw.math import BackgroundList, Warper
 from lsst.coadd.utils import copyGoodPixels
 from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
-from lsst.geom import Box2D
+from lsst.geom import Box2D, Box2I
 from lsst.meas.algorithms import CoaddPsf, CoaddPsfConfig, backgroundFlatContext
 from lsst.meas.algorithms.cloughTocher2DInterpolator import CloughTocher2DInterpolateTask
 from lsst.meas.base import DetectorVisitIdGeneratorConfig
@@ -148,7 +148,7 @@ class MakeDirectWarpConnections(
     """Connections for MakeWarpTask"""
 
     calexp_list = Input(
-        doc="Input exposures to be interpolated and resampled onto a SkyMap " "projection/patch.",
+        doc="Input exposures to be interpolated and resampled onto a SkyMap projection/patch.",
         name="calexp",
         storageClass="ExposureF",
         dimensions=("instrument", "visit", "detector"),
@@ -538,8 +538,9 @@ class MakeDirectWarpTask(PipelineTask):
             if not inputs:
                 raise NoWorkFound("No input warps remain after selection for co-addition")
 
-        sky_info.bbox.grow(self.config.border)
-        target_bbox, target_wcs = sky_info.bbox, sky_info.wcs
+        target_bbox, target_wcs = Box2I(sky_info.bbox), sky_info.wcs
+        target_bbox.grow(self.config.border)
+        del sky_info  # Make sure we don't use the original bbox by accident
 
         # Initialize the objects that will hold the warp.
         final_warp = ExposureF(target_bbox, target_wcs)
@@ -553,10 +554,10 @@ class MakeDirectWarpTask(PipelineTask):
         # want to hold all the warped exposures in memory at once either.
         # So we create empty exposure(s) to accumulate the warps of each type,
         # and then process each detector serially.
-        final_warp = self._prepareEmptyExposure(sky_info)
-        final_masked_fraction_warp = self._prepareEmptyExposure(sky_info)
+        final_warp = self._prepareEmptyExposure(target_bbox, target_wcs)
+        final_masked_fraction_warp = self._prepareEmptyExposure(target_bbox, target_wcs)
         final_noise_warps = {
-            n_noise: self._prepareEmptyExposure(sky_info)
+            n_noise: self._prepareEmptyExposure(target_bbox, target_wcs)
             for n_noise in range(self.config.numberOfNoiseRealizations)
         }
 
@@ -668,7 +669,7 @@ class MakeDirectWarpTask(PipelineTask):
 
         coaddPsf = CoaddPsf(
             inputRecorder.coaddInputs.ccds,
-            sky_info.wcs,
+            target_wcs,
             self.config.coaddPsf.makeControl(),
         )
 
@@ -879,21 +880,22 @@ class MakeDirectWarpTask(PipelineTask):
 
     # This method is copied from makeWarp.py
     @classmethod
-    def _prepareEmptyExposure(cls, sky_info):
+    def _prepareEmptyExposure(cls, bbox, wcs):
         """Produce an empty exposure for a given patch.
 
         Parameters
         ----------
-        sky_info : `lsst.pipe.base.Struct`
-            Struct from `~lsst.pipe.base.coaddBase.makeSkyInfo` with
-            geometric information about the patch.
+        bbox : `lsst.geom.Box2I`
+            Bounding box for the exposure.
+        wcs : `lsst.afw.geom.SkyWcs`
+            Mapping from pixels to sky.
 
         Returns
         -------
         exp : `lsst.afw.image.exposure.ExposureF`
             An empty exposure for a given patch.
         """
-        exp = ExposureF(sky_info.bbox, sky_info.wcs)
+        exp = ExposureF(bbox, wcs)
         exp.getMaskedImage().set(np.nan, Mask.getPlaneBitMask("NO_DATA"), np.inf)
         # Set the PhotoCalib to 1 to mean that pixels are nJy, since we will
         # calibrate them before we warp them.
