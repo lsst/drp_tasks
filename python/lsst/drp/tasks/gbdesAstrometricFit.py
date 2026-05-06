@@ -656,6 +656,7 @@ class GbdesAstrometricFitConfig(
     )
 
     def setDefaults(self):
+        super().setDefaults()
         # Use only stars because aperture fluxes of galaxies are biased and
         # depend on seeing.
         self.sourceSelector["science"].doUnresolved = True
