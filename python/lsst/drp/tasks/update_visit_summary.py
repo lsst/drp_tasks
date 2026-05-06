@@ -989,7 +989,14 @@ class UpdateVisitSummaryTask(PipelineTask):
                 image_ap_corr_map=ap_corr,
                 sources_is_astropy=True,
             )
-
+            # It will do the computation just once across the FoV
+            # at the first pass and then it will populate the other
+            # detectors with the first pass value.
+            self.compute_summary_stats.comp_psf_TEX_visit_level(
+                summary_stats,
+                psf_star_catalog,
+                sources_is_astropy=True,
+            )
             if photo_calib_overrides:
                 center = compute_center_for_detector_record(output_record, bbox, wcs)
                 (
