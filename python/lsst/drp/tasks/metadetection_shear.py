@@ -704,12 +704,20 @@ class MetadetectionShearTask(PipelineTask):
         self.rng = np.random.RandomState(seed)
         idstart = 0
 
+        # We bake in the reasonable assumption that the skymap is configured
+        # to have one cell as the patch border. This should be ideally read
+        # from the skymap config with an attribute of the same name.
+        numCellsInPatchBorder = 1
+
         grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
         nx_cells, ny_cells = grid.shape
         single_cell_tables: list[pa.Table] = []
-        for nx, ny in product(range(nx_cells), range(ny_cells)):
+        for nx, ny in product(
+            range(numCellsInPatchBorder, nx_cells - numCellsInPatchBorder),
+            range(numCellsInPatchBorder, ny_cells - numCellsInPatchBorder),
+        ):
             cell_id = Index2D(nx, ny)
-            bbox = grid.bbox_of(cell_id)
+            bbox = grid.bbox_of(cell_id).dilatedBy(self.config.border)
             cell_coadds = [patch_coadd.stitch(bbox) for patch_coadd in patch_coadds.values()]
             self.log.debug("Processing cell %s %s", nx, ny)
 
