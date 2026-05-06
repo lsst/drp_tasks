@@ -388,17 +388,6 @@ class MakeDirectWarpTask(PipelineTask):
     detectors) from a single visit that overlap the target patch. Pixels that
     receive no input from any detector are set to NaN in the output image, and
     NO_DATA bit is set in the mask plane.
-
-    This differs from the standard `MakeWarp` Task in the following
-    ways:
-
-    1. No selection on ccds at the time of warping. This is done later during
-       the coaddition stage.
-    2. Interpolate over a set of masked pixels before warping.
-    3. Generate an image where each pixel denotes how much of the pixel is
-       masked.
-    4. Generate multiple noise warps with the same interpolation applied.
-    5. No option to produce a PSF-matched warp.
     """
 
     ConfigClass = MakeDirectWarpConfig
@@ -878,7 +867,6 @@ class MakeDirectWarpTask(PipelineTask):
 
         return True
 
-    # This method is copied from makeWarp.py
     @classmethod
     def _prepareEmptyExposure(cls, bbox, wcs):
         """Produce an empty exposure for a given patch.
