@@ -388,7 +388,7 @@ class MetadetectionShearTask(PipelineTask):
                     pa.int32(),
                     nullable=False,
                     metadata={
-                        "doc": "Flags for the original PSF measurement.",
+                        "doc": "Flags for the original PSF measurement, ORed over the shear bands",
                         "unit": "",
                     },
                 ),
@@ -397,7 +397,10 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "Distortion-style e1 of the original PSF from adaptive moments.",
+                        "doc": (
+                            "Distortion-style e1 of the original PSF from adaptive moments, "
+                            "averaged over the shear bands."
+                        ),
                         "unit": "",
                     },
                 ),
@@ -406,7 +409,10 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "Distortion-style e2 of the original PSF from adaptive moments.",
+                        "doc": (
+                            "Distortion-style e2 of the original PSF from adaptive moments, "
+                            "averaged over the shear bands."
+                        ),
                         "unit": "",
                     },
                 ),
@@ -415,7 +421,10 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "Trace (<x^2> + <y^2>) measurement of the original PSF from adaptive moments.",
+                        "doc": (
+                            "Trace (<x^2> + <y^2>) measurement of the original PSF from adaptive moments, "
+                            "averaged over the shear bands."
+                        ),
                         "unit": "arcseconds squared",
                     },
                 ),
