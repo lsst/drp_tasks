@@ -393,24 +393,24 @@ class MetadetectionShearTask(PipelineTask):
                     },
                 ),
                 pa.field(
-                    "psfOriginal_e1",
+                    "psfOriginal_g1",
                     pa.float32(),
                     nullable=False,
                     metadata={
                         "doc": (
-                            "Distortion-style e1 of the original PSF from adaptive moments, "
+                            "Reduced-shear g1 of the original PSF from adaptive moments, "
                             "averaged over the shear bands."
                         ),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "psfOriginal_e2",
+                    "psfOriginal_g2",
                     pa.float32(),
                     nullable=False,
                     metadata={
                         "doc": (
-                            "Distortion-style e2 of the original PSF from adaptive moments, "
+                            "Reduced-shear g2 of the original PSF from adaptive moments, "
                             "averaged over the shear bands."
                         ),
                         "unit": "",
@@ -981,8 +981,8 @@ class MetadetectionShearTask(PipelineTask):
             "pgauss_T_flags": "pgauss_shape_flags",
             "pgauss_T_ratio": "pgauss_T_ratio",  # dropped.
             "psfrec_flags": "psfOriginal_flags",
-            "psfrec_g_1": "psfOriginal_e1",
-            "psfrec_g_2": "psfOriginal_e2",
+            "psfrec_g_1": "psfOriginal_g1",
+            "psfrec_g_2": "psfOriginal_g2",
             "psfrec_T": "psfOriginal_T",
             "ra": "ra",
             "row": "y",
