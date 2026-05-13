@@ -152,6 +152,10 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
 
         trueWCSs = cls._make_wcs(cls.trueModel, cls.inputVisitSummary)
 
+        cls.isolatedStarCatalogs, cls.isolatedStarSources = cls._make_isolatedStars(
+            [starIds], [starRAs], [starDecs], trueWCSs, inScienceFraction
+        )
+
         # Make source catalogs:
         cls.inputCatalogRefs = cls._make_sourceCat(starIds, starRAs, starDecs, trueWCSs, inScienceFraction)
 
@@ -212,6 +216,133 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         return nStars, starIds, starRAs, starDecs
 
     @classmethod
+    def _make_isolatedStars(cls, allStarIds, allStarRAs, allStarDecs, trueWCSs, inScienceFraction):
+        """Given a subset of the simulated data, make source catalogs and star
+        catalogs following the isolated star association format.
+
+        This takes the true WCSs to go from the RA and Decs of the simulated
+        stars to pixel coordinates for a given visit and detector. If those
+        pixel coordinates are within the bounding box of the detector, the
+        source and visit information is put in the corresponding catalog of
+        isolated star sources.
+
+        Parameters
+        ----------
+        allStarIds : `np.ndarray` [`int`]
+            Source ids for the simulated stars
+        allStarRas : `np.ndarray` [`float`]
+            RAs of the simulated stars
+        allStarDecs : `np.ndarray` [`float`]
+            Decs of the simulated stars
+        trueWCSs : `list` [`lsst.afw.geom.SkyWcs`]
+            WCS with which to simulate the source pixel coordinates
+        inReferenceFraction : float
+            Percentage of simulated stars to include in reference catalog
+
+        Returns
+        -------
+        isolatedStarCatalogRefs : `list`
+            [`lsst.pipe.base.InMemoryDatasetHandle`]
+            List of references to isolated star catalogs.
+        isolatedStarSourceRefs : `list`
+            [`lsst.pipe.base.InMemoryDatasetHandle`]
+            List of references to isolated star sources.
+        """
+        bbox = lsst.geom.BoxD(
+            lsst.geom.Point2D(
+                cls.inputVisitSummary[0][0]["bbox_min_x"], cls.inputVisitSummary[0][0]["bbox_min_y"]
+            ),
+            lsst.geom.Point2D(
+                cls.inputVisitSummary[0][0]["bbox_max_x"], cls.inputVisitSummary[0][0]["bbox_max_y"]
+            ),
+        )
+        bboxCorners = bbox.getCorners()
+
+        isolatedStarCatalogRefs = []
+        isolatedStarSourceRefs = []
+        for i in range(len(allStarIds)):
+            starIds = allStarIds[i]
+            starRAs = allStarRAs[i]
+            starDecs = allStarDecs[i]
+            isolatedStarCatalog = pd.DataFrame({"ra": starRAs, "dec": starDecs}, index=starIds)
+            isolatedStarCatalogRefs.append(
+                InMemoryDatasetHandle(isolatedStarCatalog, storageClass="DataFrame", dataId={"tract": 0})
+            )
+            sourceCats = []
+            for v, visit in enumerate(cls.testVisits):
+                nVisStars = int(cls.nStars * inScienceFraction)
+                visitStarIndices = np.random.choice(cls.nStars, nVisStars, replace=False)
+                visitStarIds = starIds[visitStarIndices]
+                visitStarRas = starRAs[visitStarIndices]
+                visitStarDecs = starDecs[visitStarIndices]
+                for detector in trueWCSs[visit]:
+                    detWcs = detector.getWcs()
+                    detectorId = detector["id"]
+                    radecCorners = detWcs.pixelToSky(bboxCorners)
+                    detectorFootprint = sphgeom.ConvexPolygon([rd.getVector() for rd in radecCorners])
+                    detectorIndices = detectorFootprint.contains(
+                        (visitStarRas * u.degree).to(u.radian), (visitStarDecs * u.degree).to(u.radian)
+                    )
+                    nDetectorStars = detectorIndices.sum()
+                    detectorArray = np.ones(nDetectorStars, dtype=int) * detector["id"]
+                    visitArray = np.ones(nDetectorStars, dtype=int) * visit
+
+                    ones_like = np.ones(nDetectorStars)
+                    zeros_like = np.zeros(nDetectorStars, dtype=bool)
+
+                    x, y = detWcs.skyToPixelArray(
+                        visitStarRas[detectorIndices], visitStarDecs[detectorIndices], degrees=True
+                    )
+
+                    origWcs = (cls.inputVisitSummary[v][cls.inputVisitSummary[v]["id"] == detectorId])[
+                        0
+                    ].getWcs()
+                    inputRa, inputDec = origWcs.pixelToSkyArray(x, y, degrees=True)
+
+                    sourceDict = {}
+                    sourceDict["detector"] = detectorArray
+                    sourceDict["visit"] = visitArray
+                    sourceDict["obj_index"] = visitStarIds[detectorIndices]
+                    sourceDict["x"] = x
+                    sourceDict["y"] = y
+                    sourceDict["xErr"] = 1e-3 * ones_like
+                    sourceDict["yErr"] = 1e-3 * ones_like
+                    sourceDict["inputRA"] = inputRa
+                    sourceDict["inputDec"] = inputDec
+                    sourceDict["trueRA"] = visitStarRas[detectorIndices]
+                    sourceDict["trueDec"] = visitStarDecs[detectorIndices]
+                    for key in ["apFlux_12_0_flux", "apFlux_12_0_instFlux", "ixx", "iyy"]:
+                        sourceDict[key] = ones_like
+                    for key in [
+                        "pixelFlags_edge",
+                        "pixelFlags_saturated",
+                        "pixelFlags_interpolatedCenter",
+                        "pixelFlags_interpolated",
+                        "pixelFlags_crCenter",
+                        "pixelFlags_bad",
+                        "hsmPsfMoments_flag",
+                        "apFlux_12_0_flag",
+                        "extendedness",
+                        "parentSourceId",
+                        "deblend_nChild",
+                        "ixy",
+                    ]:
+                        sourceDict[key] = zeros_like
+                    sourceDict["apFlux_12_0_instFluxErr"] = 1e-2 * ones_like
+                    sourceDict["detect_isPrimary"] = ones_like.astype(bool)
+
+                    sourceCat = pd.DataFrame(sourceDict)
+                    sourceCats.append(sourceCat)
+
+            isolatedStarSourceTable = pd.concat(sourceCats, ignore_index=True)
+            isolatedStarSourceTable = isolatedStarSourceTable.sort_values(by=["obj_index"])
+            isolatedStarSourceRefs.append(
+                InMemoryDatasetHandle(isolatedStarSourceTable, storageClass="DataFrame", dataId={"tract": 0})
+            )
+
+        return isolatedStarCatalogRefs, isolatedStarSourceRefs
+
+    @classmethod
     def _make_refCat(cls, starIds, starRas, starDecs, inReferenceFraction, bounds):
         """Make reference catalog from a subset of the simulated data
 
@@ -256,8 +387,8 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
             record.setRa(lsst.geom.Angle(starRas[i], lsst.geom.degrees))
             record.setDec(lsst.geom.Angle(starDecs[i], lsst.geom.degrees))
             record.set(fluxKey, 1)
-            record.set(raErrKey, 0.00001)
-            record.set(decErrKey, 0.00001)
+            record.set(raErrKey, 1e-8)
+            record.set(decErrKey, 1e-8)
             record.set(pmraErrKey, 1e-9)
             record.set(pmdecErrKey, 1e-9)
         refDataId = MockRefcatDataId(bounds)
@@ -752,6 +883,40 @@ class TestGbdesAstrometricFit(lsst.utils.tests.TestCase):
         )
         self.assertEqual(len(outputs.colorParams["visit"]), len(self.testVisits))
 
+    def test_useIsolatedStars(self):
+        """Test that the input star positions are recovered when isolated star
+        catalogs are used for the input."""
+
+        config = copy(self.config)
+        config.useIsolatedStars = True
+
+        task = GbdesAstrometricFitTask(config=config)
+        outputs = task.run(
+            None,
+            self.inputVisitSummary,
+            isolatedStarSources=self.isolatedStarSources,
+            isolatedStarCatalogs=self.isolatedStarCatalogs,
+            refObjectLoader=self.refObjectLoader,
+        )
+        for isolatedStarSourceRef in self.isolatedStarSources:
+            iss = isolatedStarSourceRef.get()
+            visits = np.unique(iss["visit"])
+            for v, visit in enumerate(visits):
+                outputWcsCatalog = outputs.outputWcss[visit]
+                visitSources = iss[iss["visit"] == visit]
+                detectors = outputWcsCatalog["id"]
+                for d, detectorId in enumerate(detectors):
+                    fitwcs = outputWcsCatalog[d].getWcs()
+                    detSources = visitSources[visitSources["detector"] == detectorId]
+                    fitRA, fitDec = fitwcs.pixelToSkyArray(detSources["x"], detSources["y"], degrees=True)
+                    dRA = fitRA - detSources["trueRA"]
+                    dDec = fitDec - detSources["trueDec"]
+                    # Check that input coordinates match the output coordinates
+                    self.assertAlmostEqual(np.mean(dRA), 0)
+                    self.assertAlmostEqual(np.std(dRA), 0)
+                    self.assertAlmostEqual(np.mean(dDec), 0)
+                    self.assertAlmostEqual(np.std(dDec), 0)
+
 
 class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
     @classmethod
@@ -871,133 +1036,6 @@ class TestGbdesGlobalAstrometricFit(TestGbdesAstrometricFit):
             refEpoch=cls.refEpoch,
             refObjectLoader=cls.refObjectLoader,
         )
-
-    @classmethod
-    def _make_isolatedStars(cls, allStarIds, allStarRAs, allStarDecs, trueWCSs, inScienceFraction):
-        """Given a subset of the simulated data, make source catalogs and star
-        catalogs.
-
-        This takes the true WCSs to go from the RA and Decs of the simulated
-        stars to pixel coordinates for a given visit and detector. If those
-        pixel coordinates are within the bounding box of the detector, the
-        source and visit information is put in the corresponding catalog of
-        isolated star sources.
-
-        Parameters
-        ----------
-        allStarIds : `np.ndarray` [`int`]
-            Source ids for the simulated stars
-        allStarRas : `np.ndarray` [`float`]
-            RAs of the simulated stars
-        allStarDecs : `np.ndarray` [`float`]
-            Decs of the simulated stars
-        trueWCSs : `list` [`lsst.afw.geom.SkyWcs`]
-            WCS with which to simulate the source pixel coordinates
-        inReferenceFraction : float
-            Percentage of simulated stars to include in reference catalog
-
-        Returns
-        -------
-        isolatedStarCatalogRefs : `list`
-            [`lsst.pipe.base.InMemoryDatasetHandle`]
-            List of references to isolated star catalogs.
-        isolatedStarSourceRefs : `list`
-            [`lsst.pipe.base.InMemoryDatasetHandle`]
-            List of references to isolated star sources.
-        """
-        bbox = lsst.geom.BoxD(
-            lsst.geom.Point2D(
-                cls.inputVisitSummary[0][0]["bbox_min_x"], cls.inputVisitSummary[0][0]["bbox_min_y"]
-            ),
-            lsst.geom.Point2D(
-                cls.inputVisitSummary[0][0]["bbox_max_x"], cls.inputVisitSummary[0][0]["bbox_max_y"]
-            ),
-        )
-        bboxCorners = bbox.getCorners()
-
-        isolatedStarCatalogRefs = []
-        isolatedStarSourceRefs = []
-        for i in range(len(allStarIds)):
-            starIds = allStarIds[i]
-            starRAs = allStarRAs[i]
-            starDecs = allStarDecs[i]
-            isolatedStarCatalog = pd.DataFrame({"ra": starRAs, "dec": starDecs}, index=starIds)
-            isolatedStarCatalogRefs.append(
-                InMemoryDatasetHandle(isolatedStarCatalog, storageClass="DataFrame", dataId={"tract": 0})
-            )
-            sourceCats = []
-            for v, visit in enumerate(cls.testVisits):
-                nVisStars = int(cls.nStars * inScienceFraction)
-                visitStarIndices = np.random.choice(cls.nStars, nVisStars, replace=False)
-                visitStarIds = starIds[visitStarIndices]
-                visitStarRas = starRAs[visitStarIndices]
-                visitStarDecs = starDecs[visitStarIndices]
-                for detector in trueWCSs[visit]:
-                    detWcs = detector.getWcs()
-                    detectorId = detector["id"]
-                    radecCorners = detWcs.pixelToSky(bboxCorners)
-                    detectorFootprint = sphgeom.ConvexPolygon([rd.getVector() for rd in radecCorners])
-                    detectorIndices = detectorFootprint.contains(
-                        (visitStarRas * u.degree).to(u.radian), (visitStarDecs * u.degree).to(u.radian)
-                    )
-                    nDetectorStars = detectorIndices.sum()
-                    detectorArray = np.ones(nDetectorStars, dtype=int) * detector["id"]
-                    visitArray = np.ones(nDetectorStars, dtype=int) * visit
-
-                    ones_like = np.ones(nDetectorStars)
-                    zeros_like = np.zeros(nDetectorStars, dtype=bool)
-
-                    x, y = detWcs.skyToPixelArray(
-                        visitStarRas[detectorIndices], visitStarDecs[detectorIndices], degrees=True
-                    )
-
-                    origWcs = (cls.inputVisitSummary[v][cls.inputVisitSummary[v]["id"] == detectorId])[
-                        0
-                    ].getWcs()
-                    inputRa, inputDec = origWcs.pixelToSkyArray(x, y, degrees=True)
-
-                    sourceDict = {}
-                    sourceDict["detector"] = detectorArray
-                    sourceDict["visit"] = visitArray
-                    sourceDict["obj_index"] = visitStarIds[detectorIndices]
-                    sourceDict["x"] = x
-                    sourceDict["y"] = y
-                    sourceDict["xErr"] = 1e-3 * ones_like
-                    sourceDict["yErr"] = 1e-3 * ones_like
-                    sourceDict["inputRA"] = inputRa
-                    sourceDict["inputDec"] = inputDec
-                    sourceDict["trueRA"] = visitStarRas[detectorIndices]
-                    sourceDict["trueDec"] = visitStarDecs[detectorIndices]
-                    for key in ["apFlux_12_0_flux", "apFlux_12_0_instFlux", "ixx", "iyy"]:
-                        sourceDict[key] = ones_like
-                    for key in [
-                        "pixelFlags_edge",
-                        "pixelFlags_saturated",
-                        "pixelFlags_interpolatedCenter",
-                        "pixelFlags_interpolated",
-                        "pixelFlags_crCenter",
-                        "pixelFlags_bad",
-                        "hsmPsfMoments_flag",
-                        "apFlux_12_0_flag",
-                        "extendedness",
-                        "parentSourceId",
-                        "deblend_nChild",
-                        "ixy",
-                    ]:
-                        sourceDict[key] = zeros_like
-                    sourceDict["apFlux_12_0_instFluxErr"] = 1e-2 * ones_like
-                    sourceDict["detect_isPrimary"] = ones_like.astype(bool)
-
-                    sourceCat = pd.DataFrame(sourceDict)
-                    sourceCats.append(sourceCat)
-
-            isolatedStarSourceTable = pd.concat(sourceCats, ignore_index=True)
-            isolatedStarSourceTable = isolatedStarSourceTable.sort_values(by=["obj_index"])
-            isolatedStarSourceRefs.append(
-                InMemoryDatasetHandle(isolatedStarSourceTable, storageClass="DataFrame", dataId={"tract": 0})
-            )
-
-        return isolatedStarCatalogRefs, isolatedStarSourceRefs
 
     def test_loading_and_association(self):
         """Test that associated objects actually correspond to the same
