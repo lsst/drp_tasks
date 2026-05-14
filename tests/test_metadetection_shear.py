@@ -21,14 +21,17 @@
 
 
 import unittest
+from dataclasses import dataclass
 
 import numpy as np
 import pyarrow as pa
 from felis.datamodel import Schema
 
 import lsst.utils.tests
-from lsst.drp.tasks.metadetection_shear import MetadetectionShearTask
+from lsst.drp.tasks.metadetection_shear import MetadetectionShearConfig, MetadetectionShearTask
+from lsst.pipe.base import InvalidQuantumError
 from lsst.resources import ResourcePath
+from lsst.skymap import RingsSkyMapConfig
 
 
 class ShearObjectSchemaConsistencyTestCase(unittest.TestCase):
@@ -87,6 +90,178 @@ class ShearObjectSchemaConsistencyTestCase(unittest.TestCase):
         for field in sdm_schema:
             with self.subTest(field_name=field.name):
                 self.assertFieldsEqual(field, task_schema.field(field.name))
+
+
+@dataclass(frozen=True)
+class SkymapConfigs:
+    """Immutable configuration container for standard skymap settings."""
+
+    lsst_cells_v1: RingsSkyMapConfig
+    lsst_cells_v2: RingsSkyMapConfig
+
+
+class CountCellsAlongEdgesTestCase(unittest.TestCase):
+    """Test the count_cells_along_edges static method."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        # Docstring inherited.
+
+        ring_skymap_config = RingsSkyMapConfig()
+        ring_skymap_config.tractBuilder.name = "cells"
+        ring_skymap_config.numRings = 120
+        ring_skymap_config.pixelScale = 0.2
+        ring_skymap_config.projection = "TAN"
+        ring_skymap_config.raStart = 0.0
+        ring_skymap_config.rotation = 0.0
+        ring_skymap_config.tractOverlap = 0.016666666666666666
+
+        cell_config = ring_skymap_config.tractBuilder["cells"]
+
+        cell_config.cellInnerDimensions = [150, 150]
+        cell_config.numCellsInPatchBorder = 1
+        cell_config.numCellsPerPatchInner = 20
+
+        cls.standard_skymap_configs = SkymapConfigs(
+            lsst_cells_v1=ring_skymap_config.copy(),
+            lsst_cells_v2=ring_skymap_config.copy(),
+        )
+        cls.standard_skymap_configs.lsst_cells_v1.tractBuilder["cells"].cellBorder = 50
+        cls.standard_skymap_configs.lsst_cells_v2.tractBuilder["cells"].cellBorder = 0
+        cls.standard_skymap_configs.lsst_cells_v1.freeze()
+        cls.standard_skymap_configs.lsst_cells_v2.freeze()
+
+        cls.custom_skymap_config = ring_skymap_config
+
+    def setUp(self):
+        # Docstring inherited.
+        self.custom_skymap_config = self.standard_skymap_configs.lsst_cells_v1.copy()
+        self.metadetection_shear_config = MetadetectionShearConfig()
+
+    def test_count_cells_along_edges(self):
+        """Test count_cells_along_edges"""
+
+        lsst_cells_v1 = self.standard_skymap_configs.lsst_cells_v1
+        num_cells = MetadetectionShearTask.count_cells_along_edges(lsst_cells_v1)
+        self.assertEqual(num_cells, 0)
+
+        lsst_cells_v2 = self.standard_skymap_configs.lsst_cells_v2
+        num_cells = MetadetectionShearTask.count_cells_along_edges(lsst_cells_v2)
+        self.assertEqual(num_cells, 1)
+
+    def test_validate_skymap_config_lsst_cells_v1(self):
+        """Test validation passes with lsst_cells_v1 skymap."""
+        self.metadetection_shear_config.border = None
+        task = MetadetectionShearTask(config=self.metadetection_shear_config)
+
+        # This should not raise an exception
+        task.validate_skymap_config(self.standard_skymap_configs.lsst_cells_v1)
+
+    def test_validate_skymap_config_lsst_cells_v2(self):
+        """Test validation passes with lsst_cells_v2 skymap."""
+        self.metadetection_shear_config.border = 50
+        task = MetadetectionShearTask(config=self.metadetection_shear_config)
+
+        # This should not raise an exception
+        task.validate_skymap_config(self.standard_skymap_configs.lsst_cells_v2)
+
+    def test_validate_skymap_config_invalid_tract_builder(self):
+        """Test validation fails with non-cells tract builder."""
+        self.custom_skymap_config.tractBuilder.name = "legacy"
+
+        task = MetadetectionShearTask(config=self.metadetection_shear_config)
+
+        with self.assertRaises(InvalidQuantumError, msg="requires a cell-based skymap"):
+            task.validate_skymap_config(self.custom_skymap_config)
+
+    def test_validate_skymap_config_no_border_in_both_configs(self):
+        """Test validation fails when border is None in task config and
+        cellBorder is 0 in skymap.
+        """
+        self.custom_skymap_config.tractBuilder["cells"].cellBorder = 0
+
+        config = MetadetectionShearConfig()
+        config.border = None
+
+        task = MetadetectionShearTask(config=config)
+
+        with self.assertRaises(
+            InvalidQuantumError, msg="requires a border to be set either in the skymap config"
+        ):
+            task.validate_skymap_config(self.custom_skymap_config)
+
+    def test_validate_skymap_config_border_in_both_configs(self):
+        """Test validation fails when border is set in both task config and
+        cellBorder in skymap.
+        """
+        self.custom_skymap_config.tractBuilder["cells"].cellBorder = 2
+
+        config = MetadetectionShearConfig()
+        config.border = 10
+
+        task = MetadetectionShearTask(config=config)
+
+        with self.assertRaises(InvalidQuantumError) as cm:
+            task.validate_skymap_config(self.custom_skymap_config)
+
+        self.assertIn("requires a border to be set either in the skymap config", str(cm.exception))
+
+    def test_validate_skymap_config_border_too_large(self):
+        """Test validation fails when border value exceeds maximum allowed."""
+        self.custom_skymap_config.tractBuilder["cells"].cellBorder = 0  # No cell border
+
+        config = MetadetectionShearConfig()
+        config.border = 5000  # Very large border
+
+        task = MetadetectionShearTask(config=config)
+
+        with self.assertRaises(InvalidQuantumError) as cm:
+            task.validate_skymap_config(self.custom_skymap_config)
+
+        self.assertIn("border value is too large", str(cm.exception))
+
+    def test_validate_skymap_config_pixel_scale_mismatch(self):
+        """Test validation fails when pixel scale calculations don't match."""
+        self.custom_skymap_config.tractBuilder["cells"].cellBorder = 0
+        self.custom_skymap_config.pixelScale = 0.1  # Very small pixel scale
+        self.custom_skymap_config.tractOverlap = 0.001  # Small tract overlap
+
+        config = MetadetectionShearConfig()
+        config.border = 10
+
+        task = MetadetectionShearTask(config=config)
+
+        with self.assertRaises(InvalidQuantumError) as cm:
+            task.validate_skymap_config(self.custom_skymap_config)
+
+        self.assertIn("pixel scale in the skymap config does not match", str(cm.exception))
+
+    def test_validate_skymap_config_success_with_task_border(self):
+        """Test validation succeeds when border is set in task config only."""
+        self.custom_skymap_config.tractBuilder["cells"].cellBorder = 0  # No cell border
+
+        config = MetadetectionShearConfig()
+        config.border = 10  # Reasonable border
+
+        task = MetadetectionShearTask(config=config)
+
+        # Should not raise an exception
+        task.validate_skymap_config(self.custom_skymap_config)
+
+    def test_validate_skymap_config_success_with_skymap_border(self):
+        """Test validation succeeds when border is set in skymap config
+        only.
+        """
+        self.custom_skymap_config.tractBuilder["cells"].cellBorder = 2  # Has cell border
+        self.custom_skymap_config.tractBuilder["cells"].numCellsInPatchBorder = 1
+
+        config = MetadetectionShearConfig()
+        config.border = None  # No task border
+
+        task = MetadetectionShearTask(config=config)
+
+        # Should not raise an exception
+        task.validate_skymap_config(self.custom_skymap_config)
 
 
 def setup_module(module):
