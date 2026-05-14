@@ -51,7 +51,6 @@ from lsst.pipe.base import (
     AlgorithmError,
     AnnotatedPartialOutputsError,
     InputQuantizedConnection,
-    InvalidQuantumError,
     NoWorkFound,
     OutputQuantizedConnection,
     PipelineTask,
@@ -61,7 +60,7 @@ from lsst.pipe.base import (
     Struct,
 )
 from lsst.pipe.base.connectionTypes import BaseInput, Output
-from lsst.skymap import BaseSkyMap, Index2D
+from lsst.skymap import Index2D
 
 
 class MetadetectionProcessingError(AlgorithmError):
@@ -81,13 +80,6 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
         doc="Per-band deep coadds.",
         multiple=True,
         dimensions={"patch", "band"},
-    )
-
-    sky_map = cT.Input(
-        doc="Cell-based skymap defining the patch structure.",
-        name=BaseSkyMap.SKYMAP_DATASET_TYPE_NAME,
-        storageClass="SkyMap",
-        dimensions=("skymap",),
     )
 
     ref_cat = cT.PrerequisiteInput(
@@ -184,7 +176,7 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
     )
 
     border = Field[int](
-        "Border to apply to single cell images, if skymap has no cell borders",
+        "Border to apply to single cell images",
         default=50,
     )
 
@@ -634,51 +626,6 @@ class MetadetectionShearTask(PipelineTask):
 
         return pa_schema
 
-    def validate_skymap_config(self, skymap_config: BaseSkyMap.ConfigClass) -> None:
-        if not skymap_config.tractBuilder.name == "cells":
-            raise InvalidQuantumError("MetadetectionShearTask requires a cell-based skymap.")
-
-        cell_config = skymap_config.tractBuilder.active
-        if (self.config.border == 0 and cell_config.cellBorder == 0) or (
-            self.config.border > 0 and cell_config.cellBorder > 0
-        ):
-            raise InvalidQuantumError(
-                "MetadetectionShearTask requires a positive border to be set either in the skymap config "
-                "or in the task config (but not in both)."
-            )
-
-        if self.config.border:
-            # In case cellInnerDimensions are different in different directions
-            # (which is rare in practice), take the min of it
-            cell_inner_dimensions = min(cell_config.cellInnerDimensions)
-            if self.config.border > (
-                max_border_value := cell_config.numCellsInPatchBorder * cell_inner_dimensions
-            ):
-                raise InvalidQuantumError(
-                    "The border value is too large for the skymap configuration. "
-                    f"Maximum border value is {max_border_value}."
-                )
-
-            # Ensure that the amount by which we withdraw inwards does not
-            # create gaps at tract boundaries.
-            # tractOverlap is specified in degrees.
-            if (
-                skymap_config.tractOverlap * 3600 / skymap_config.pixelScale
-                < self.count_cells_along_edges(skymap_config) * cell_inner_dimensions + cell_config.cellBorder
-            ):
-                raise InvalidQuantumError(
-                    "The tract overlap is insufficient given the borders. "
-                    "This will result in missed regions between adjacent tracts."
-                )
-
-    @staticmethod
-    def count_cells_along_edges(skymap_config: BaseSkyMap.ConfigClass) -> int:
-        """Count the number of cells along the edges to skip processing."""
-        if skymap_config.tractBuilder["cells"].cellBorder > 0:
-            return 0
-
-        return skymap_config.tractBuilder["cells"].numCellsInPatchBorder
-
     def runQuantum(
         self,
         qc: QuantumContext,
@@ -686,11 +633,6 @@ class MetadetectionShearTask(PipelineTask):
         outputRefs: OutputQuantizedConnection,
     ) -> None:
         # Docstring inherited.
-
-        # Get the skyMap for this quantum
-        sky_map = qc.get(inputRefs.sky_map)
-
-        self.validate_skymap_config(sky_map.config)
 
         id_generator = self.config.id_generator.apply(qc.quantum.dataId)
 
@@ -722,7 +664,6 @@ class MetadetectionShearTask(PipelineTask):
             outputs = self.run(
                 patch_coadds=coadds_by_band,
                 id_generator=id_generator,
-                sky_map=sky_map,
                 ref_cat=ref_cat,
             )
         except AlgorithmError as err:
@@ -736,7 +677,6 @@ class MetadetectionShearTask(PipelineTask):
         *,
         patch_coadds: Mapping[str, MultipleCellCoadd],
         id_generator: FullIdGenerator,
-        sky_map: BaseSkyMap,
         ref_cat: SimpleCatalog | None,
     ) -> Struct:
         """Run metadetection on a patch.
@@ -749,8 +689,6 @@ class MetadetectionShearTask(PipelineTask):
             `MetadetectionShearConfig.photometry_bands`.
         id_generator : `~lsst.meas.base.FullIdGenerator`
             Generator for object IDs and to seed the random number generator.
-        sky_map : `~lsst.skymap.BaseSkyMap`
-            Sky map to use for determining the patch boundaries.
         ref_cat : `lsst.afw.table.SimpleCatalog`, optional
             Reference catalog to use when masking bright stars.
 
@@ -766,28 +704,12 @@ class MetadetectionShearTask(PipelineTask):
         self.rng = np.random.RandomState(seed)
         idstart = 0
 
-        match sky_map.config.tractBuilder.active.cellBorder:
-            case 0:
-                # If cells have no borders, we cannot apply the metacal
-                # procedure to the edge cells in the same way as inner cells.
-                # We can do so for all that cells that are marked as borders,
-                # but it has to be at least 1.
-                if (num_edge_cells_skip := sky_map.config.tractBuilder.active.numCellsInPatchBorder) < 1:
-                    raise InvalidQuantumError("No border cells found in the skymap configuration.")
-            case _:
-                num_edge_cells_skip = 0
-
-        dilate_by = self.config.border or 0
-
         grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
         nx_cells, ny_cells = grid.shape
         single_cell_tables: list[pa.Table] = []
-        for nx, ny in product(
-            range(num_edge_cells_skip, nx_cells - num_edge_cells_skip),
-            range(num_edge_cells_skip, ny_cells - num_edge_cells_skip),
-        ):
+        for nx, ny in product(range(nx_cells), range(ny_cells)):
             cell_id = Index2D(nx, ny)
-            bbox = grid.bbox_of(cell_id).dilatedBy(dilate_by)
+            bbox = grid.bbox_of(cell_id)
             cell_coadds = [patch_coadd.stitch(bbox) for patch_coadd in patch_coadds.values()]
             self.log.debug("Processing cell %s %s", nx, ny)
 
