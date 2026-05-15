@@ -766,16 +766,12 @@ class MetadetectionShearTask(PipelineTask):
         self.rng = np.random.RandomState(seed)
         idstart = 0
 
-        match sky_map.config.tractBuilder.active.cellBorder:
-            case 0:
-                # If cells have no borders, we cannot apply the metacal
-                # procedure to the edge cells in the same way as inner cells.
-                # We can do so for all that cells that are marked as borders,
-                # but it has to be at least 1.
-                if (num_edge_cells_skip := sky_map.config.tractBuilder.active.numCellsInPatchBorder) < 1:
-                    raise InvalidQuantumError("No border cells found in the skymap configuration.")
-            case _:
-                num_edge_cells_skip = 0
+        # Since cells have no borders, we cannot apply the metacal
+        # procedure to the edge cells in the same way as inner cells.
+        # We can do so for all that cells that are marked as borders,
+        # but it has to be at least 1.
+        if (num_edge_cells_skip := sky_map.config.tractBuilder.active.numCellsInPatchBorder) < 1:
+            raise InvalidQuantumError("No border cells found in the skymap configuration.")
 
         dilate_by = self.config.border or sky_map.config.tractBuilder.active.cellBorder
 
