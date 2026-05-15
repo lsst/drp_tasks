@@ -777,9 +777,14 @@ class MetadetectionShearTask(PipelineTask):
             case _:
                 num_edge_cells_skip = 0
 
-        dilate_by = self.config.border or 0
+        dilate_by = self.config.border or sky_map.config.tractBuilder.active.cellBorder
 
         grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
+        # Undo any padding that was applied when creating the grid.
+        # We only support metadetection on non-overlapping single cells.
+        # lsst_cells_v1 has overlapping cells, so we need to undo the padding.
+        grid = grid.from_bbox_shape(bbox=grid.bbox, shape=grid.shape, padding=0)
+
         nx_cells, ny_cells = grid.shape
         single_cell_tables: list[pa.Table] = []
         for nx, ny in product(
