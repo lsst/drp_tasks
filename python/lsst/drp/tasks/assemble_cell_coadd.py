@@ -162,6 +162,15 @@ class AssembleCellCoaddConnections(
         dimensions=("tract", "patch", "band", "skymap"),
     )
 
+    psfWeightFraction = Output(
+        doc="Per-cell image of the ratio of effective PSF weight to nominal science weight. "
+        "Values below 1.0 indicate cells where masked pixels reduced the PSF weight relative "
+        "to the science coadd weight.",
+        name="{inputWarpName}Coadd{outputCoaddSuffix}_psfWeightFraction",
+        storageClass="ImageF",
+        dimensions=("tract", "patch", "band", "skymap"),
+    )
+
     def __init__(self, *, config=None):
         super().__init__(config=config)
 
@@ -176,6 +185,9 @@ class AssembleCellCoaddConnections(
 
         if not config.do_input_map:
             del self.inputMap
+
+        if not config.do_psf_weight_fraction_image:
+            del self.psfWeightFraction
 
         # Dynamically set input connections for noise images, depending on the
         # number of noise realizations specified in the config.
@@ -297,6 +309,12 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     do_input_map = Field[bool](
         default=False,
         doc="Create a bitwise map of coadd inputs.",
+    )
+    do_psf_weight_fraction_image = Field[bool](
+        default=False,
+        doc="Output a per-cell image of the ratio of effective PSF weight to nominal science weight. "
+        "Useful for diagnosing cells where masked pixels cause the PSF to be unrepresentative of "
+        "the science coadd.",
     )
     input_mapper = ConfigurableField(
         target=HealSparseInputMapTask,
@@ -578,6 +596,9 @@ class AssembleCellCoaddTask(PipelineTask):
         cell_centers_sky = GridContainer[geom.SpherePoint](warp_stacker_gc.shape)
         # Make a container to hold the observation identifiers for each cell.
         observation_identifiers_gc = GridContainer[dict](warp_stacker_gc.shape)
+        # Track the sum of mask-adjusted PSF weights per cell, for the
+        # psfWeightFraction diagnostic image.
+        psf_weight_sums: dict = {}
 
         if self.config.do_input_map:
             # We need to know all the visit + detector pairs in the inputs.
@@ -597,6 +618,7 @@ class AssembleCellCoaddTask(PipelineTask):
         for cellInfo in skyInfo.patchInfo:
             # Make a list to hold the observation identifiers for each cell.
             observation_identifiers_gc[cellInfo.index] = {}
+            psf_weight_sums[cellInfo.index] = 0.0
             cell_center_pixel = geom.Point2D(geom.Point2I(cellInfo.inner_bbox.getCenter()))
             cell_centers_sky[cellInfo.index] = skyInfo.wcs.pixelToSky(cell_center_pixel)
             psf_bbox_gc[cellInfo.index] = geom.Box2I.makeCenteredBox(
@@ -909,6 +931,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                 else:
                     psf_weight = 0.0
+                psf_weight_sums[cellInfo.index] += psf_weight
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=psf_weight)
 
                 if not (0.995 < (psf_normalization := warped_psf_maskedImage.image.array.sum()) < 1.005):
@@ -941,6 +964,11 @@ class AssembleCellCoaddTask(PipelineTask):
             self.common,
             visit_polygons=visit_polygons,
         )
+
+        if self.config.do_psf_weight_fraction_image:
+            psf_weight_fraction_image = afwImage.ImageF(skyInfo.bbox, initialValue=np.nan)
+        else:
+            psf_weight_fraction_image = None
 
         cells: list[SingleCellCoadd] = []
         for cellInfo in skyInfo.patchInfo:
@@ -1009,6 +1037,16 @@ class AssembleCellCoaddTask(PipelineTask):
             # TODO: Attach transmission curve when they become available.
             cells.append(singleCellCoadd)
 
+            if self.config.do_psf_weight_fraction_image:
+                total_weight = sum(
+                    obs.weight for obs in observation_identifiers_gc[cellInfo.index].values()
+                    if obs.overlaps_center
+                )
+                fraction = (
+                    psf_weight_sums[cellInfo.index] / total_weight if total_weight > 0 else np.nan
+                )
+                psf_weight_fraction_image[cellInfo.inner_bbox].array[:, :] = fraction
+
         if not cells:
             raise NoWorkFound("No cells could be populated for the cell coadd.")
 
@@ -1025,6 +1063,7 @@ class AssembleCellCoaddTask(PipelineTask):
         return Struct(
             multipleCellCoadd=multipleCellCoadd,
             inputMap=inputMap,
+            psfWeightFraction=psf_weight_fraction_image,
         )
 
 
