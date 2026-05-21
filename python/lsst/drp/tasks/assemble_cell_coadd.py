@@ -897,7 +897,19 @@ class AssembleCellCoaddTask(PipelineTask):
                 warped_psf_maskedImage.image.array[np.isnan(warped_psf_maskedImage.image.array)] = 0.0
 
                 psf_stacker = psf_stacker_gc[cellInfo.index]
-                psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
+                # Scale the PSF weight by the fraction of unmasked pixels from
+                # this detector in the inner cell, so that the PSF contribution
+                # reflects actual pixel contributions to the science coadd.
+                inner_detector_pixels = detector_map[inner_bbox].array == ccd_row["ccd"]
+                n_inner_detector_pixels = inner_detector_pixels.sum()
+                if n_inner_detector_pixels > 0:
+                    inner_bad_pixels = (warp[inner_bbox].mask.array & rejected) != 0
+                    psf_weight = (
+                        weight * (inner_detector_pixels & ~inner_bad_pixels).sum() / n_inner_detector_pixels
+                    )
+                else:
+                    psf_weight = 0.0
+                psf_stacker.add_masked_image(warped_psf_maskedImage, weight=psf_weight)
 
                 if not (0.995 < (psf_normalization := warped_psf_maskedImage.image.array.sum()) < 1.005):
                     self.log.warning(
