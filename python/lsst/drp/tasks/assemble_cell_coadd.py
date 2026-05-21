@@ -864,7 +864,10 @@ class AssembleCellCoaddTask(PipelineTask):
                         psf_eval_point,
                     )
 
-                overlaps_center = detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
+                psf_weight = weight * unmasked_fraction
+                overlaps_center = (
+                    detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
+                ) and (psf_weight > 0.0)
 
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warp_input.dataId,
@@ -873,6 +876,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 observation_identifiers_gc[cellInfo.index][observation_identifier] = CoaddInputs(
                     overlaps_center=overlaps_center,
                     overlap_fraction=overlap_fraction,
+                    unmasked_overlap_fraction=unmasked_fraction,
                     weight=weight,
                     psf_shape=psf_shape,
                     psf_shape_flag=psf_shape_flag,
@@ -916,10 +920,6 @@ class AssembleCellCoaddTask(PipelineTask):
                 warped_psf_maskedImage.image.array[np.isnan(warped_psf_maskedImage.image.array)] = 0.0
 
                 psf_stacker = psf_stacker_gc[cellInfo.index]
-                # Scale the PSF weight by the fraction of unmasked pixels from
-                # this detector in the inner cell, so that the PSF contribution
-                # reflects actual pixel contributions to the science coadd.
-                psf_weight = weight * unmasked_fraction
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=psf_weight)
 
                 if not (0.995 < (psf_normalization := warped_psf_maskedImage.image.array.sum()) < 1.005):
