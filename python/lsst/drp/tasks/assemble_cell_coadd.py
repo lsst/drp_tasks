@@ -262,9 +262,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         default={"SAT": 0.1},
     )
     max_maskfrac = RangeField[float](
-        doc="Maximum fraction of masked pixels in a cell. This is currently "
-        "just a placeholder and is not used now",
-        default=0.99,
+        doc="Maximum fraction of masked pixels in a cell for a given warp. "
+        "Warps exceeding this threshold are excluded from the science coadd, "
+        "PSF, aperture corrections, and input maps.",
+        default=0.5,
         min=0.0,
         max=1.0,
         inclusiveMin=True,
@@ -782,6 +783,23 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
+                # Compute the unmasked fraction for this detector in the inner
+                # cell. Used to gate on max_maskfrac and to scale PSF weight.
+                inner_detector_pixels = detector_map[inner_bbox].array == ccd_row["ccd"]
+                inner_unmasked_pixels = (warp[inner_bbox].mask.array & rejected) == 0
+                unmasked_fraction = (
+                    (inner_detector_pixels & inner_unmasked_pixels).sum() / inner_detector_pixels.sum()
+                )
+                if unmasked_fraction <= max(1.0 - self.config.max_maskfrac, 0.0):
+                    self.log.debug(
+                        "Skipping %s in cell %s: masked fraction %.3f exceeds threshold %.3f",
+                        warp_input.dataId,
+                        cellInfo.index,
+                        1.0 - unmasked_fraction,
+                        self.config.max_maskfrac,
+                    )
+                    continue
+
                 # Decide if a deep copy is necessary to apply the single
                 # detector cuts since it involves modifying the image in-place.
                 # If within the inner cell, there are three or more different
@@ -900,15 +918,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 # Scale the PSF weight by the fraction of unmasked pixels from
                 # this detector in the inner cell, so that the PSF contribution
                 # reflects actual pixel contributions to the science coadd.
-                inner_detector_pixels = detector_map[inner_bbox].array == ccd_row["ccd"]
-                n_inner_detector_pixels = inner_detector_pixels.sum()
-                if n_inner_detector_pixels > 0:
-                    inner_bad_pixels = (warp[inner_bbox].mask.array & rejected) != 0
-                    psf_weight = (
-                        weight * (inner_detector_pixels & ~inner_bad_pixels).sum() / n_inner_detector_pixels
-                    )
-                else:
-                    psf_weight = 0.0
+                psf_weight = weight * unmasked_fraction
                 psf_stacker.add_masked_image(warped_psf_maskedImage, weight=psf_weight)
 
                 if not (0.995 < (psf_normalization := warped_psf_maskedImage.image.array.sum()) < 1.005):
