@@ -815,10 +815,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 warp_stacker_gc[cellInfo.index].add_masked_image(mi, weight=weight)
 
                 if masked_fraction_image:
-                    mi = afwImage.ImageF(masked_fraction_image[bbox], deep=deep_copy)
+                    mi = afwImage.ImageF(masked_fraction_image[bbox], deep=True)
                     if deep_copy:
                         mi.array[single_detector_mask_array] = 0.0
-                    maskfrac_stacker_gc[cellInfo.index].add_image(masked_fraction_image[bbox], weight=weight)
+                    mi.array[(warp[bbox].mask.array & rejected) != 0] = 1.0
+                    maskfrac_stacker_gc[cellInfo.index].add_image(mi, weight=weight)
 
                 for n in range(self.config.num_noise_realizations):
                     mi = afwImage.MaskedImageF(noise_warps[n][bbox], deep=deep_copy)
