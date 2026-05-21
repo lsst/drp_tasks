@@ -931,12 +931,12 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
 
                 if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
-                    ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
+                    ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=psf_weight)
 
                 if self.config.do_input_map:
                     self.input_mapper.add_warp_to_cell_input_map(
                         ccd_row,
-                        weight,
+                        psf_weight,
                         cellInfo,
                     )
 
