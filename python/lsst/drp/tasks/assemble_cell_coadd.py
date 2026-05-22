@@ -785,8 +785,8 @@ class AssembleCellCoaddTask(PipelineTask):
                 inner_detector_pixels = detector_map[inner_bbox].array == ccd_row["ccd"]
                 inner_unmasked_pixels = (warp[inner_bbox].mask.array & rejected) == 0
                 unmasked_fraction = (
-                    (inner_detector_pixels & inner_unmasked_pixels).sum() / inner_detector_pixels.sum()
-                )
+                    inner_detector_pixels & inner_unmasked_pixels
+                ).sum() / inner_detector_pixels.sum()
                 if unmasked_fraction <= max(1.0 - self.config.max_maskfrac, 0.0):
                     self.log.debug(
                         "Skipping %s in cell %s: masked fraction %.3f exceeds threshold %.3f",
@@ -798,9 +798,9 @@ class AssembleCellCoaddTask(PipelineTask):
                     continue
 
                 psf_weight = weight * unmasked_fraction
-                overlaps_center = (
-                    detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
-                ) and (psf_weight > 0.0)
+                overlaps_center = (detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]) and (
+                    psf_weight > 0.0
+                )
                 if not overlaps_center:
                     self.log.debug(
                         "%s does not overlap with the center of the cell %s",
