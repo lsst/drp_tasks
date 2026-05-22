@@ -878,6 +878,13 @@ class AssembleCellCoaddTask(PipelineTask):
                     psf_shape=psf_shape,
                     psf_shape_flag=psf_shape_flag,
                 )
+                if self.config.do_input_map:
+                    self.input_mapper.add_warp_to_cell_input_map(
+                        ccd_row,
+                        psf_weight,
+                        cellInfo,
+                    )
+
                 if overlaps_center is False:
                     self.log.debug(
                         "%s does not overlap with the center of the cell %s",
@@ -929,13 +936,6 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
                     ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=psf_weight)
-
-                if self.config.do_input_map:
-                    self.input_mapper.add_warp_to_cell_input_map(
-                        ccd_row,
-                        psf_weight,
-                        cellInfo,
-                    )
 
             del warp
 
