@@ -797,6 +797,18 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
+                psf_weight = weight * unmasked_fraction
+                overlaps_center = (
+                    detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
+                ) and (psf_weight > 0.0)
+                if not overlaps_center:
+                    self.log.debug(
+                        "%s does not overlap with the center of the cell %s",
+                        warp_input.dataId,
+                        cellInfo.index,
+                    )
+                    continue
+
                 # Decide if a deep copy is necessary to apply the single
                 # detector cuts since it involves modifying the image in-place.
                 # If within the inner cell, there are three or more different
@@ -861,11 +873,6 @@ class AssembleCellCoaddTask(PipelineTask):
                         psf_eval_point,
                     )
 
-                psf_weight = weight * unmasked_fraction
-                overlaps_center = (
-                    detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
-                ) and (psf_weight > 0.0)
-
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warp_input.dataId,
                     backup_detector=int(ccd_row["ccd"]),
@@ -884,14 +891,6 @@ class AssembleCellCoaddTask(PipelineTask):
                         psf_weight,
                         cellInfo,
                     )
-
-                if overlaps_center is False:
-                    self.log.debug(
-                        "%s does not overlap with the center of the cell %s",
-                        warp_input.dataId,
-                        cellInfo.index,
-                    )
-                    continue
 
                 # Everything below this has to do with the center of the cell
                 calexp_point = ccd_row.getWcs().skyToPixel(cell_centers_sky[cellInfo.index])
