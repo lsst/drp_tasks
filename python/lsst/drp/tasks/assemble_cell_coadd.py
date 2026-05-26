@@ -781,7 +781,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     continue
 
                 # Compute the unmasked fraction for this detector in the inner
-                # cell. Used to gate on max_maskfrac and to scale PSF weight.
+                # cell. Used to gate on max_maskfrac.
                 inner_detector_pixels = detector_map[inner_bbox].array == ccd_row["ccd"]
                 inner_unmasked_pixels = (warp[inner_bbox].mask.array & rejected) == 0
                 unmasked_fraction = (
@@ -797,10 +797,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
                     continue
 
-                psf_weight = weight * unmasked_fraction
-                overlaps_center = (detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]) and (
-                    psf_weight > 0.0
-                )
+                overlaps_center = detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
                 if not overlaps_center:
                     self.log.debug(
                         "%s does not overlap with the center of the cell %s",
@@ -888,7 +885,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 if self.config.do_input_map:
                     self.input_mapper.add_warp_to_cell_input_map(
                         ccd_row,
-                        psf_weight,
+                        weight,
                         cellInfo,
                     )
 
@@ -923,7 +920,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 warped_psf_maskedImage.image.array[np.isnan(warped_psf_maskedImage.image.array)] = 0.0
 
                 psf_stacker = psf_stacker_gc[cellInfo.index]
-                psf_stacker.add_masked_image(warped_psf_maskedImage, weight=psf_weight)
+                psf_stacker.add_masked_image(warped_psf_maskedImage, weight=weight)
 
                 if not (0.995 < (psf_normalization := warped_psf_maskedImage.image.array.sum()) < 1.005):
                     self.log.warning(
@@ -934,7 +931,7 @@ class AssembleCellCoaddTask(PipelineTask):
                     )
 
                 if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
-                    ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=psf_weight)
+                    ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
 
             del warp
 
