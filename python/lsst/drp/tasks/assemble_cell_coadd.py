@@ -624,7 +624,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for _, warp_input in inputs.items():
+        for warp_input in inputs.values():
             # warps that have been excluded from CompareWarp via visit
             # selection from SelectVisitsTasks will not have artifact masks.
             # Exclude them from the cell coadds too.
@@ -714,7 +714,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.log.debug("No visit summary found for %s; using warp-based weights", warp_input.dataId)
                 weight = self._compute_weight(warp, statsCtrl)
                 if not np.isfinite(weight):
-                    self.log.warn("Non-finite weight for %s: skipping", warp_input.dataId)
+                    self.log.warning("Non-finite weight for %s: skipping", warp_input.dataId)
                     continue
 
                 for detector in weights:
@@ -769,7 +769,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 weight = weights[int(ccd_row["ccd"])]
                 if not np.isfinite(weight):
-                    self.log.warn(
+                    self.log.warning(
                         "Non-finite weight for %s in cell %s: skipping", warp_input.dataId, cellInfo.index
                     )
                     continue
