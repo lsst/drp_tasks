@@ -48,6 +48,7 @@ import lsst.pex.exceptions as pexExceptions
 import lsst.pipe.base as pipeBase
 import lsst.utils as utils
 from lsst.meas.algorithms import AccumulatorMeanStack, MaskStreaksTask, ScaleVarianceTask, SourceDetectionTask
+from lsst.meas.algorithms.subtractBackground import TooManyMaskedPixelsError
 from lsst.pipe.tasks.coaddBase import (
     CoaddBaseTask,
     makeSkyInfo,
@@ -1351,6 +1352,21 @@ class CompareWarpAssembleCoaddConfig(
         target=SourceDetectionTask,
         doc="Detect sources on static sky model. Only used if doPreserveContainedBySource is True",
     )
+    detectTemplateIterMultiplier = pexConfig.Field(
+        dtype=float,
+        doc="Factor by which to scale the negative polarity detection threshold at each iteraction "
+        "(when attempting to recove from a background estimation failure). The maximum factor "
+        "attempted is controlled by this value along with the maximum number of iterations set "
+        "in config.maxDetectTemplateIter.",
+        default=1.25,
+    )
+    maxDetectTemplateIter = pexConfig.Field(
+        dtype=int,
+        doc="Maximum number of iterations when increasing the factor by which to multiply the "
+        "negative (and potentially positive) polarity detection threshold (in an attempt at "
+        "recovering in the case of a background estimation failure).",
+        default=10,
+    )
     maskStreaks = pexConfig.ConfigurableField(
         target=MaskStreaksTask,
         doc="Detect streaks on difference between each psfMatched warp and static sky model. Only used if "
@@ -1769,9 +1785,39 @@ class CompareWarpAssembleCoaddTask(AssembleCoaddTask):
         # mask of the warp diffs should = that of only the warp
         templateCoadd.mask.clearAllMaskPlanes()
 
+        factor = 1.0
+        factorNeg = 1.0
         if self.config.doPreserveContainedBySource:
             sacrificeToDetection = templateCoadd.clone()
-            templateFootprints = self.detectTemplate.detectFootprints(sacrificeToDetection)
+            for iFactorNeg in range(self.config.maxDetectTemplateIter):
+                try:
+                    templateFootprints = self.detectTemplate.detectFootprints(
+                        sacrificeToDetection, factor=factor, factorNeg=factorNeg
+                    )
+                    break
+                except TooManyMaskedPixelsError as e:
+                    if iFactorNeg < self.config.maxDetectTemplateIter - 1:
+                        factorNeg *= self.config.detectTemplateIterMultiplier
+                        self.log.warning(
+                            "detectTemplate failed with: %s at attempt number %d (of a maximum of %d). "
+                            "This is likely a result of background over-subtraction leading to a high "
+                            "DETECTED_NEGATIVE masked fraction. Increasing the negative detection factor "
+                            "to %.2f and retrying.",
+                            e,
+                            iFactorNeg + 1,
+                            self.config.maxDetectTemplateIter,
+                            factorNeg,
+                        )
+                        if iFactorNeg > int(0.4 * self.config.maxDetectTemplateIter):
+                            factor *= self.config.detectTemplateIterMultiplier
+                            self.log.warning(
+                                "Also raising factor for positive polarity detections to %.2f "
+                                "(at nIter = %d)",
+                                factor,
+                                iFactorNeg,
+                            )
+                    else:
+                        raise e
             del sacrificeToDetection
         else:
             templateFootprints = None
