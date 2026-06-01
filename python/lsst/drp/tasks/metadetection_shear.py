@@ -315,6 +315,15 @@ class MetadetectionShearTask(PipelineTask):
                         "unit": "",
                     },
                 ),
+                pa.field(
+                    "is_primary",
+                    pa.bool_(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Whether this object is to be selected after de-duplication",
+                        "unit": "",
+                    },
+                ),
                 # Fields from metadetection (generic).
                 pa.field(
                     "metaStep",
@@ -849,6 +858,7 @@ class MetadetectionShearTask(PipelineTask):
                     da["ra"] * geom.degrees,
                     da["dec"] * geom.degrees,
                 )
+                da["is_primary"] = da["is_cell_inner"] & da["is_patch_inner"] & da["is_tract_inner"]
 
                 table = pa.Table.from_pydict(da, self.metadetect_schema)
 
