@@ -262,9 +262,10 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
         default={"SAT": 0.1},
     )
     max_maskfrac = RangeField[float](
-        doc="Maximum fraction of masked pixels in a cell. This is currently "
-        "just a placeholder and is not used now",
-        default=0.99,
+        doc="Maximum fraction of masked pixels in a cell for a given warp. "
+        "Warps exceeding this threshold are excluded from the science coadd, "
+        "PSF, aperture corrections, and input maps.",
+        default=0.5,
         min=0.0,
         max=1.0,
         inclusiveMin=True,
@@ -570,6 +571,18 @@ class AssembleCellCoaddTask(PipelineTask):
         psf_bbox_gc = GridContainer[geom.Box2I](warp_stacker_gc.shape)
         ap_corr_stacker_gc = self._construct_ap_corr_grid_container(skyInfo)
 
+        # A cell is in "fallback" mode if it does not yet have any warps that
+        # pass the per-detector cuts; in that mode, we accumulate warps
+        # regardless of that cut, but clear the accumulators and start over if
+        # we later see data that does pass the per-detector cuts.
+        is_fallback_gc = GridContainer[bool](warp_stacker_gc.shape)
+
+        # We accumulate the information to pass to the Healsparse input-map
+        # accumulator instead of calling it directly, so we can do that only
+        # after we've accumulated all warps and hence know which cells will
+        # stay in fallback mode.
+        input_map_data_gc = GridContainer[list](warp_stacker_gc.shape)
+
         # Make a container to hold the cell centers in sky coordinates now,
         # so we don't have to recompute them for each warp
         # (they share a common WCS). These are needed to find the various
@@ -610,9 +623,8 @@ class AssembleCellCoaddTask(PipelineTask):
                 calc_error_from_input_variance=self.config.calc_error_from_input_variance,
                 compute_n_image=False,
             )
-
-            if self.config.do_input_map:
-                self.input_mapper.build_cell_input_map(cellInfo)
+            is_fallback_gc[cellInfo.index] = True
+            input_map_data_gc[cellInfo.index] = []
 
         # visit_summary do not have (tract, patch, band, skymap) dimensions.
         if not visitSummaryList:
@@ -626,7 +638,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
         # Read in one warp at a time, and accumulate it in all the cells that
         # it completely overlaps.
-        for _, warp_input in inputs.items():
+        for warp_input in inputs.values():
             # warps that have been excluded from CompareWarp via visit
             # selection from SelectVisitsTasks will not have artifact masks.
             # Exclude them from the cell coadds too.
@@ -716,7 +728,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 self.log.debug("No visit summary found for %s; using warp-based weights", warp_input.dataId)
                 weight = self._compute_weight(warp, statsCtrl)
                 if not np.isfinite(weight):
-                    self.log.warn("Non-finite weight for %s: skipping", warp_input.dataId)
+                    self.log.warning("Non-finite weight for %s: skipping", warp_input.dataId)
                     continue
 
                 for detector in weights:
@@ -771,7 +783,7 @@ class AssembleCellCoaddTask(PipelineTask):
 
                 weight = weights[int(ccd_row["ccd"])]
                 if not np.isfinite(weight):
-                    self.log.warn(
+                    self.log.warning(
                         "Non-finite weight for %s in cell %s: skipping", warp_input.dataId, cellInfo.index
                     )
                     continue
@@ -779,6 +791,59 @@ class AssembleCellCoaddTask(PipelineTask):
                 if weight == 0:
                     self.log.info(
                         "Zero weight for %s in cell %s: skipping", warp_input.dataId, cellInfo.index
+                    )
+                    continue
+
+                # Compute the unmasked fraction for this detector in the inner
+                # cell. Used to gate on max_maskfrac.
+                inner_detector_pixels = detector_map[inner_bbox].array == ccd_row["ccd"]
+                inner_unmasked_pixels = (warp[inner_bbox].mask.array & rejected) == 0
+                unmasked_fraction = (
+                    inner_detector_pixels & inner_unmasked_pixels
+                ).sum() / inner_detector_pixels.sum()
+                is_fallback = is_fallback_gc[cellInfo.index]
+                if unmasked_fraction <= max(1.0 - self.config.max_maskfrac, 0.0):
+                    if not is_fallback:
+                        # We already have good data in this cell, so we don't
+                        # want this heavily masked warp - it will add too much
+                        # INEXACT_PSF.
+                        self.log.debug(
+                            "Skipping %s in cell %s: masked fraction %.3f exceeds threshold %.3f",
+                            warp_input.dataId,
+                            cellInfo.index,
+                            1.0 - unmasked_fraction,
+                            self.config.max_maskfrac,
+                        )
+                        continue
+                    else:
+                        self.log.debug(
+                            "Including %s in cell %s only as potential fallback: "
+                            "masked fraction %.3f exceeds threshold %.3f",
+                            warp_input.dataId,
+                            cellInfo.index,
+                            1.0 - unmasked_fraction,
+                            self.config.max_maskfrac,
+                        )
+                elif is_fallback:
+                    # This is the first good data we've gotten for this cell;
+                    # wipe out the fallback coadd we've been accumulating so
+                    # far, so we can start fresh.
+                    warp_stacker_gc[cellInfo.index].reset()
+                    maskfrac_stacker_gc[cellInfo.index].reset()
+                    for n in range(self.config.num_noise_realizations):
+                        noise_stacker_gc_list[n][cellInfo.index].reset()
+                    psf_stacker_gc[cellInfo.index].reset()
+                    ap_corr_stacker_gc[cellInfo.index].reset()
+                    observation_identifiers_gc[cellInfo.index].clear()
+                    input_map_data_gc[cellInfo.index].clear()
+                    is_fallback_gc[cellInfo.index] = False
+
+                overlaps_center = detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
+                if not overlaps_center:
+                    self.log.debug(
+                        "%s does not overlap with the center of the cell %s",
+                        warp_input.dataId,
+                        cellInfo.index,
                     )
                     continue
 
@@ -800,10 +865,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 warp_stacker_gc[cellInfo.index].add_masked_image(mi, weight=weight)
 
                 if masked_fraction_image:
-                    mi = afwImage.ImageF(masked_fraction_image[bbox], deep=deep_copy)
+                    mi = afwImage.ImageF(masked_fraction_image[bbox], deep=True)
                     if deep_copy:
                         mi.array[single_detector_mask_array] = 0.0
-                    maskfrac_stacker_gc[cellInfo.index].add_image(masked_fraction_image[bbox], weight=weight)
+                    mi.array[(warp[bbox].mask.array & rejected) != 0] = 1.0
+                    maskfrac_stacker_gc[cellInfo.index].add_image(mi, weight=weight)
 
                 for n in range(self.config.num_noise_realizations):
                     mi = afwImage.MaskedImageF(noise_warps[n][bbox], deep=deep_copy)
@@ -845,8 +911,6 @@ class AssembleCellCoaddTask(PipelineTask):
                         psf_eval_point,
                     )
 
-                overlaps_center = detector_map[geom.Point2I(bbox.getCenter())] == ccd_row["ccd"]
-
                 observation_identifier = ObservationIdentifiers.from_data_id(
                     warp_input.dataId,
                     backup_detector=int(ccd_row["ccd"]),
@@ -854,17 +918,12 @@ class AssembleCellCoaddTask(PipelineTask):
                 observation_identifiers_gc[cellInfo.index][observation_identifier] = CoaddInputs(
                     overlaps_center=overlaps_center,
                     overlap_fraction=overlap_fraction,
+                    unmasked_overlap_fraction=unmasked_fraction,
                     weight=weight,
                     psf_shape=psf_shape,
                     psf_shape_flag=psf_shape_flag,
                 )
-                if overlaps_center is False:
-                    self.log.debug(
-                        "%s does not overlap with the center of the cell %s",
-                        warp_input.dataId,
-                        cellInfo.index,
-                    )
-                    continue
+                input_map_data_gc[cellInfo.index].append((ccd_row, weight))
 
                 # Everything below this has to do with the center of the cell
                 calexp_point = ccd_row.getWcs().skyToPixel(cell_centers_sky[cellInfo.index])
@@ -910,19 +969,7 @@ class AssembleCellCoaddTask(PipelineTask):
                 if (ap_corr_map := warp.getInfo().getApCorrMap()) is not None:
                     ap_corr_stacker_gc[cellInfo.index].add(ap_corr_map, weight=weight)
 
-                if self.config.do_input_map:
-                    self.input_mapper.add_warp_to_cell_input_map(
-                        ccd_row,
-                        weight,
-                        cellInfo,
-                    )
-
             del warp
-
-        if self.config.do_input_map:
-            inputMap = self.input_mapper.cell_input_map
-        else:
-            inputMap = None
 
         # Update common with the visit polygons.
         self.common = dataclasses.replace(
@@ -972,6 +1019,11 @@ class AssembleCellCoaddTask(PipelineTask):
                 (cell_masked_image.mask.array & rejected) > 0
             ] |= cell_masked_image.mask.getPlaneBitMask("INEXACT_PSF")
 
+            if self.config.do_input_map:
+                self.input_mapper.build_cell_input_map(cellInfo)
+                for ccd_row, weight in input_map_data_gc[cellInfo.index]:
+                    self.input_mapper.add_warp_to_cell_input_map(ccd_row, weight, cellInfo)
+
             image_planes = OwnedImagePlanes.from_masked_image(
                 masked_image=cell_masked_image,
                 mask_fractions=cell_maskfrac_image,
@@ -1009,6 +1061,11 @@ class AssembleCellCoaddTask(PipelineTask):
             common=self.common,
             psf_image_size=cells[0].psf_image.getDimensions(),
         )
+
+        if self.config.do_input_map:
+            inputMap = self.input_mapper.cell_input_map
+        else:
+            inputMap = None
 
         return Struct(
             multipleCellCoadd=multipleCellCoadd,
