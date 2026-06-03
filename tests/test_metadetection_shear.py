@@ -47,7 +47,7 @@ class ShearObjectSchemaConsistencyTestCase(unittest.TestCase):
         - type width (if not string)
         """
         self.assertEqual(field1.name, field2.name)
-        if field1.type != "string":
+        if field1.type not in {"bool", "string"}:
             self.assertEqual(field1.type.byte_width, field2.type.byte_width)
 
     def _read_shearobject_columns_from_yaml(self) -> pa.Schema:
@@ -57,6 +57,7 @@ class ShearObjectSchemaConsistencyTestCase(unittest.TestCase):
             "uint": np.uint32,
             "float": np.float32,
             "double": np.float64,
+            "boolean": bool,
         }
         # Load the lsstcam.yaml schema resource from sdm_schemas
 

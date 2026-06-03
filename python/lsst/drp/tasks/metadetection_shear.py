@@ -39,6 +39,7 @@ from metadetect.lsst.metacal_exposures import STEP as SHEAR_STEP
 from metadetect.lsst.metadetect import MetadetectTask
 from metadetect.lsst.util import extract_multiband_coadd_data
 
+import lsst.geom as geom
 import lsst.pipe.base.connectionTypes as cT
 from lsst.afw.image import ExposureF
 from lsst.afw.table import SimpleCatalog
@@ -61,6 +62,7 @@ from lsst.pipe.base import (
     Struct,
 )
 from lsst.pipe.base.connectionTypes import BaseInput, Output
+from lsst.pipe.tasks.coaddBase import makeSkyInfo
 from lsst.skymap import BaseSkyMap, Index2D
 
 
@@ -283,6 +285,42 @@ class MetadetectionShearTask(PipelineTask):
                     nullable=False,
                     metadata={
                         "doc": "Row of the cell within the patch on which this measurement was made.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "is_cell_inner",
+                    pa.bool_(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Whether this object is within the inner region of the cell.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "is_patch_inner",
+                    pa.bool_(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Whether this object is within the inner region of the patch.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "is_tract_inner",
+                    pa.bool_(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Whether this object is within the inner region of the tract.",
+                        "unit": "",
+                    },
+                ),
+                pa.field(
+                    "is_primary",
+                    pa.bool_(),
+                    nullable=False,
+                    metadata={
+                        "doc": "Whether this object is to be selected after de-duplication",
                         "unit": "",
                     },
                 ),
@@ -766,20 +804,26 @@ class MetadetectionShearTask(PipelineTask):
         self.rng = np.random.RandomState(seed)
         idstart = 0
 
-        match sky_map.config.tractBuilder.active.cellBorder:
-            case 0:
-                # If cells have no borders, we cannot apply the metacal
-                # procedure to the edge cells in the same way as inner cells.
-                # We can do so for all that cells that are marked as borders,
-                # but it has to be at least 1.
-                if (num_edge_cells_skip := sky_map.config.tractBuilder.active.numCellsInPatchBorder) < 1:
-                    raise InvalidQuantumError("No border cells found in the skymap configuration.")
-            case _:
-                num_edge_cells_skip = 0
+        sky_info = makeSkyInfo(
+            sky_map,
+            tractId=id_generator.data_id.tract.id,
+            patchId=id_generator.data_id.patch.id,
+        )
+        # Since cells have no borders, we cannot apply the metacal
+        # procedure to the edge cells in the same way as inner cells.
+        # We can do so for all that cells that are marked as borders,
+        # but it has to be at least 1.
+        if (num_edge_cells_skip := sky_map.config.tractBuilder.active.numCellsInPatchBorder) < 1:
+            raise InvalidQuantumError("No border cells found in the skymap configuration.")
 
-        dilate_by = self.config.border or 0
+        dilate_by = self.config.border or sky_map.config.tractBuilder.active.cellBorder
 
         grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
+        # Undo any padding that was applied when creating the grid.
+        # We only support metadetection on non-overlapping single cells.
+        # lsst_cells_v1 has overlapping cells, so we need to undo the padding.
+        grid = grid.from_bbox_shape(bbox=grid.bbox, shape=grid.shape, padding=0)
+
         nx_cells, ny_cells = grid.shape
         single_cell_tables: list[pa.Table] = []
         for nx, ny in product(
@@ -805,6 +849,17 @@ class MetadetectionShearTask(PipelineTask):
                     tract=id_generator.data_id.tract.id,
                     patch=id_generator.data_id.patch.id,
                 )
+
+                self._fill_is_inner(da, sky_info.patchInfo[cell_id].inner_bbox, "is_cell_inner")
+                self._fill_is_inner(da, sky_info.patchInfo.inner_bbox, "is_patch_inner")
+                # Calculating is_tract_inner follows a different logic with
+                # regions instead of boxes.
+                da["is_tract_inner"] = sky_info.tractInfo.inner_sky_region.contains(
+                    da["ra"] * geom.degrees,
+                    da["dec"] * geom.degrees,
+                )
+                da["is_primary"] = da["is_cell_inner"] & da["is_patch_inner"] & da["is_tract_inner"]
+
                 table = pa.Table.from_pydict(da, self.metadetect_schema)
 
                 single_cell_tables.append(table)
@@ -946,6 +1001,21 @@ class MetadetectionShearTask(PipelineTask):
         output["patch"] = patch * np.ones_like(data["id"], dtype=np.int32)
 
         return output
+
+    @staticmethod
+    def _fill_is_inner(
+        di: dict,
+        bbox: geom.Box2I,
+        key: str,
+    ) -> None:
+        # Convert it to a Box2D object so the full pixels are considered, not
+        # just the pixel centers.
+        bbox = geom.Box2D(bbox)
+        xmin = bbox.getMinX()
+        ymin = bbox.getMinY()
+        xmax = bbox.getMaxX()
+        ymax = bbox.getMaxY()
+        di[key] = (di["x"] >= xmin) & (di["x"] <= xmax) & (di["y"] >= ymin) & (di["y"] <= ymax)
 
 
 def _make_comb_data(
