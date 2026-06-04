@@ -196,6 +196,8 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         super().setDefaults()
         self.metadetect.shear_bands = ["r", "i", "z"]
         self.metadetect.metacal.types = ["noshear", "1p", "1m", "2p", "2m"]
+        # pixelMargin has to be at least the size of the maximum pixel_radius.
+        self.ref_loader.pixelMargin = 450.0
 
     def validate(self):
         super().validate()
@@ -772,6 +774,50 @@ class MetadetectionShearTask(PipelineTask):
             # still the right exception to raise (it's just badly named).
             raise AnnotatedPartialOutputsError.annotate(err, self, log=self.log) from err
         qc.put(outputs, outputRefs)
+
+    @staticmethod
+    def convert_refcat_to_bright_info(ref_cat) -> Mapping[str, np.ndarray] | None:
+        """Convert a reference catalog to a bright object info dictionary.
+
+        Parameters
+        ----------
+        ref_cat : `lsst.afw.table.SimpleCatalog`
+            Reference catalog to convert.
+
+        Returns
+        -------
+        bright_info : `dict` [ `str`, `numpy.ndarray` ] or `None`
+            Dictionary containing the right ascension and declination of the
+            bright objects in the reference catalog, or `None` if no bright
+            objects are found.
+        """
+        # We take in the whole ref_cat not just a particular flux to have the
+        # flexibility to adjust the mapping based on other columns if needed.
+        mag = -2.5 * np.log10(ref_cat["phot_g_mean_flux"]) + 31.4
+        if not (cuts := (mag < 17)).any():
+            return None
+
+        # The radius_pixel calculation is not customizable fully, and needs to
+        # happen in tandem with the pixelMargin config field. We adopt the
+        # DES mapping for now, and revisit for DR1.
+        mag = mag[cuts]
+
+        radius_pixels = 100.0 * np.ones_like(mag)
+        radius_pixels[mag <= 14] = 200.0
+        radius_pixels[mag <= 11] = 450.0
+
+        bright_info = {"radius_pixels": radius_pixels}
+
+        # Metadetect expects RA, DEC to be in degrees, while the LSST Science
+        # Pipelines typically work in radians.
+        # TODO: it is more efficient to convert it to pixel coordinates here
+        # to avoid multiple WCS calls and pass those entries that are close
+        # enough to a given cell. This change needs to happen in the
+        # metadetect package as well.
+        bright_info["ra"] = ref_cat[cuts]["coord_ra"] * 180.0 / np.pi
+        bright_info["dec"] = ref_cat[cuts]["coord_dec"] * 180.0 / np.pi
+
+        return bright_info
 
     def run(
         self,
