@@ -732,20 +732,6 @@ class MetadetectionShearTask(PipelineTask):
 
         id_generator = self.config.id_generator.apply(qc.quantum.dataId)
 
-        if self.config.do_mask_bright_objects:
-            ref_loader = ReferenceObjectLoader(
-                dataIds=[ref.datasetRef.dataId for ref in inputRefs.ref_cat],
-                refCats=[qc.get(ref) for ref in inputRefs.ref_cat],
-                name=self.config.connections.ref_cat,
-                config=self.config.ref_loader,
-                log=self.log,
-            )
-            ref_cat = ref_loader.loadRegion(
-                qc.quantum.dataId.region, filterName=self.config.ref_loader_filter_name
-            )
-        else:
-            ref_cat = None
-
         # Read the coadds and put them in the order defined by
         # config.photometry_bands (note that each MultipleCellCoadd object also
         # knows its own band, if that's needed).
@@ -755,6 +741,24 @@ class MetadetectionShearTask(PipelineTask):
             for ref in inputRefs.input_coadds
             if ref.dataId["band"] in self.config.photometry_bands
         }
+
+        if self.config.do_mask_bright_objects:
+            ref_loader = ReferenceObjectLoader(
+                dataIds=[ref.datasetRef.dataId for ref in inputRefs.ref_cat],
+                refCats=[qc.get(ref) for ref in inputRefs.ref_cat],
+                name=self.config.connections.ref_cat,
+                config=self.config.ref_loader,
+                log=self.log,
+            )
+            band = self.config.metadetect.shear_bands[0]
+            ref_object = ref_loader.loadPixelBBox(
+                coadds_by_band[band].outer_bbox,
+                coadds_by_band[band].wcs,
+                filterName=self.config.ref_loader_filter_name,
+            )
+            ref_cat = ref_object.refCat
+        else:
+            ref_cat = None
 
         try:
             outputs = self.run(
