@@ -877,6 +877,7 @@ class MetadetectionShearTask(PipelineTask):
         self,
         cell_coadds: Sequence[StitchedCoadd],
         cell_id: Index2D,
+        bright_info: Mapping[str, np.ndarray] | None = None,
     ) -> pa.Table:
         """Run metadetection on a single cell.
 
@@ -888,6 +889,9 @@ class MetadetectionShearTask(PipelineTask):
             `MetadetectionShearConfig.photometry_bands`.
         cell_id : `~lsst.skymap.Index2D`
             The cell ID for the cell being processed.
+        bright_info: `~collections.abc.Mapping` [ `str`, `numpy.ndarray` ] | `None`
+            Bright object information for apodization. It contains "ra", "dec"
+            (in degrees) and "radius_pixels" as keys.
 
         Returns
         -------
@@ -897,12 +901,10 @@ class MetadetectionShearTask(PipelineTask):
         """
 
         coadd_data = self._cell_to_coadd_data(cell_coadds)
-        # TODO get bright star etc. info as input
-        bright_info = []
 
         apply_apodized_edge_masks_mbexp(**coadd_data)
 
-        if len(bright_info) > 0:
+        if bright_info:
             apply_apodized_bright_masks_mbexp(bright_info=bright_info, **coadd_data)
 
         mask_frac = _get_mask_frac(
