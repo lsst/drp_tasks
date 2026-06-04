@@ -874,6 +874,11 @@ class MetadetectionShearTask(PipelineTask):
         # lsst_cells_v1 has overlapping cells, so we need to undo the padding.
         grid = grid.from_bbox_shape(bbox=grid.bbox, shape=grid.shape, padding=0)
 
+        if ref_cat is not None:
+            bright_info = self.convert_refcat_to_bright_info(ref_cat)
+        else:
+            bright_info = None
+
         nx_cells, ny_cells = grid.shape
         single_cell_tables: list[pa.Table] = []
         for nx, ny in product(
@@ -886,7 +891,7 @@ class MetadetectionShearTask(PipelineTask):
             self.log.debug("Processing cell %s %s", nx, ny)
 
             try:
-                res = self.process_cell(cell_coadds, cell_id=cell_id)
+                res = self.process_cell(cell_coadds, cell_id=cell_id, bright_info=bright_info)
             except Exception as e:
                 self.log.error("Failed to process cell %s %s: %s", nx, ny, e)
                 continue
