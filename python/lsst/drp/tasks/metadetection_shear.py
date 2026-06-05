@@ -819,6 +819,21 @@ class MetadetectionShearTask(PipelineTask):
 
         return bright_info
 
+    @staticmethod
+    def magnitude_to_radius_desy6(mag, pixel_scale=0.2):
+        radius_arcsec = 10 ** (0.004432 * mag**2 - 0.2257 * mag + 2.996)
+        radius_arcsec[radius_arcsec < 5] = 5
+        radius_pixel = radius_arcsec / pixel_scale
+        return radius_pixel
+
+    @staticmethod
+    def magnitude_to_radius_anacal(mag):
+        radius_pixels = np.zeros_like(mag)
+        radius_pixels[mag <= 17] = 100.0
+        radius_pixels[mag <= 14] = 200.0
+        radius_pixels[mag <= 11] = 450.0
+        return radius_pixels
+
     def run(
         self,
         *,
