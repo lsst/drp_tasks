@@ -197,7 +197,7 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         self.metadetect.shear_bands = ["r", "i", "z"]
         self.metadetect.metacal.types = ["noshear", "1p", "1m", "2p", "2m"]
         # pixelMargin has to be at least the size of the maximum pixel_radius.
-        self.ref_loader.pixelMargin = 450.0
+        self.ref_loader.pixelMargin = 450
 
     def validate(self):
         super().validate()
@@ -753,7 +753,7 @@ class MetadetectionShearTask(PipelineTask):
                 log=self.log,
             )
             band = self.config.metadetect.shear_bands[0]
-            ref_object = ref_loader.loadPixelBBox(
+            ref_object = ref_loader.loadPixelBox(
                 coadds_by_band[band].outer_bbox,
                 coadds_by_band[band].wcs,
                 filterName=self.config.ref_loader_filter_name,
