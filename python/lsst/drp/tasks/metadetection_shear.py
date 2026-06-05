@@ -794,7 +794,7 @@ class MetadetectionShearTask(PipelineTask):
         # We take in the whole ref_cat not just a particular flux to have the
         # flexibility to adjust the mapping based on other columns if needed.
         mag = -2.5 * np.log10(ref_cat["phot_g_mean_flux"]) + 31.4
-        if not (cuts := (mag < 17)).any():
+        if not (cuts := (mag <= 17)).any():
             return None
 
         # The radius_pixel calculation is not customizable fully, and needs to
@@ -802,7 +802,7 @@ class MetadetectionShearTask(PipelineTask):
         # DES mapping for now, and revisit for DR1.
         mag = mag[cuts]
 
-        radius_pixels = 100.0 * np.ones_like(mag)
+        radius_pixels = 100.0 * np.ones_like(mag)  # mag <= 17
         radius_pixels[mag <= 14] = 200.0
         radius_pixels[mag <= 11] = 450.0
 
