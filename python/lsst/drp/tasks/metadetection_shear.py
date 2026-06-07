@@ -920,6 +920,8 @@ class MetadetectionShearTask(PipelineTask):
         )
 
         res = self.metadetect.run(rng=self.rng, **coadd_data)
+        diagnostics = res.pop("_diagnostics", None)
+        self.log.debug("Diagnostics: %s", diagnostics)
 
         comb_res = _make_comb_data(
             cell_coadd=cell_coadds[0],
