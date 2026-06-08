@@ -190,6 +190,11 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         default=50,
     )
 
+    do_cull_peaks_in_cell_borders = Field[bool](
+        "Cull detection peaks in the overlapping cell border regions?",
+        default=True,
+    )
+
     id_generator = SkyMapIdGeneratorConfig.make_field()
 
     def setDefaults(self):
@@ -891,6 +896,7 @@ class MetadetectionShearTask(PipelineTask):
             raise InvalidQuantumError("No border cells found in the skymap configuration.")
 
         dilate_by = self.config.border or sky_map.config.tractBuilder.active.cellBorder
+        border = dilate_by if self.config.do_cull_peaks_in_cell_borders else 0
 
         grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
         # Undo any padding that was applied when creating the grid.
@@ -915,7 +921,7 @@ class MetadetectionShearTask(PipelineTask):
             self.log.debug("Processing cell %s %s", nx, ny)
 
             try:
-                res = self.process_cell(cell_coadds, cell_id=cell_id, bright_info=bright_info)
+                res = self.process_cell(cell_coadds, cell_id=cell_id, border=border, bright_info=bright_info)
             except Exception as e:
                 self.log.error("Failed to process cell %s %s: %s", nx, ny, e)
                 continue
@@ -956,6 +962,7 @@ class MetadetectionShearTask(PipelineTask):
         self,
         cell_coadds: Sequence[StitchedCoadd],
         cell_id: Index2D,
+        border: int = 0,
         bright_info: Mapping[str, np.ndarray] | None = None,
     ) -> pa.Table:
         """Run metadetection on a single cell.
@@ -968,6 +975,9 @@ class MetadetectionShearTask(PipelineTask):
             `MetadetectionShearConfig.photometry_bands`.
         cell_id : `~lsst.skymap.Index2D`
             The cell ID for the cell being processed.
+        border : `int`, optional
+            If positive, detections whose centroids lie ``border`` pixels away
+            from the edges of the cells will be excluded.
         bright_info: `~collections.abc.Mapping` [ `str`, `numpy.ndarray` ] | `None`
             Bright object information for apodization. It contains "ra", "dec"
             (in degrees) and "radius_pixels" as keys.
@@ -991,7 +1001,7 @@ class MetadetectionShearTask(PipelineTask):
             trim_pixels=0,
         )
 
-        res = self.metadetect.run(rng=self.rng, **coadd_data)
+        res = self.metadetect.run(rng=self.rng, border=border, **coadd_data)
         diagnostics = res.pop("_diagnostics", None)
         self.log.debug("Diagnostics: %s", diagnostics)
 
