@@ -190,6 +190,11 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         default=50,
     )
 
+    do_cull_peaks_in_cell_borders = Field[bool](
+        "Cull detection peaks in the overlapping cell border regions?",
+        default=True,
+    )
+
     id_generator = SkyMapIdGeneratorConfig.make_field()
 
     def setDefaults(self):
@@ -388,25 +393,31 @@ class MetadetectionShearTask(PipelineTask):
                     pa.int32(),
                     nullable=False,
                     metadata={
-                        "doc": "Flags for the original PSF measurement.",
+                        "doc": "Flags for the original PSF measurement, ORed over the shear bands",
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "psfOriginal_e1",
+                    "psfOriginal_g1",
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "Distortion-style e1 of the original PSF from adaptive moments.",
+                        "doc": (
+                            "Reduced-shear g1 of the original PSF from adaptive moments, "
+                            "averaged over the shear bands."
+                        ),
                         "unit": "",
                     },
                 ),
                 pa.field(
-                    "psfOriginal_e2",
+                    "psfOriginal_g2",
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "Distortion-style e2 of the original PSF from adaptive moments.",
+                        "doc": (
+                            "Reduced-shear g2 of the original PSF from adaptive moments, "
+                            "averaged over the shear bands."
+                        ),
                         "unit": "",
                     },
                 ),
@@ -415,7 +426,10 @@ class MetadetectionShearTask(PipelineTask):
                     pa.float32(),
                     nullable=False,
                     metadata={
-                        "doc": "Trace (<x^2> + <y^2>) measurement of the original PSF from adaptive moments.",
+                        "doc": (
+                            "Trace (<x^2> + <y^2>) measurement of the original PSF from adaptive moments, "
+                            "averaged over the shear bands."
+                        ),
                         "unit": "arcseconds squared",
                     },
                 ),
@@ -817,6 +831,7 @@ class MetadetectionShearTask(PipelineTask):
             raise InvalidQuantumError("No border cells found in the skymap configuration.")
 
         dilate_by = self.config.border or sky_map.config.tractBuilder.active.cellBorder
+        border = dilate_by if self.config.do_cull_peaks_in_cell_borders else 0
 
         grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
         # Undo any padding that was applied when creating the grid.
@@ -836,7 +851,7 @@ class MetadetectionShearTask(PipelineTask):
             self.log.debug("Processing cell %s %s", nx, ny)
 
             try:
-                res = self.process_cell(cell_coadds, cell_id=cell_id)
+                res = self.process_cell(cell_coadds, cell_id=cell_id, border=border)
             except Exception as e:
                 self.log.error("Failed to process cell %s %s: %s", nx, ny, e)
                 continue
@@ -877,6 +892,7 @@ class MetadetectionShearTask(PipelineTask):
         self,
         cell_coadds: Sequence[StitchedCoadd],
         cell_id: Index2D,
+        border: int = 0,
     ) -> pa.Table:
         """Run metadetection on a single cell.
 
@@ -888,6 +904,9 @@ class MetadetectionShearTask(PipelineTask):
             `MetadetectionShearConfig.photometry_bands`.
         cell_id : `~lsst.skymap.Index2D`
             The cell ID for the cell being processed.
+        border : `int`, optional
+            If positive, detections whose centroids lie ``border`` pixels away
+            from the edges of the cells will be excluded.
 
         Returns
         -------
@@ -910,7 +929,9 @@ class MetadetectionShearTask(PipelineTask):
             trim_pixels=0,
         )
 
-        res = self.metadetect.run(rng=self.rng, **coadd_data)
+        res = self.metadetect.run(rng=self.rng, border=border, **coadd_data)
+        diagnostics = res.pop("_diagnostics", None)
+        self.log.debug("Diagnostics: %s", diagnostics)
 
         comb_res = _make_comb_data(
             cell_coadd=cell_coadds[0],
@@ -972,8 +993,8 @@ class MetadetectionShearTask(PipelineTask):
             "pgauss_T_flags": "pgauss_shape_flags",
             "pgauss_T_ratio": "pgauss_T_ratio",  # dropped.
             "psfrec_flags": "psfOriginal_flags",
-            "psfrec_g_1": "psfOriginal_e1",
-            "psfrec_g_2": "psfOriginal_e2",
+            "psfrec_g_1": "psfOriginal_g1",
+            "psfrec_g_2": "psfOriginal_g2",
             "psfrec_T": "psfOriginal_T",
             "ra": "ra",
             "row": "y",
