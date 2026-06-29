@@ -25,6 +25,7 @@ import astropy.units as u
 import astshim as ast
 import matplotlib.pyplot as plt
 import numpy as np
+import treecorr
 import treegp
 from astropy.table import Table
 from scipy.interpolate import RectBivariateSpline
@@ -33,6 +34,10 @@ import lsst.afw.geom as afwgeom
 import lsst.afw.table
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
+
+# We need to explicitly turn off multiprocessing in treecorr which is used
+# by treegp.
+treecorr.set_max_omp_threads(1)
 
 __all__ = [
     "GaussianProcessesTurbulenceFitConnections",
