@@ -27,6 +27,7 @@ import lsst.meas.algorithms
 import lsst.meas.deblender
 import lsst.meas.extensions.photometryKron
 import lsst.meas.extensions.shapeHSM
+import lsst.meas.extensions.trailedSources
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
 from lsst.pipe.base import connectionTypes
@@ -127,6 +128,8 @@ class SingleFrameDetectAndMeasureConfig(
         self.detection.doTempLocalBackground = False
 
         self.measurement.plugins = [
+            "base_SdssShape",
+            "ext_trailedSources_Naive",
             "base_SkyCoord",
             "base_PixelFlags",
             "base_SdssCentroid",
