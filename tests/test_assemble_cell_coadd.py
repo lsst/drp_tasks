@@ -35,12 +35,14 @@ import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
-from lsst.cell_coadds import CommonComponents
+from lsst.cell_coadds import CoaddUnits, CommonComponents, PatchIdentifiers
 from lsst.drp.tasks.assemble_cell_coadd import (
     AssembleCellCoaddConfig,
     AssembleCellCoaddTask,
     WarpInputs,
 )
+from lsst.images.cells import CellCoadd
+from lsst.skymap import Index2D
 
 if TYPE_CHECKING:
     from lsst.cell_coadds import ObservationIdentifiers
@@ -95,10 +97,10 @@ class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
         """
 
         self.common = CommonComponents(
-            units=None,
+            units=CoaddUnits.nJy,
             wcs=mockSkyInfo.wcs,
             band="i",
-            identifiers=pipeBase.Struct(skymap=None, tract=0, patch=42, band="i"),
+            identifiers=PatchIdentifiers(skymap="mock", tract=0, patch=Index2D(0, 0), band="i"),
         )
 
         inputs = {}
@@ -256,6 +258,16 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         radec = np.asarray([(sph.getRa().asDegrees(), sph.getDec().asDegrees()) for sph in sph_pts])
         pixels = hpg.query_polygon(inputMap.nside_sparse, radec[:-1, 0], radec[:-1, 1])
         np.testing.assert_array_equal(pixels, inputMap.valid_pixels)
+
+    def test_assemble_future_output(self):
+        """Test that AssembleCellCoaddTask runs successfully and produces
+        an lsst.images.cells.CellCoadd when configured to.
+        """
+        config = MockAssembleCellCoaddConfig()
+        config.output_image_type = "future"
+        self.runTask(config=config)
+        # Check that we produced an exposure.
+        self.assertIsInstance(self.result.multipleCellCoadd, CellCoadd)
 
     def test_assemble_empty(self):
         """Test that AssembleCellCoaddTask runs successfully without errors

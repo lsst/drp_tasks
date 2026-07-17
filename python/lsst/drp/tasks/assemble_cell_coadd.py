@@ -55,7 +55,15 @@ from lsst.cell_coadds import (
 )
 from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
 from lsst.meas.algorithms import AccumulatorMeanStack
-from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
+from lsst.pex.config import (
+    ChoiceField,
+    ConfigField,
+    ConfigurableField,
+    DictField,
+    Field,
+    ListField,
+    RangeField,
+)
 from lsst.pipe.base import (
     InMemoryDatasetHandle,
     NoWorkFound,
@@ -192,6 +200,9 @@ class AssembleCellCoaddConnections(
             )
             setattr(self, f"noise{n}_warps", noise_warps)
 
+        if self.config.output_image_type == "future":
+            self.multipleCellCoadd = dataclasses.replace(self.multipleCellCoadd, storageClass="CellCoadd")
+
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
     do_interpolate_coadd = Field[bool](doc="Interpolate over pixels with NO_DATA mask set?", default=True)
@@ -304,6 +315,15 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     input_mapper = ConfigurableField(
         target=HealSparseInputMapTask,
         doc="Input map creation subtask.",
+    )
+    output_image_type = ChoiceField[str](
+        "Which image type to use for the output coadd.",
+        allowed={
+            "legacy": "Write as a lsst.cell_Coadds.MultipleCellCoadd.",
+            "future": "Write as a lsst.images.cells.CellCoadd.",
+        },
+        optional=False,
+        default="legacy",
     )
 
 
@@ -1068,6 +1088,14 @@ class AssembleCellCoaddTask(PipelineTask):
             inputMap = self.input_mapper.cell_input_map
         else:
             inputMap = None
+
+        if self.config.output_image_type == "future":
+            from lsst.images import Box
+            from lsst.images.cells import CellCoadd
+
+            multipleCellCoadd = CellCoadd.from_legacy_cell_coadd(
+                multipleCellCoadd, tract_info=skyInfo.tractInfo, bbox=Box.from_legacy(grid.bbox_with_padding)
+            )
 
         return Struct(
             multipleCellCoadd=multipleCellCoadd,
