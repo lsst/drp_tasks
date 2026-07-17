@@ -162,24 +162,26 @@ class AssembleCellCoaddConnections(
         dimensions=("tract", "patch", "band", "skymap"),
     )
 
-    def __init__(self, *, config=None):
+    config: AssembleCellCoaddConfig
+
+    def __init__(self, *, config: AssembleCellCoaddConfig | None = None):
         super().__init__(config=config)
 
-        if not config:
+        if not self.config:
             return
 
-        if config.do_calculate_weight_from_warp:
+        if self.config.do_calculate_weight_from_warp:
             del self.visitSummaryList
 
-        if not config.do_use_artifact_mask:
+        if not self.config.do_use_artifact_mask:
             del self.artifactMasks
 
-        if not config.do_input_map:
+        if not self.config.do_input_map:
             del self.inputMap
 
         # Dynamically set input connections for noise images, depending on the
         # number of noise realizations specified in the config.
-        for n in range(config.num_noise_realizations):
+        for n in range(self.config.num_noise_realizations):
             noise_warps = Input(
                 doc="Input noise warps",
                 name=f"direct_warp_noise{n}",
