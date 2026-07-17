@@ -25,6 +25,7 @@ and its derived classes.
 This is not intended to test accessing data with the Butler and instead uses
 mock Butler data references to pass in the simulated data.
 """
+
 import numpy as np
 from astro_metadata_translator import makeObservationInfo
 from astropy import units as u
@@ -50,6 +51,18 @@ from lsst.skymap import Index2D, PatchInfo
 __all__ = ["makeMockSkyInfo", "MockCoaddTestData"]
 
 
+class _MockTractInfo:
+
+    def __init__(self, patch_info: PatchInfo):
+        self._patch_info = patch_info
+
+    def __getitem__(self, _) -> PatchInfo:
+        return self._patch_info
+
+    def getBBox(self) -> geom.Box2I:
+        return self._patch_info.getOuterBBox()
+
+
 def makeMockSkyInfo(bbox, wcs, patch):
     """Construct a `Struct` containing the geometry of the patch to be coadded.
 
@@ -65,7 +78,6 @@ def makeMockSkyInfo(bbox, wcs, patch):
     skyInfo : `lsst.pipe.base.Struct`
         Patch geometry information.
     """
-
     patchInfo = PatchInfo(
         index=Index2D(0, 0),
         sequentialIndex=patch,
@@ -75,7 +87,7 @@ def makeMockSkyInfo(bbox, wcs, patch):
         numCellsPerPatchInner=1,
         cellInnerDimensions=(bbox.width, bbox.height),
     )
-    skyInfo = pipeBase.Struct(bbox=bbox, wcs=wcs, patchInfo=patchInfo)
+    skyInfo = pipeBase.Struct(bbox=bbox, wcs=wcs, tractInfo=_MockTractInfo(patchInfo), patchInfo=patchInfo)
     return skyInfo
 
 
