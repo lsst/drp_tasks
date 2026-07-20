@@ -19,9 +19,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import dataclasses
+
 import lsst.afw.table
 import lsst.pex.config
 import lsst.pipe.base as pipeBase
+from lsst.cell_coadds import MultipleCellCoadd
 from lsst.meas.base._id_generator import SkyMapIdGeneratorConfig
 from lsst.meas.base.applyApCorr import ApplyApCorrTask
 from lsst.meas.base.catalogCalculation import CatalogCalculationTask
@@ -110,11 +113,16 @@ class ForcedPhotCoaddConnections(
             self.inputs.remove("scarletModels")
         if config.footprintDatasetName != "DeblendedFlux":
             self.inputs.remove("footprintCatInBand")
-        if config.useCellCoadds:
-            self.inputs.remove("exposure")
+        if self.config.imageType == "future":
+            self.exposure = dataclasses.replace(self.exposure, storageClass="CellCoadd")
+            del self.exposure_cell
+            del self.background
+            del self.refWcs
+        elif self.config.useCellCoadds:
+            del self.exposure
         else:
-            self.inputs.remove("exposure_cell")
-            self.inputs.remove("background")
+            del self.exposure_cell
+            del self.background
 
 
 class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=ForcedPhotCoaddConnections):
@@ -168,6 +176,25 @@ class ForcedPhotCoaddConfig(pipeBase.PipelineTaskConfig, pipelineConnections=For
         doc="Should be set to True if fake sources have been inserted into the input data.",
     )
     idGenerator = SkyMapIdGeneratorConfig.make_field()
+    imageType = lsst.pex.config.ChoiceField(
+        "Which image type to expect for the input coadd. "
+        "This option only directly affects connection storage classes and hence 'runQuantum'; the 'run' "
+        "method behavior is determined by which type is actually passed in.",
+        allowed={
+            "legacy": (
+                "Read a lsst.cell_coadds.MultipleCellCoadd via 'exposure_cell` and restore 'background' "
+                "(if useCellCoadd) or lsst.afw.image.Exposure via `exposure` (if not useCellCoadd)."
+            ),
+            "future": (
+                "Read lsst.images.cells.CellCoadd via 'exposure'; useCellCoadd is ignored.  This choice also "
+                "deletes the 'refWcs' connection, which is always superfluous in all practical usage of this "
+                "task and would need to be set to a different dataset type whenever this choice is used."
+            ),
+        },
+        dtype=str,
+        optional=False,
+        default="legacy",
+    )
 
     def setDefaults(self):
         # Docstring inherited.
@@ -245,20 +272,36 @@ class ForcedPhotCoaddTask(pipeBase.PipelineTask):
             footprintData = None
 
         refCat = inputs.pop("refCat")
-        refWcs = inputs.pop("refWcs")
+        refWcs = inputs.pop("refWcs", None)
 
-        if self.config.useCellCoadds:
-            multiple_cell_coadd = inputs.pop("exposure_cell")
-            stitched_coadd = multiple_cell_coadd.stitch()
-            exposure = stitched_coadd.asExposure()
-            background = inputs.pop("background")
-            exposure.image -= background.getImage()
-            apCorrMap = stitched_coadd.ap_corr_map
+        if self.config.imageType == "future":
+            coadd = inputs.pop("exposure")
+            dataId = inputRefs.exposure.dataId
+            # Instead of going directly from lsst.images.cells.CellCoadd to
+            # Exposure, it's cleaner for now to go through MultipleCellCoadd
+            # because the apCorrMap and ccdInputs need special handling - the
+            # cell-based versions can't be attached to Exposure.  Eventually
+            # we'll rewrite the lower-level code to use the lsst.images
+            # equivalents natively.
+            coadd = coadd.to_legacy_cell_coadd()
+        elif self.config.useCellCoadds:
+            coadd = inputs.pop("exposure_cell")
             dataId = inputRefs.exposure_cell.dataId
         else:
-            exposure = inputs.pop("exposure")
-            apCorrMap = exposure.getInfo().getApCorrMap()
+            coadd = inputs.pop("exposure")
             dataId = inputRefs.exposure.dataId
+        if isinstance(coadd, MultipleCellCoadd):
+            stitched_coadd = coadd.stitch()
+            exposure = stitched_coadd.asExposure()
+            if self.config.imageType == "legacy":
+                background = inputs.pop("background")
+                exposure.image -= background.getImage()
+            apCorrMap = stitched_coadd.ap_corr_map
+        else:
+            exposure = coadd
+            apCorrMap = exposure.getInfo().getApCorrMap()
+        if refWcs is None:
+            refWcs = exposure.getWcs()
 
         assert not inputs, "runQuantum got extra inputs."
 
