@@ -171,6 +171,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         self.schema = afwTable.SourceTable.makeMinimalSchema()
         self.schema.addField("modelFlux", "F", doc="Fit PSF flux.", units="nJy")
         self.schema.addField("numSubfilters", "F", doc="Number of DCR subfilters.", units="count")
+        self.schema.addField("isCoaddModel", "Flag",
+                             doc="If set, the footprint of this record is the DCR-smeared model of the"
+                                 " source as it appears in the coadd, which is to be subtracted. If not"
+                                 " set, the footprint is the un-shifted model, which is to be shifted"
+                                 " by the DCR of the science visit and added back. Each source has one"
+                                 " record of each kind, sharing the same id.")
         for subfilter in range(self.config.dcrNumSubfilters):
             self.schema.addField(f"subfilterWeight_{subfilter}", "F",
                                  doc="Fraction of the full band flux attributed to this subfilter.",
@@ -278,20 +284,21 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         refCat = self.filter_object_catalog(objectCatalog)
         dcrFpLookupTable = {}
         cutoutLookupTable = {}
+        unshiftedLookupTable = {}
         recordVisitCount = {}
         for record in refCat:
             recId = record.getId()
             dcrFpLookupTable[recId] = {}
             cutoutLookupTable[recId] = {}
+            unshiftedLookupTable[recId] = {}
             recordVisitCount[recId] = 0
-        bad_psf_threshold = 0.2
         for warpRef in warpRefList:
             visit = warpRef.dataId['visit']
             warp = warpRef.get()
             psf_metric, psf_gaussian = self.check_psf(warp)
             if psf_metric > self.config.bad_psf_threshold:
                 self.log.info("Skipping visit %d due to bad PSF fit (metric %f > %f threshold)",
-                              visit, psf_metric, bad_psf_threshold)
+                              visit, psf_metric, self.config.bad_psf_threshold)
                 continue
             else:
                 self.log.info("Using visit %d with PSF fit metric %f", visit, psf_metric)
@@ -299,8 +306,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
             lookupTableSingle = self.make_warp_footprints(refCat, warp, psf_gaussian)
-            # Reformat the per-visit lookup table into two new tables with a
-            # different ordering, both indexed by source record first and
+            # Reformat the per-visit lookup table into new tables with a
+            # different ordering, all indexed by source record first and
             # having an inner lookup table over visit.
             # That way we can solve for the best fit to the subfilters across
             # all visits at once for a single source.
@@ -309,6 +316,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 if lookupTableSingle[recId] is not None:
                     dcrFpLookupTable[recId][visit] = lookupTableSingle[recId]['subfilterPsf']
                     cutoutLookupTable[recId][visit] = lookupTableSingle[recId]['cutout']
+                    unshiftedLookupTable[recId][visit] = lookupTableSingle[recId]['unshiftedPsf']
                     recordVisitCount[recId] += 1
         # Drop any records that were removed from too many visits
         badRecords = np.array([recordVisitCount[record.getId()] < self.config.minNVisits
@@ -318,19 +326,22 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 recId = badRec.getId()
                 dcrFpLookupTable.pop(recId)
                 cutoutLookupTable.pop(recId)
+                unshiftedLookupTable.pop(recId)
                 recordVisitCount.pop(recId)
             refCat = refCat[~badRecords].copy(deep=True)
         self.log.info("Calculating DCR correction for %d surviving sources, and dropping %d sources",
                       len(refCat), np.sum(badRecords))
         # Calculate one model per source
-        results = self.calculateTemplateResidual(templateCoadd, dcrFpLookupTable, cutoutLookupTable)
+        results = self.calculateTemplateResidual(templateCoadd, dcrFpLookupTable, cutoutLookupTable,
+                                                 unshiftedLookupTable)
 
         # Convert the lookup table to a source catalog with heavy footprints
         # containing the unshifted PSF model of the coadd at the source
         # location, and columns containing the overall flux and fractional flux
         # per subfilter
         dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
-                                                     results.templateFootprints)
+                                                     results.templateFootprints,
+                                                     results.coaddFootprints)
         return pipeBase.Struct(dcrResidual=results.residual,
                                dcrCorrectionCatalog=dcrCorrectionCatalog)
 
@@ -434,22 +445,34 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         cat.defineCentroid(self.centroidName)
         return cat
 
-    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, templateFootprints):
-        """Summary
+    def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, templateFootprints,
+                         coaddFootprints):
+        """Build the output catalog of sub-band fluxes and model footprints.
+
+        Each source is written as a pair of records that share the same id: one
+        holding the un-shifted model, and one with ``isCoaddModel`` set holding
+        the DCR-smeared model of the source as it appears in the coadd. All of
+        the other columns are identical between the two.
 
         Parameters
         ----------
         refCat : `lsst.afw.table.SourceCatalog`
-            Description
-        dcrFpLookupTable : TYPE
-            Description
-        fluxLookupTable : TYPE
-            Description
+            Catalog of the sources that were modeled.
+        dcrFpLookupTable : `dict` [`int`, `dict`]
+            Subfilter models of each source, indexed on source id then visit.
+            The subfilter weights are read from the ``modelFlux`` column.
+        fluxLookupTable : `dict` [`int`, `float`]
+            Weighted mean flux of each source, indexed on source id.
+        templateFootprints : `dict` [`int`, \
+                `lsst.afw.detection.HeavyFootprintF`]
+            Un-shifted model of each source, indexed on source id.
+        coaddFootprints : `dict` [`int`, `lsst.afw.detection.HeavyFootprintF`]
+            DCR-smeared model of each source, indexed on source id.
 
         Returns
         -------
         dcrCorrectionCatalog : `lsst.afw.table.SourceCatalog`
-            Description
+            Catalog with two records per modeled source.
         """
         dcrCorrectionCatalog = self.initialize_dcr_catalog()
         dcrGen = wavelengthGenerator(self.effectiveWavelength,
@@ -465,18 +488,20 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             # At this point the subfilter fractions are the same for each visit
             # so we can take the values from the first visit
             model = models[visits[0]]
-            src = dcrCorrectionCatalog.addNew()
-            src.setId(srcId)
-            src['numSubfilters'] = self.config.dcrNumSubfilters
-            src['modelFlux'] = fluxLookupTable[srcId]
-            src['coord_ra'] = refSrc['coord_ra']
-            src['coord_dec'] = refSrc['coord_dec']
-            src['base_SdssCentroid_x'], src['base_SdssCentroid_y'] = refSrc.getCentroid()
-            src.setFootprint(templateFootprints[srcId])
+            for isCoaddModel, footprints in ((False, templateFootprints), (True, coaddFootprints)):
+                src = dcrCorrectionCatalog.addNew()
+                src.setId(srcId)
+                src['isCoaddModel'] = isCoaddModel
+                src['numSubfilters'] = self.config.dcrNumSubfilters
+                src['modelFlux'] = fluxLookupTable[srcId]
+                src['coord_ra'] = refSrc['coord_ra']
+                src['coord_dec'] = refSrc['coord_dec']
+                src['base_SdssCentroid_x'], src['base_SdssCentroid_y'] = refSrc.getCentroid()
+                src.setFootprint(footprints[srcId])
 
-            for subfilter in range(self.config.dcrNumSubfilters):
-                src[f'subfilterWeight_{subfilter}'] = model[subfilter]['modelFlux']
-                src[f'subfilterWavelength_{subfilter}'] = subfilterEffectiveWavelengths[subfilter]
+                for subfilter in range(self.config.dcrNumSubfilters):
+                    src[f'subfilterWeight_{subfilter}'] = model[subfilter]['modelFlux']
+                    src[f'subfilterWavelength_{subfilter}'] = subfilterEffectiveWavelengths[subfilter]
 
         return dcrCorrectionCatalog
 
@@ -501,6 +526,12 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                                 )
         self.update_subfilter_psf_lookup_table(lookupTable, catalog, psf, dcrShift,
                                                fp_ctrl=fp_ctrl, windowFunction=windowFunction)
+        # Also record the same PSF with no DCR shift applied. Stacking these
+        # gives the model of the source with the DCR of the template visits
+        # removed, which is what must be shifted by the DCR of the science
+        # visit and added back when the template is built.
+        self.update_unshifted_psf_lookup_table(lookupTable, catalog, psf,
+                                               windowFunction=windowFunction)
         # Determine the best fit scale factors for each source, using the
         # flux of the source and the DCR-shifted PSFs for each subfilter
         for record in catalog:
@@ -512,6 +543,40 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 for psf_fp, scale in zip(psf_fps, scales):
                     psf_fp['modelFlux'] = scale
         return lookupTable
+
+    def update_unshifted_psf_lookup_table(self, lookupTable, catalog, psf, windowFunction=None):
+        """Add the PSF model with no DCR shift applied to the lookup table.
+
+        This uses the same bounding box, PSF and window function as
+        `update_subfilter_psf_lookup_table`, so that the two sets of models can
+        be stacked over visits in exactly the same way. The only difference is
+        that no DCR shift is applied.
+
+        Parameters
+        ----------
+        lookupTable : `dict` [`int`, `dict`]
+            Lookup table of the models for each source, indexed on source id.
+            Updated in place to add an ``unshiftedPsf`` entry, which is the
+            un-shifted PSF image as a `numpy.ndarray`.
+        catalog : `lsst.afw.table.SourceCatalog`
+            Catalog of the sources to model.
+        psf : `lsst.afw.detection.Psf`
+            Gaussian approximation of the PSF of the visit.
+        windowFunction : `numpy.ndarray`, optional
+            Taper to apply to the model, to reduce edge artifacts.
+        """
+        boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
+        for record in catalog:
+            if lookupTable[record.getId()] is None:
+                # Skip any records that we were not able to extract a clean
+                # image cutout for.
+                continue
+            xc, yc = record.getCentroid()
+            bbox = geom.Box2I.makeCenteredBox(center=record.getCentroid(), size=boxSize)
+            psf_img = self.create_psf_image_in_bbox(psf, bbox, xc, yc)
+            if windowFunction is not None:
+                psf_img.array *= windowFunction
+            lookupTable[record.getId()]['unshiftedPsf'] = psf_img.array
 
     def update_subfilter_psf_lookup_table(self, lookupTable, catalog, psf, dcrShift,
                                           fp_ctrl=afwDet.HeavyFootprintCtrl(), windowFunction=None):
@@ -622,72 +687,112 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         scales = [scale/image_fp['modelFlux'] for scale in scaleFit.x]
         return scales
 
-    def calculateTemplateResidual(self, templateCoadd, dcrFpLookupTable, cutoutLookupTable):
+    def calculateTemplateResidual(self, templateCoadd, dcrFpLookupTable, cutoutLookupTable,
+                                  unshiftedLookupTable):
+        """Stack the per-visit models of each source over all of its visits.
+
+        Two models are produced for each source. The DCR-smeared model is the
+        appearance of the source in the coadd, and is subtracted to make
+        ``residual``. The un-shifted model is the same stack with no DCR shift
+        applied, and is the model that must be shifted by the DCR of a science
+        visit and added back in its place.
+
+        Parameters
+        ----------
+        templateCoadd : `lsst.afw.image.Exposure`
+            The coadd that the models are subtracted from.
+        dcrFpLookupTable : `dict` [`int`, `dict`]
+            DCR-shifted subfilter models of each source, indexed on source id
+            and then visit. The ``modelFlux`` of each is updated in place to
+            the subfilter weight fit across all visits.
+        cutoutLookupTable : `dict` [`int`, `dict`]
+            Image cutouts of each source, indexed on source id then visit.
+        unshiftedLookupTable : `dict` [`int`, `dict`]
+            Un-shifted PSF models of each source, indexed on source id then
+            visit.
+
+        Returns
+        -------
+        result : `lsst.pipe.base.Struct`
+            A struct with attributes:
+
+            ``residual``
+                The coadd with the DCR-smeared model of every source subtracted
+                (`lsst.afw.image.Exposure`).
+            ``fluxLookupTable``
+                Weighted mean flux of each source, indexed on source id
+                (`dict` [`int`, `float`]).
+            ``templateFootprints``
+                Un-shifted model of each source, indexed on source id
+                (`dict` [`int`, `lsst.afw.detection.HeavyFootprintF`]).
+            ``coaddFootprints``
+                DCR-smeared model of each source, indexed on source id
+                (`dict` [`int`, `lsst.afw.detection.HeavyFootprintF`]).
+        """
         inputs = templateCoadd.getInfo().getCoaddInputs()
         weightLookup = {}
         for visit in inputs.ccds['visit']:
             inds = inputs.ccds['visit'] == visit
             weightLookup[visit] = np.mean(inputs.ccds['weight'][inds])
         scaleLookup = {}
-        dcrFpLookupTableNew = dcrFpLookupTable.copy()
 
-        template_models = self.initialize_dcr_catalog()  # NOTE: Not used except to make the source record
         templateFootprints = {}
+        coaddFootprints = {}
         fp_ctrl = afwDet.HeavyFootprintCtrl()
         residual = templateCoadd.clone()
-        # modelExposure = templateCoadd.clone()
-        # modelExposure.image.array *= 0
         fluxLookupTable = {}
         for recId in dcrFpLookupTable:
-            scales = []
-            for visit in dcrFpLookupTable[recId]:
-                scales.append([fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]])
+            visits = list(dcrFpLookupTable[recId])
+            if not visits:
+                continue
+            scales = [[fp['modelFlux'] for fp in dcrFpLookupTable[recId][visit]] for visit in visits]
             recScales = np.median(scales, axis=0)
-            scalesSingle = recScales/np.sum(recScales)
-            # Update the modelFlux entries to be the same for all visits
-            # for each record
-            for visit in dcrFpLookupTableNew[recId]:
-                for fp, scale in zip(dcrFpLookupTableNew[recId][visit], scalesSingle):
+            scaleSum = np.sum(recScales)
+            if not np.isfinite(scaleSum) or scaleSum <= 0:
+                self.log.debug("Subfilter weights for source %d do not sum to a positive value;"
+                               " skipping.", recId)
+                continue
+            # The subfilter weights are fit per visit, but the sub-band flux of
+            # a source does not vary between visits, so use the same weights
+            # for every visit. Normalizing them to sum to one makes the
+            # correction conserve the flux of the source.
+            scalesSingle = recScales/scaleSum
+            for visit in visits:
+                for fp, scale in zip(dcrFpLookupTable[recId][visit], scalesSingle):
                     fp['modelFlux'] = scale
             try:
-                model, flux = stack_dcr_footprints(dcrFpLookupTableNew[recId],
-                                                   cutoutLookupTable[recId],
-                                                   weightLookup
-                                                   )
+                model, unshiftedModel, flux = stack_dcr_footprints(dcrFpLookupTable[recId],
+                                                                   cutoutLookupTable[recId],
+                                                                   unshiftedLookupTable[recId],
+                                                                   weightLookup
+                                                                   )
             except RuntimeError:
                 continue
             fluxLookupTable[recId] = flux
             scaleLookup[recId] = scalesSingle
-            # The bbox will be the same for all visits,
-            # so just grab the last one
-            bbox = cutoutLookupTable[recId][visit].getFootprint().getBBox()
+            # The bbox and centroid are the same for every visit, since they
+            # are both set from the reference catalog.
+            refVisit = visits[0]
+            bbox = cutoutLookupTable[recId][refVisit].getFootprint().getBBox()
             spans = afwGeom.SpanSet(bbox)
-            # modelExposure[bbox].image.array += model
             residual[bbox].image.array -= model
 
-            # Add the heavy footprint of the stacked source
-            # This can be subtracted from the original coadd, so that the DCR
-            # model can be added in its place without having to store the
-            # dcrResidual image
-            cutout = template_models.addNew()
-            cutout.setId(recId)
-            cutout["modelFlux"] = flux
-            # The centroid will be the same for all visits,
-            # so just grab the last one
-            xc = cutoutLookupTable[recId][visit]['base_SdssCentroid_x']
-            yc = cutoutLookupTable[recId][visit]['base_SdssCentroid_y']
-            cutout['base_SdssCentroid_x'] = xc
-            cutout['base_SdssCentroid_y'] = yc
+            xc = cutoutLookupTable[recId][refVisit]['base_SdssCentroid_x']
+            yc = cutoutLookupTable[recId][refVisit]['base_SdssCentroid_y']
             foot = afwDet.Footprint(spans)
             foot.addPeak(xc, yc, flux)
+            # Store both models. The DCR-smeared one is subtracted from the
+            # coadd, and the un-shifted one is shifted by the DCR of the
+            # science visit and added back in its place.
             model_mi = templateCoadd[bbox].maskedImage.clone()
-            model_mi.image.array = model
-            cutout.setFootprint(afwDet.HeavyFootprintF(foot, model_mi, fp_ctrl))
+            model_mi.image.array = unshiftedModel
             templateFootprints[recId] = afwDet.HeavyFootprintF(foot, model_mi, fp_ctrl)
-        # return(modelExposure, residual, fluxLookupTable)
+            model_mi.image.array = model
+            coaddFootprints[recId] = afwDet.HeavyFootprintF(foot, model_mi, fp_ctrl)
         return pipeBase.Struct(residual=residual,
                                fluxLookupTable=fluxLookupTable,
                                templateFootprints=templateFootprints,
+                               coaddFootprints=coaddFootprints,
                                )
 
 
@@ -700,8 +805,39 @@ def fit_footprints(model, image):
     return scale
 
 
-def stack_dcr_footprints(dcrFootprints, cutouts, weightLookup):
+def stack_dcr_footprints(dcrFootprints, cutouts, unshifted, weightLookup):
+    """Stack the per-visit models of one source over all of its visits.
+
+    Parameters
+    ----------
+    dcrFootprints : `dict` [`int`, `list` [`lsst.afw.table.SourceRecord`]]
+        DCR-shifted subfilter models for each visit, with the subfilter weight
+        in the ``modelFlux`` column.
+    cutouts : `dict` [`int`, `lsst.afw.table.SourceRecord`]
+        Image cutout for each visit, with the fit flux in ``modelFlux``.
+    unshifted : `dict` [`int`, `numpy.ndarray`]
+        Un-shifted PSF model for each visit, on the same bounding box as the
+        shifted models.
+    weightLookup : `dict` [`int`, `float`]
+        Coadd weight of each visit.
+
+    Returns
+    -------
+    model : `numpy.ndarray`
+        The DCR-smeared model, matching the appearance of the source in the
+        coadd.
+    unshiftedModel : `numpy.ndarray`
+        The same stack with no DCR shift applied.
+    flux : `float`
+        Weighted mean flux of the source.
+
+    Raises
+    ------
+    RuntimeError
+        If none of the visits are present in ``weightLookup``.
+    """
     models = []
+    unshiftedModels = []
     weights = []
     bbox = None
     fluxes = []
@@ -719,10 +855,20 @@ def stack_dcr_footprints(dcrFootprints, cutouts, weightLookup):
         stack = [dcrFp.getFootprint().extractImage(bbox=bbox, fill=0).array*dcrFp['modelFlux']
                  for dcrFp in dcrFPs]
         models.append(np.sum(stack, axis=0)*flux*weight)
+        # The un-shifted model is built on the same bbox, so that the two
+        # stacks are pixel matched and can be used interchangeably.
+        unshiftedVisit = unshifted[visit]
+        if unshiftedVisit.shape != models[-1].shape:
+            raise RuntimeError(f"Un-shifted model shape {unshiftedVisit.shape} does not match the "
+                               f"shifted model shape {models[-1].shape} for visit {visit}.")
+        unshiftedModels.append(unshiftedVisit*flux*weight)
         fluxes.append(flux*weight)
     if bbox is None:
-        raise RuntimeError
-    return (np.sum(models, axis=0)/np.sum(weights), np.sum(fluxes)/np.sum(weights))
+        raise RuntimeError("None of the visits of this source are in the coadd.")
+    weightSum = np.sum(weights)
+    return (np.sum(models, axis=0)/weightSum,
+            np.sum(unshiftedModels, axis=0)/weightSum,
+            np.sum(fluxes)/weightSum)
 
 
 def getPsfMajorMinorAxes(psf, position=None, useFwhm=False):
