@@ -264,8 +264,6 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
     def run(self, warpRefList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth, bbox):
         self.metadata['effectiveWavelength'] = effectiveWavelength
         self.metadata['bandwidth'] = bandwidth
-        self.effectiveWavelength = effectiveWavelength
-        self.bandwidth = bandwidth
         self.log.info("Dividing %fnm bandwidth into %d subfilters with %fnm effective wavelength",
                       bandwidth, self.config.dcrNumSubfilters, effectiveWavelength)
         refCat = self.filter_object_catalog(objectCatalog)
@@ -287,7 +285,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             if np.isnan(warp.image.array).all():
                 self.log.info("Skipping visit %d because the warp is empty of data", visit)
                 continue
-            psf_metric, psf_gaussian = self.check_psf(warp)
+            psf_metric, psf_gaussian = self.check_psf(warp, effectiveWavelength, bandwidth)
             if psf_metric > self.config.bad_psf_threshold:
                 self.log.info("Skipping visit %d due to bad PSF fit (metric %f > %f threshold)",
                               visit, psf_metric, self.config.bad_psf_threshold)
@@ -298,7 +296,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
 
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
-            lookupTableSingle = self.make_warp_footprints(refCat, warp, psf_gaussian)
+            lookupTableSingle = self.make_warp_footprints(refCat, warp, psf_gaussian,
+                                                          effectiveWavelength, bandwidth)
             # Reformat the per-visit lookup table into new tables with a
             # different ordering, all indexed by source record first and
             # having an inner lookup table over visit.
@@ -337,7 +336,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # per subfilter
         dcrCorrectionCatalog = self.make_dcr_catalog(refCat, dcrFpLookupTable, results.fluxLookupTable,
                                                      results.templateFootprints,
-                                                     results.coaddFootprints)
+                                                     results.coaddFootprints,
+                                                     effectiveWavelength, bandwidth)
         return pipeBase.Struct(dcrResidual=results.residual,
                                dcrCorrectionCatalog=dcrCorrectionCatalog)
 
@@ -384,7 +384,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         srcUse = goodSnr & goodCentroid & goodShape & goodExtendedness & notParent & goodArea
         return objectCat[srcUse].copy(deep=True)
 
-    def check_psf(self, warp):
+    def check_psf(self, warp, effectiveWavelength, bandwidth):
         psf = warp.psf
         psf_pos = geom.Point2I(psf.getAveragePosition())
 
@@ -393,8 +393,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # xc, yc = self.config.footprintSize//2
 
         dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
-                                self.effectiveWavelength,
-                                self.bandwidth,
+                                effectiveWavelength,
+                                bandwidth,
                                 self.config.dcrNumSubfilters,
                                 )
         boxSize = geom.Extent2I(self.config.footprintSize, self.config.footprintSize)
@@ -442,7 +442,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         return cat
 
     def make_dcr_catalog(self, refCat, dcrFpLookupTable, fluxLookupTable, templateFootprints,
-                         coaddFootprints):
+                         coaddFootprints, effectiveWavelength, bandwidth):
         """Build the output catalog of sub-band fluxes and model footprints.
 
         Each source is written as a pair of records that share the same id: one
@@ -464,6 +464,10 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             Un-shifted model of each source, indexed on source id.
         coaddFootprints : `dict` [`int`, `lsst.afw.detection.HeavyFootprintF`]
             DCR-smeared model of each source, indexed on source id.
+        effectiveWavelength : `float`
+            Effective wavelength of the filter, in nm.
+        bandwidth : `float`
+            Bandwidth of the filter, in nm.
 
         Returns
         -------
@@ -471,8 +475,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             Catalog with two records per modeled source.
         """
         dcrCorrectionCatalog = self.initialize_dcr_catalog()
-        dcrGen = wavelengthGenerator(self.effectiveWavelength,
-                                     self.bandwidth,
+        dcrGen = wavelengthGenerator(effectiveWavelength,
+                                     bandwidth,
                                      self.config.dcrNumSubfilters)
         subfilterEffectiveWavelengths = [np.mean(wl) for wl in dcrGen]
         for refSrc in refCat:
@@ -501,7 +505,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
 
         return dcrCorrectionCatalog
 
-    def make_warp_footprints(self, catalog, warp, psf):
+    def make_warp_footprints(self, catalog, warp, psf, effectiveWavelength, bandwidth):
         image_footprints = self.initialize_dcr_catalog()
         fp_ctrl = afwDet.HeavyFootprintCtrl()
         if self.config.doTaperFootprint:
@@ -516,8 +520,8 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         # Update the lookup table with DCR-shifted PSFs for each source, for
         # each subfilter.
         dcrShift = calculateDcr(warp.visitInfo, warp.getWcs(),
-                                self.effectiveWavelength,
-                                self.bandwidth,
+                                effectiveWavelength,
+                                bandwidth,
                                 self.config.dcrNumSubfilters,
                                 )
         self.update_subfilter_psf_lookup_table(lookupTable, catalog, psf, dcrShift,
