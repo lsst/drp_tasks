@@ -866,6 +866,9 @@ def stack_dcr_footprints(dcrFootprints, cutouts, unshifted, weightLookup):
     if bbox is None:
         raise RuntimeError("None of the visits of this source are in the coadd.")
     weightSum = np.sum(weights)
+    if not np.isfinite(weightSum) or weightSum <= 0:
+        raise RuntimeError(f"The coadd weights of the visits of this source sum to {weightSum}, so the "
+                           "models cannot be normalized.")
     return (np.sum(models, axis=0)/weightSum,
             np.sum(unshiftedModels, axis=0)/weightSum,
             np.sum(fluxes)/weightSum)
