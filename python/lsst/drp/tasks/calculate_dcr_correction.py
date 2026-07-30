@@ -209,11 +209,10 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         )
 
         # Construct list of input Deferred Datasets
-        warpRefList = self.prepareInputs(inputData.pop("inputWarps"), skyInfo.bbox)
+        warpRefList = self.prepareInputs(inputData.pop("inputWarps"))
         self.log.info("Found %d input warps", len(warpRefList))
         if len(warpRefList) == 0:
-            self.log.warning("No coadd temporary exposures found")
-            return
+            raise pipeBase.NoWorkFound("No coadd temporary exposures found")
 
         templateCoadd = inputData.pop("templateCoadd")
         objectCatalog = inputData.pop("objectCatalog")
@@ -223,58 +222,46 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             objectCatalog=objectCatalog,
             effectiveWavelength=throughput.effectiveWavelength,
             bandwidth=throughput.bandwidth,
+            bbox=skyInfo.bbox,
         )
 
         butlerQC.put(retStruct, outputRefs)
         return retStruct
 
-    def prepareInputs(self, refList, coadd_bbox):
-        """Prepare the input warps for coaddition by measuring the weight for
-        each warp.
+    def prepareInputs(self, refList):
+        """Check that the input warps are calibrated in the units this task
+        expects.
 
-        Before coadding these Warps together compute the weight for each
-        Warp.
+        Only the metadata of each warp is read, so that the pixels are read
+        exactly once, in `run`. Warps that are empty of data are skipped there
+        rather than here, since that test does need the pixels.
 
         Parameters
         ----------
-        refList : `list`
-            List of dataset handles (data references) to warp.
-        psfMatchedWarpRefList : `list` | None, optional
-            List of dataset handles (data references) to psfMatchedWarp.
+        refList : `list` [`lsst.daf.butler.DeferredDatasetHandle`]
+            Dataset handles of the warps to use.
 
         Returns
         -------
-        result : `~lsst.pipe.base.Struct`
-            Results as a struct with attributes:
+        warpRefList : `list` [`lsst.daf.butler.DeferredDatasetHandle`]
+            The same dataset handles, once they have all been validated.
 
-            ``warpRefList``
-                `list` of dataset handles (data references) to warp.
+        Raises
+        ------
+        ValueError
+            If any warp does not record that it is calibrated in nJy.
         """
-        # compute warpRefList: a list of warpRef that actually exist
-        warpRefList = []
-
         for warpRef in refList:
-            warp = warpRef.get(parameters={"bbox": coadd_bbox})
-            # Ignore any input warp that is empty of data
-            if np.isnan(warp.image.array).all():
-                continue
-            maskedImage = warp.getMaskedImage()
-
-            if "BUNIT" not in warp.metadata:
+            metadata = warpRef.get(component="metadata")
+            if "BUNIT" not in metadata:
                 raise ValueError(f"Warp {warpRef.dataId} has no BUNIT metadata")
-            if warp.metadata["BUNIT"] != "nJy":
+            if metadata["BUNIT"] != "nJy":
                 raise ValueError(
-                    f"Warp {warpRef.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
+                    f"Warp {warpRef.dataId} has BUNIT {metadata['BUNIT']}, expected nJy"
                 )
+        return list(refList)
 
-            del maskedImage
-            del warp
-
-            warpRefList.append(warpRef)
-
-        return warpRefList
-
-    def run(self, warpRefList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth):
+    def run(self, warpRefList, templateCoadd, objectCatalog, effectiveWavelength, bandwidth, bbox):
         self.metadata['effectiveWavelength'] = effectiveWavelength
         self.metadata['bandwidth'] = bandwidth
         self.effectiveWavelength = effectiveWavelength
@@ -292,9 +279,14 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
             cutoutLookupTable[recId] = {}
             unshiftedLookupTable[recId] = {}
             recordVisitCount[recId] = 0
+        nVisitsUsed = 0
         for warpRef in warpRefList:
             visit = warpRef.dataId['visit']
-            warp = warpRef.get()
+            # This is the only place the pixels of a warp are read.
+            warp = warpRef.get(parameters={"bbox": bbox})
+            if np.isnan(warp.image.array).all():
+                self.log.info("Skipping visit %d because the warp is empty of data", visit)
+                continue
             psf_metric, psf_gaussian = self.check_psf(warp)
             if psf_metric > self.config.bad_psf_threshold:
                 self.log.info("Skipping visit %d due to bad PSF fit (metric %f > %f threshold)",
@@ -302,6 +294,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                 continue
             else:
                 self.log.info("Using visit %d with PSF fit metric %f", visit, psf_metric)
+            nVisitsUsed += 1
 
             # Generate a lookup table with the shifted PSF models for each
             # subfilter, and the image cutouts for each object in the catalog
@@ -318,6 +311,9 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
                     cutoutLookupTable[recId][visit] = lookupTableSingle[recId]['cutout']
                     unshiftedLookupTable[recId][visit] = lookupTableSingle[recId]['unshiftedPsf']
                     recordVisitCount[recId] += 1
+        if nVisitsUsed == 0:
+            raise pipeBase.NoWorkFound("No input warps had usable data and an acceptable PSF fit.")
+        self.log.info("Modeling DCR from %d of %d input warps", nVisitsUsed, len(warpRefList))
         # Drop any records that were removed from too many visits
         badRecords = np.array([recordVisitCount[record.getId()] < self.config.minNVisits
                               for record in refCat])
