@@ -359,8 +359,14 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         goodShape = ~objectCat['base_SdssShape_flag']
         # Exclude extended objects
         goodExtendedness = objectCat['base_ClassificationSizeExtendedness_value'] < 0.5
-        # Do not included deblended parents, only the children
-        notParent = objectCat['parent'] > 0
+        # Use isolated sources and deblended children, but not the blended
+        # parents that those children were deblended from. This is the same
+        # condition as `detect_isDeblendedSource`.
+        # Note that `detect_isPrimary` is deliberately not used here, since it
+        # also restricts to the inner region of the patch. The correction
+        # catalog must cover the full outer bbox of the patch, so that a source
+        # in the overlap between two patches is corrected in both of them.
+        notParent = objectCat['deblend_nChild'] == 0
         # The source needs to fit in the defined footprint.
         # If it's larger, it's either trailed, extended, or just very bright
         # None of those cases will be fit well by the DCR model
