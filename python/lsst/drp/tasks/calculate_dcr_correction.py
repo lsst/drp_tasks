@@ -666,19 +666,41 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         return lookupTable
 
     def minimize_footprint_residuals(self, image_fp, psf_fps):
+        """Fit the fraction of a source's flux belonging to each subfilter.
+
+        Parameters
+        ----------
+        image_fp : `lsst.afw.table.SourceRecord`
+            Image cutout of the source, with its fit flux in ``modelFlux``.
+        psf_fps : `list` [`lsst.afw.table.SourceRecord`]
+            DCR-shifted PSF model of each subfilter.
+
+        Returns
+        -------
+        scales : `list` [`float`]
+            Fraction of the flux of ``image_fp`` belonging to each subfilter.
+        """
         scales0 = [image_fp['modelFlux']*psf_fp['modelFlux'] for psf_fp in psf_fps]
         nSubfilters = len(psf_fps)
-        img = image_fp.getFootprint().extractImage().array
-        psf_arrays = [psf.getFootprint().extractImage().array for psf in psf_fps]
+        # ``fill`` must be set: it defaults to NaN, which would poison any
+        # pixel of the bbox that is outside the footprint.
+        img = image_fp.getFootprint().extractImage(fill=0.).array
+        psf_arrays = [psf.getFootprint().extractImage(fill=0.).array for psf in psf_fps]
 
-        def minimize_residual(scales):
+        def residuals(scales):
             residual = img.copy()
             for psf, scale in zip(psf_arrays, scales):
                 residual -= scale*psf
-            return np.std(residual)
+            # Removing the mean makes the fit insensitive to any residual
+            # background in the cutout. Minimizing the sum of squares of this
+            # is equivalent to minimizing the standard deviation of the
+            # residual, but returning the individual residuals instead of a
+            # single number lets `least_squares` use the Jacobian and converge
+            # far faster.
+            return (residual - np.mean(residual)).ravel()
         minFluxFit = self.config.minimumModelFraction*image_fp['modelFlux']
         maxFluxFit = self.config.maximumModelFraction*image_fp['modelFlux']
-        scaleFit = least_squares(minimize_residual, scales0,
+        scaleFit = least_squares(residuals, scales0,
                                  bounds=[[minFluxFit]*nSubfilters, [maxFluxFit]*nSubfilters])
         scales = [scale/image_fp['modelFlux'] for scale in scaleFit.x]
         return scales
