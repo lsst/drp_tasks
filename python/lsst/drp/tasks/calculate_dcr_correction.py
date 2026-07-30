@@ -352,7 +352,7 @@ class CalculateDcrCorrectionTask(pipeBase.PipelineTask):
         filteredCatalog : `lsst.afw.table.SourceCatalog`
             Description
         """
-        snr = objectCat.getCalibInstFlux()/objectCat.getCalibInstFluxErr()
+        snr = objectCat['slot_CalibFlux_instFlux']/objectCat['slot_CalibFlux_instFluxErr']
         goodSnr = (snr > self.config.minimumSNR) & (snr < self.config.maximumSNR)
         # Exclude flagged objects that probably won't compute
         goodCentroid = ~objectCat['base_SdssCentroid_flag']
