@@ -55,7 +55,15 @@ from lsst.cell_coadds import (
 )
 from lsst.daf.butler import DataCoordinate, DeferredDatasetHandle
 from lsst.meas.algorithms import AccumulatorMeanStack
-from lsst.pex.config import ConfigField, ConfigurableField, DictField, Field, ListField, RangeField
+from lsst.pex.config import (
+    ChoiceField,
+    ConfigField,
+    ConfigurableField,
+    DictField,
+    Field,
+    ListField,
+    RangeField,
+)
 from lsst.pipe.base import (
     InMemoryDatasetHandle,
     NoWorkFound,
@@ -162,24 +170,26 @@ class AssembleCellCoaddConnections(
         dimensions=("tract", "patch", "band", "skymap"),
     )
 
-    def __init__(self, *, config=None):
+    config: AssembleCellCoaddConfig
+
+    def __init__(self, *, config: AssembleCellCoaddConfig | None = None):
         super().__init__(config=config)
 
-        if not config:
+        if not self.config:
             return
 
-        if config.do_calculate_weight_from_warp:
+        if self.config.do_calculate_weight_from_warp:
             del self.visitSummaryList
 
-        if not config.do_use_artifact_mask:
+        if not self.config.do_use_artifact_mask:
             del self.artifactMasks
 
-        if not config.do_input_map:
+        if not self.config.do_input_map:
             del self.inputMap
 
         # Dynamically set input connections for noise images, depending on the
         # number of noise realizations specified in the config.
-        for n in range(config.num_noise_realizations):
+        for n in range(self.config.num_noise_realizations):
             noise_warps = Input(
                 doc="Input noise warps",
                 name=f"direct_warp_noise{n}",
@@ -189,6 +199,9 @@ class AssembleCellCoaddConnections(
                 multiple=True,
             )
             setattr(self, f"noise{n}_warps", noise_warps)
+
+        if self.config.output_image_type == "future":
+            self.multipleCellCoadd = dataclasses.replace(self.multipleCellCoadd, storageClass="CellCoadd")
 
 
 class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCellCoaddConnections):
@@ -302,6 +315,15 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     input_mapper = ConfigurableField(
         target=HealSparseInputMapTask,
         doc="Input map creation subtask.",
+    )
+    output_image_type = ChoiceField[str](
+        "Which image type to use for the output coadd.",
+        allowed={
+            "legacy": "Write as a lsst.cell_Coadds.MultipleCellCoadd.",
+            "future": "Write as a lsst.images.cells.CellCoadd.",
+        },
+        optional=False,
+        default="legacy",
     )
 
 
@@ -1066,6 +1088,14 @@ class AssembleCellCoaddTask(PipelineTask):
             inputMap = self.input_mapper.cell_input_map
         else:
             inputMap = None
+
+        if self.config.output_image_type == "future":
+            from lsst.images import Box
+            from lsst.images.cells import CellCoadd
+
+            multipleCellCoadd = CellCoadd.from_legacy_cell_coadd(
+                multipleCellCoadd, tract_info=skyInfo.tractInfo, bbox=Box.from_legacy(grid.bbox_with_padding)
+            )
 
         return Struct(
             multipleCellCoadd=multipleCellCoadd,
