@@ -78,7 +78,7 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
     """Definitions of inputs and outputs for MetadetectionShearTask."""
 
     input_coadds = cT.Input(
-        "deep_coadd_cell_predetection",
+        "deep_coadd",
         storageClass="MultipleCellCoadd",
         doc="Per-band deep coadds.",
         multiple=True,
