@@ -63,7 +63,7 @@ from lsst.pipe.tasks.split_primary import SplitPrimaryTask
 from lsst.utils import getPackageDir
 
 FUNCTOR_FILE = os.path.join(getPackageDir("pipe_tasks"), "schemas", "prompt_source.yaml")
-SCHEMA_FILE = os.path.join("${SDM_SCHEMAS_DIR}", "yml", "lsstcam.yaml")
+SCHEMA_FILE = os.path.join("${SDM_SCHEMAS_DIR}", "yml", "ap_extra.yaml")
 TABLE_NAME = "PromptSource"
 SPLIT_DISCARD_PRIMARY_COLUMNS = ["sky_source"]
 
