@@ -771,6 +771,10 @@ class MetadetectionShearTask(PipelineTask):
             if ref.dataId["band"] in self.config.photometry_bands
         }
 
+        # Restore the predetection coadds
+        for coadd in coadds_by_band.values():
+            coadd.apply_background(None)
+
         try:
             outputs = self.run(
                 patch_coadds=coadds_by_band,
