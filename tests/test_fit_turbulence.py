@@ -36,43 +36,12 @@ from lsst.obs.base.instrument_tests import DummyCam
 from lsst.pipe.base import AnnotatedPartialOutputsError
 
 
-class FitTurbulenceTestCase(lsst.utils.tests.TestCase):
-
-    def setUp(self):
-
-        visit = 1234
-        self.noise = 0.01
-        self.npoints = 250
-        self.rng = np.random.RandomState(12345)
-
-        config = GaussianProcessesTurbulenceFitConfig()
-        # Set the max separation lower, since we only have two detectors.
-        config.correlationSeparationMax = 0.1
-        config.initKernel = "15**2 * AnisotropicVonKarman(invLam=array([[1.0/0.1**2,0],[0,1.0/0.1**2]]))"
-        config.splineNNodes = 60
-        self.task = GaussianProcessesTurbulenceFitTask(config=config)
-
-        kernel_skl = treegp.eval_kernel(self.task.config.initKernel)
-
-        # Make a simulated WCS catalog and position catalog.
-        self.wcsCatalog = self._makeWcsCatalog(visit)
-        self.positions = self._makeResidualCatalog(self.wcsCatalog, visit, kernel_skl)
-
-        # Run the Gaussian Processes and predict at the input positions.
-        self.gpx, self.gpy, *_ = self.task.runGP(self.wcsCatalog, self.positions)
-
-        sourceCatalog = Table(
-            {
-                "x": self.positions["xpix"],
-                "y": self.positions["ypix"],
-                "detector": self.positions["deviceName"],
-            }
-        )
-        self.predictCat = self.task.predict(self.gpx, self.gpy, self.wcsCatalog, sourceCatalog)
+class TurbulenceTestDataMixin:
+    """Shared helpers to simulate WCS and residual catalogs."""
 
     def _makeWcsCatalog(self, visit):
         """Make a simulated WCS catalog."""
-        camera = DummyCam().getCamera()
+        self.camera = DummyCam().getCamera()
         schema = afwTable.ExposureTable.makeMinimalSchema()
         schema.addField("visit", type="L", doc="Visit number")
         wcsCatalog = afwTable.ExposureCatalog(schema)
@@ -80,7 +49,7 @@ class FitTurbulenceTestCase(lsst.utils.tests.TestCase):
         boresight = lsst.geom.SpherePoint(150 * lsst.geom.degrees, 2.5 * lsst.geom.degrees)
 
         for detectorId in [0, 1]:
-            detector = camera[detectorId]
+            detector = self.camera[detectorId]
             wcs = createInitialSkyWcsFromBoresight(boresight, 0 * lsst.geom.degrees, detector)
             record = wcsCatalog.addNew()
             record.setId(detectorId)
@@ -131,6 +100,41 @@ class FitTurbulenceTestCase(lsst.utils.tests.TestCase):
 
         return visitPositions
 
+
+class FitTurbulenceTestCase(TurbulenceTestDataMixin, lsst.utils.tests.TestCase):
+
+    def setUp(self):
+
+        visit = 1234
+        self.noise = 0.01
+        self.npoints = 250
+        self.rng = np.random.RandomState(12345)
+
+        config = GaussianProcessesTurbulenceFitConfig()
+        # Set the max separation lower, since we only have two detectors.
+        config.correlationSeparationMax = 0.1
+        config.initKernel = "15**2 * AnisotropicVonKarman(invLam=array([[1.0/0.1**2,0],[0,1.0/0.1**2]]))"
+        config.splineNNodes = 60
+        self.task = GaussianProcessesTurbulenceFitTask(config=config)
+
+        kernel_skl = treegp.eval_kernel(self.task.config.initKernel)
+
+        # Make a simulated WCS catalog and position catalog.
+        self.wcsCatalog = self._makeWcsCatalog(visit)
+        self.positions = self._makeResidualCatalog(self.wcsCatalog, visit, kernel_skl)
+
+        # Run the Gaussian Processes and predict at the input positions.
+        self.gpx, self.gpy, *_ = self.task.runGP(self.wcsCatalog, self.positions)
+
+        sourceCatalog = Table(
+            {
+                "x": self.positions["xpix"],
+                "y": self.positions["ypix"],
+                "detector": self.positions["deviceName"],
+            }
+        )
+        self.predictCat = self.task.predict(self.gpx, self.gpy, self.wcsCatalog, sourceCatalog)
+
     def test_runGP(self):
         """Check that the predicted position is about the same as the simulated
         dx/dy values, modulo the scatter in the data."""
@@ -162,6 +166,134 @@ class FitTurbulenceTestCase(lsst.utils.tests.TestCase):
         # Try fitting GP with only a small amount of data, which should fail.
         with self.assertRaises(AnnotatedPartialOutputsError):
             self.task.runGP(self.wcsCatalog, self.positions[:5])
+
+
+@unittest.skipIf(treegp.__version__ != "1.5.0", "Skipping because 'treegp'!=1.5.0")
+class FitTurbulenceGomesTestCase(TurbulenceTestDataMixin, lsst.utils.tests.TestCase):
+    """Test the 'empirical-2pcf' (Gomes et al. 2025) optimizer and the
+    per-source output table."""
+
+    def setUp(self):
+
+        self.visit = 1234
+        self.noise = 0.01
+        self.npoints = 250
+        self.rng = np.random.RandomState(12345)
+
+        config = GaussianProcessesTurbulenceFitConfig()
+        config.optimizer = "empirical-2pcf"
+        # Set the scales lower, since we only have two detectors.
+        config.correlationSeparationMax = 0.1
+        config.correlationPixelSize = 0.01
+        config.apodRadius = 0.05
+        # Force a non-empty validation set from the 500 simulated points.
+        config.maxTrainingPoints = 400
+        # Regularize the fit: the simulated data are nearly noiseless, and
+        # the tabulated kernel needs some noise on the diagonal.
+        config.whiteNoise = 1.0
+        config.saveSourceTable = True
+        self.task = GaussianProcessesTurbulenceFitTask(config=config)
+
+        # Simulate residuals from the same anisotropic kernel as the
+        # Leget et al. 2021 test case.
+        kernel_skl = treegp.eval_kernel(
+            "15**2 * AnisotropicVonKarman(invLam=array([[1.0/0.1**2,0],[0,1.0/0.1**2]]))"
+        )
+
+        self.wcsCatalog = self._makeWcsCatalog(self.visit)
+        self.positions = self._makeResidualCatalog(self.wcsCatalog, self.visit, kernel_skl)
+
+        (
+            self.gpx,
+            self.gpy,
+            self.trainInds,
+            self.testInds,
+            self.hyperparameters,
+            self.allTPCoords,
+        ) = self.task.runGP(self.wcsCatalog, self.positions)
+
+    def test_runGP(self):
+        """Check that the empirical kernel is used and that the prediction
+        catches most of the correlated signal."""
+        self.assertIsInstance(self.gpx.kernel, treegp.EmpiricalCorrelationKernel)
+        self.assertEqual(len(self.gpx.kernel.theta), 0)
+
+        dx = np.array(self.positions["xresw"])
+        predTrain = self.gpx.predict(self.allTPCoords[self.trainInds])
+        residTrain = dx[self.trainInds] - predTrain
+        self.assertLess(np.std(residTrain), 0.3 * np.std(dx[self.trainInds]))
+
+        # The validation points are not used in the fit, but the prediction
+        # should still remove a good part of the correlated signal.
+        predTest = self.gpx.predict(self.allTPCoords[self.testInds])
+        residTest = dx[self.testInds] - predTest
+        self.assertLess(np.std(residTest), np.std(dx[self.testInds]))
+
+    def test_hyperparameters(self):
+        """Check the diagnostics stored in place of the hyperparameters."""
+        self.assertEqual(self.hyperparameters.colnames, ["x", "y"])
+        # [xi0, g1 measured, g2 measured, g1 applied, g2 applied,
+        #  pixel size, number of grid pixels]
+        self.assertEqual(len(self.hyperparameters["x"]), 7)
+        self.assertGreater(self.hyperparameters["x"][0], 0.0)
+        self.assertEqual(self.hyperparameters["x"][5], self.task.config.correlationPixelSize)
+        self.assertEqual(self.hyperparameters["x"][6], 20)
+
+    def test_sourceTable(self):
+        """Check the per-source output table."""
+        sourceTable = self.task.makeSourceTable(
+            self.gpx,
+            self.gpy,
+            self.positions,
+            self.allTPCoords,
+            self.trainInds,
+            self.wcsCatalog,
+            self.camera,
+            self.visit,
+        )
+
+        expectedColumns = [
+            "visit",
+            "detector",
+            "xTP",
+            "yTP",
+            "dxTP",
+            "dyTP",
+            "dxTPGP",
+            "dyTPGP",
+            "isTraining",
+            "xPix",
+            "yPix",
+            "fpX",
+            "fpY",
+            "dxPix",
+            "dyPix",
+            "dxPixGP",
+            "dyPixGP",
+        ]
+        self.assertEqual(sourceTable.colnames, expectedColumns)
+        self.assertEqual(len(sourceTable), len(self.positions))
+        self.assertEqual(np.sum(sourceTable["isTraining"]), self.task.config.maxTrainingPoints)
+        np.testing.assert_array_equal(sourceTable["visit"], self.visit)
+        np.testing.assert_allclose(sourceTable["dxTP"], self.positions["xresw"])
+        self.assertTrue(np.all(np.isfinite(sourceTable["dxTPGP"])))
+        self.assertTrue(np.all(np.isfinite(sourceTable["fpX"])))
+
+        # The pixel-frame offsets must have the same amplitude as the
+        # tangent plane offsets divided by the local plate scale.
+        for detector in self.wcsCatalog:
+            detId = detector["id"]
+            mask = sourceTable["detector"] == detId
+            pixToTP = detector.wcs.getFrameDict().getMapping("PIXELS", "IWC")
+            point = np.array([[sourceTable["xPix"][mask][0]], [sourceTable["yPix"][mask][0]]])
+            step = pixToTP.applyForward(point + np.array([[1.0], [0.0]])) - pixToTP.applyForward(point)
+            plateScale = np.hypot(step[0, 0], step[1, 0])
+
+            pixAmplitude = np.hypot(sourceTable["dxPix"][mask], sourceTable["dyPix"][mask]) * plateScale
+            tpAmplitude = (
+                (np.hypot(sourceTable["dxTP"][mask], sourceTable["dyTP"][mask]) * u.mas).to(u.degree).value
+            )
+            np.testing.assert_allclose(pixAmplitude, tpAmplitude, rtol=1e-2)
 
 
 if __name__ == "__main__":
