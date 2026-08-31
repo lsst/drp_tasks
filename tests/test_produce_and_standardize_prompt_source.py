@@ -60,9 +60,9 @@ from lsst.pipe.tasks.schemaUtils import (
     readSdmSchemaFile,
 )
 from lsst.pipe.tasks.split_primary import SplitPrimaryTask
-from lsst.utils import getPackageDir
+from lsst.resources import ResourcePath
 
-FUNCTOR_FILE = os.path.join(getPackageDir("pipe_tasks"), "schemas", "prompt_source.yaml")
+FUNCTOR_FILE = ResourcePath("eups://pipe_tasks/schemas/prompt_source.yaml")
 SCHEMA_FILE = os.path.join("${SDM_SCHEMAS_DIR}", "yml", "ap_extra.yaml")
 TABLE_NAME = "PromptSource"
 SPLIT_DISCARD_PRIMARY_COLUMNS = ["sky_source"]
@@ -146,8 +146,9 @@ class PromptSourceEndToEndTestCase(lsst.utils.tests.TestCase):
 
         # 2. Run standardization
         transformConfig = TransformSourceTableConfig()
-        transformConfig.functorFile = FUNCTOR_FILE
-        transformTask = TransformSourceTableTask(config=transformConfig)
+        with FUNCTOR_FILE.as_local() as local:
+            transformConfig.functorFile = local.ospath
+            transformTask = TransformSourceTableTask(config=transformConfig)
         detectorTable = transformTask.run(
             handle=InMemoryDatasetHandle(cls.sources.to_pandas(), storageClass="DataFrame"),
             funcs=transformTask.funcs,
