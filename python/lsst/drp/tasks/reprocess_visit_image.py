@@ -21,6 +21,9 @@
 
 __all__ = ["ReprocessVisitImageTask", "ReprocessVisitImageConfig", "combine_backgrounds"]
 
+import dataclasses
+
+import astropy.units
 import numpy as np
 import smatch
 
@@ -33,6 +36,9 @@ import lsst.meas.extensions.photometryKron
 import lsst.meas.extensions.shapeHSM
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
+from lsst.daf.butler import DataCoordinate
+from lsst.images import VisitImage
+from lsst.images.fields import field_from_legacy_background, field_from_legacy_photo_calib
 from lsst.pipe.base import connectionTypes
 from lsst.pipe.tasks import computeExposureSummaryStats, repair, snapCombine
 
@@ -139,6 +145,9 @@ class ReprocessVisitImageConnections(
             del self.initial_photo_calib
         if not config.do_apply_flat_background_ratio:
             del self.background_to_photometric_ratio
+        if self.config.output_image_type == "future":
+            self.exposure = dataclasses.replace(self.exposure, storageClass="VisitImage")
+            del self.background
 
 
 class ReprocessVisitImageConfig(
@@ -214,6 +223,22 @@ class ReprocessVisitImageConfig(
         default=False,
         doc="This should be True if processing was done with an illumination correction.",
     )
+    instrumental_unit = pexConfig.Field(
+        "Unit for instrumental flux pixels (i.e. uncalibrated side of a PhotoCalib, "
+        "and the units of all background inputs).",
+        dtype=str,
+        default="electron",
+    )
+    output_image_type = pexConfig.ChoiceField(
+        "Which image type to use for the output image.",
+        allowed={
+            "legacy": "Write as a lsst.afw.image.ExposureF.",
+            "future": "Write as a lsst.images.VisitImage.",
+        },
+        dtype=str,
+        optional=False,
+        default="legacy",
+    )
     copyMaskPlanes = lsst.pex.config.ListField(
         dtype=str, default=("SPIKE",), doc="Mask planes to copy from the initial calibration task."
     )
@@ -267,6 +292,13 @@ class ReprocessVisitImageConfig(
                         "ReprocessVisitImageConfig.detection background must be configured with "
                         "doApplyFlatBackgroundRatio if do_apply_flat_background_ratio is True.",
                     )
+        if self.remove_initial_photo_calib and self.output_image_type == "future":
+            raise pexConfig.FieldValidationError(
+                ReprocessVisitImageConfig.remove_initial_photo_calib,
+                self,
+                "ReprocessVisitImageConfig.remove_initial_photo_calib is incompatible with "
+                "output_image_type=future.",
+            )
 
 
 class ReprocessVisitImageTask(pipeBase.PipelineTask):
@@ -429,12 +461,16 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
                 preliminary_mask=preliminary_mask,
             )
         except pipeBase.AlgorithmError as e:
+            if self.config.output_image_type == "future" and result.exposure is not None:
+                self.convert_outputs_to_future(result, detector_summary.photoCalib, butlerQC.quantum.dataId)
             error = pipeBase.AnnotatedPartialOutputsError.annotate(
                 e, self, result.exposure, result.sources_footprints, log=self.log
             )
             butlerQC.put(result, outputRefs)
             raise error from e
 
+        if self.config.output_image_type == "future":
+            self.convert_outputs_to_future(result, detector_summary.photoCalib, butlerQC.quantum.dataId)
         butlerQC.put(result, outputRefs)
 
     def run(
@@ -512,6 +548,13 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
                 Total background that was fit to, and subtracted from the
                 exposure when detecting ``sources``, in the same nJy units as
                 ``exposure``. (`lsst.afw.math.BackgroundList`)
+
+        Notes
+        -----
+        This method does not yet respect the
+        `~ReprocessVisitImageConfig.output_image_type` option; it always
+        returns legacy types, leaving conversion (via
+        `convert_outputs_to_future`) to `runQuantum`.
         """
         if result is None:
             result = pipeBase.Struct()
@@ -574,6 +617,48 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
         result.sources = result.sources_footprints.asAstropy()
 
         return result
+
+    def convert_outputs_to_future(
+        self,
+        result: pipeBase.Struct,
+        photo_calib: afwImage.PhotoCalib,
+        data_id: DataCoordinate,
+    ) -> VisitImage:
+        """Convert an output struct to use `lsst.images` types.
+
+        This replaces ``result.exposure`` with an `lsst.images.VisitImage`
+        instance, attaches ``result.background`` to it, and then deletes
+        ``result.background``.
+
+        Parameters
+        ----------
+        result : `lsst.pipe.base.Struct`
+            Output struct to read and modify in place.
+        photo_calib : `lsst.afw.image.PhotoCalib`
+            Mapping from `ReprocessVisitImageConfig.instrumental_unit` to
+            the nJy pixels of the image.
+        data_id : `lsst.daf.butler.DataCoordinate`
+            The data ID of the image.
+        """
+        result.exposure = VisitImage.from_legacy(
+            result.exposure,
+            unit=astropy.units.nJy,
+            instrument=data_id["instrument"],
+            visit=data_id["visit"],
+        )
+        instrumental_unit = astropy.units.Unit(self.config.instrumental_unit)
+        result.exposure.photometric_scaling = field_from_legacy_photo_calib(
+            photo_calib, bounds=result.exposure.bbox, instrumental_unit=instrumental_unit
+        )
+        if legacy_background := getattr(result, "background", None):
+            result.exposure.backgrounds.add(
+                "subtracted",
+                field_from_legacy_background(legacy_background, unit=instrumental_unit),
+                description="Background subtracted from the image when generating the Source catalog.",
+                is_subtracted=True,
+            )
+            del result.background
+        return result.exposure
 
     def _copyMaskPlanes(self, exposure, mask):
         """Copy mask planes from an input Mask to the final Exposure.
