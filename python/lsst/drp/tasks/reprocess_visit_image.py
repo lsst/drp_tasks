@@ -128,7 +128,7 @@ class ReprocessVisitImageConnections(
     )
     background = connectionTypes.Output(
         doc=(
-            "Total background model including new detections in this task. "
+            "Total output background model including new detections in this task. "
             "Note that the background model has units of ADU, while the corresponding "
             "image has units of nJy - the image must be 'uncalibrated' before the background "
             "can be restored."
@@ -545,9 +545,10 @@ class ReprocessVisitImageTask(pipeBase.PipelineTask):
                 Footprints of sources that were measured on the exposure.
                 (`lsst.afw.table.SourceCatalog`)
             ``background``
-                Total background that was fit to, and subtracted from the
-                exposure when detecting ``sources``, in the same nJy units as
-                ``exposure``. (`lsst.afw.math.BackgroundList`)
+                Total background subtracted from the image, including both
+                input backgrounds and any additional subtraction performed
+                during detection (`lsst.afw.math.BackgroundList`).  Note that
+                this typically has different units from ``exposure``.
 
         Notes
         -----
