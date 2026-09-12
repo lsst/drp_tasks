@@ -209,25 +209,6 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
 
             visit, detector = obsId.visit, obsId.detector
 
-    def checkRun(self, assembleTask):
-        """Check that the task runs successfully."""
-        result = assembleTask.runQuantum(self.skyInfo, self.handleList)
-
-        # Check that we produced an exposure.
-        self.assertTrue(result.multipleCellCoadd is not None)
-        # Check that the visit_count method returns a number less than or equal
-        # to the total number of input exposures available.
-        max_visit_count = len(self.handleList)
-        for cellId, singleCellCoadd in result.multipleCellCoadd.cells.items():
-            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
-                self.assertLessEqual(singleCellCoadd.visit_count, max_visit_count)
-            # Check that the aperture correction maps are not None.
-            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
-                self.assertTrue(singleCellCoadd.aperture_correction_map is not None)
-            # Check that the inputs are sorted.
-            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
-                self.checkSortOrder(singleCellCoadd.inputs)
-
     def test_assemble_basic(self):
         """Test that AssembleCellCoaddTask runs successfully without errors.
 
@@ -325,6 +306,13 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.runTask()
         for _, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
             self.checkSortOrder(singleCellCoadd.inputs)
+
+    def test_aperture_correction_maps(self):
+        """Check that the aperture correction maps are not None."""
+        self.runTask()
+        for cellId, singleCellCoadd in self.result.multipleCellCoadd.cells.items():
+            with self.subTest(x=repr(cellId.x), y=repr(cellId.y)):
+                self.assertIsNotNone(singleCellCoadd.aperture_correction_map)
 
     def test_psf_normalization(self):
         """Check that the sum of PSF images is close to 1."""
