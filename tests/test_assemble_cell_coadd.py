@@ -57,6 +57,7 @@ class MockAssembleCellCoaddConfig(AssembleCellCoaddConfig):
     def setDefaults(self):
         super().setDefaults()
         self.require_artifact_mask = False
+        self.num_noise_realizations = 1
 
 
 class MockAssembleCellCoaddTask(AssembleCellCoaddTask):
