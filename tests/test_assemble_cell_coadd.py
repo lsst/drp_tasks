@@ -267,18 +267,6 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.assertTrue(self.result.multipleCellCoadd is not None)
         self.assertTrue(self.result.inputMap is not None)
 
-    # TODO: Remove this test in DM-49401
-    @lsst.utils.tests.methodParameters(do_scale_zero_point=[False, True])
-    def test_do_scale_zero_point(self, do_scale_zero_point):
-        config = MockAssembleCellCoaddConfig()
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=FutureWarning)
-            config.do_scale_zero_point = do_scale_zero_point
-            self.runTask(config)
-        # Check that we produced an exposure.
-        self.assertTrue(self.result.multipleCellCoadd is not None)
-        self.assertTrue(self.result.inputMap is not None)
-
     @lsst.utils.tests.methodParameters(do_calculate_weight_from_warp=[False, True])
     def test_do_calculate_weight_from_warp(self, do_calculate_weight_from_warp):
         config = MockAssembleCellCoaddConfig()

@@ -76,7 +76,6 @@ from lsst.pipe.base.connectionTypes import Input, Output
 from lsst.pipe.tasks.coaddBase import makeSkyInfo, removeMaskPlanes, setRejectedMaskMapping
 from lsst.pipe.tasks.healSparseMapping import HealSparseInputMapTask
 from lsst.pipe.tasks.interpImage import InterpImageTask
-from lsst.pipe.tasks.scaleZeroPoint import ScaleZeroPointTask
 from lsst.skymap import BaseSkyMap
 
 
@@ -209,20 +208,6 @@ class AssembleCellCoaddConfig(PipelineTaskConfig, pipelineConnections=AssembleCe
     interpolate_coadd = ConfigurableField(
         target=InterpImageTask,
         doc="Task to interpolate (and extrapolate) over pixels with NO_DATA mask on cell coadds",
-    )
-    do_scale_zero_point = Field[bool](
-        doc="Scale warps to a common zero point? This is not needed if they have absolute flux calibration.",
-        default=False,
-        deprecated="Now that visits are scaled to nJy it is no longer necessary or "
-        "recommended to scale the zero point, so this will be removed "
-        "after v29.",
-    )
-    scale_zero_point = ConfigurableField(
-        target=ScaleZeroPointTask,
-        doc="Task to scale warps to a common zero point",
-        deprecated="Now that visits are scaled to nJy it is no longer necessary or "
-        "recommended to scale the zero point, so this will be removed "
-        "after v29.",
     )
     do_calculate_weight_from_warp = Field[bool](
         doc="Calculate coadd weight from the input warp? Otherwise, the weight is obtained from the "
@@ -369,8 +354,6 @@ class AssembleCellCoaddTask(PipelineTask):
             self.makeSubtask("interpolate_coadd")
             # Suppress the warning message about fallback.
             self.interpolate_coadd.log.setLevel(logging.ERROR)
-        if self.config.do_scale_zero_point:
-            self.makeSubtask("scale_zero_point")
         if self.config.do_input_map:
             self.makeSubtask("input_mapper")
 
@@ -409,9 +392,8 @@ class AssembleCellCoaddTask(PipelineTask):
         skyInfo = makeSkyInfo(skyMap, tractId=outputDataId["tract"], patchId=outputDataId["patch"])
         visitSummaryList = butlerQC.get(getattr(inputRefs, "visitSummaryList", []))
 
-        units = CoaddUnits.legacy if self.config.do_scale_zero_point else CoaddUnits.nJy
         self.common = CommonComponents(
-            units=units,
+            units=CoaddUnits.nJy,
             wcs=skyInfo.patchInfo.wcs,
             band=outputDataId.get("band", None),
             identifiers=PatchIdentifiers.from_data_id(outputDataId),
@@ -694,25 +676,10 @@ class AssembleCellCoaddTask(PipelineTask):
                 warp.mask.array = artifact_mask.array
                 del artifact_mask
 
-            if self.config.do_scale_zero_point:
-                # Each Warp that goes into a coadd will typically have an
-                # independent photometric zero-point. Therefore, we must scale
-                # each Warp to set it to a common photometric zeropoint.
-                imageScaler = self.scale_zero_point.run(exposure=warp, dataRef=warp_input.warp).imageScaler
-                zero_point_scale_factor = imageScaler.scale
-                self.log.debug(
-                    "Scaled the warp %s by %f to match zero points",
-                    warp_input.dataId,
-                    zero_point_scale_factor,
-                )
-            else:
-                zero_point_scale_factor = 1.0
-                if "BUNIT" not in warp.metadata:
-                    raise ValueError(f"Warp {warp_input.dataId} has no BUNIT metadata")
-                if warp.metadata["BUNIT"] != "nJy":
-                    raise ValueError(
-                        f"Warp {warp_input.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy"
-                    )
+            if "BUNIT" not in warp.metadata:
+                raise ValueError(f"Warp {warp_input.dataId} has no BUNIT metadata")
+            if warp.metadata["BUNIT"] != "nJy":
+                raise ValueError(f"Warp {warp_input.dataId} has BUNIT {warp.metadata['BUNIT']}, expected nJy")
 
             # Only try to remove maks planes that have been registered.
             to_remove = []
@@ -741,7 +708,6 @@ class AssembleCellCoaddTask(PipelineTask):
                 for detector in full_ccd_table["ccd"].tolist():
                     visitSummaryRow = visitSummary.find(detector)
                     mean_variance = visitSummaryRow["meanVar"]
-                    mean_variance *= zero_point_scale_factor**2
                     if warp.metadata.get("BUNIT", None) == "nJy":
                         mean_variance *= visitSummaryRow.photoCalib.getCalibrationMean() ** 2
                     weights[detector] = 1.0 / mean_variance
