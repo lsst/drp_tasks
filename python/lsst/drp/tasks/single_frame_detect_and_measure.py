@@ -21,6 +21,8 @@
 
 __all__ = ["SingleFrameDetectAndMeasureTask", "SingleFrameDetectAndMeasureConfig"]
 
+import dataclasses
+
 import lsst.afw.table as afwTable
 import lsst.geom
 import lsst.meas.algorithms
@@ -38,19 +40,28 @@ class SingleFrameDetectAndMeasureConnections(
 ):
     # inputs
     exposure = connectionTypes.Input(
-        doc="Exposure to be calibrated, and detected and measured on.",
+        doc="Exposure to be calibrated, and detected and measured on. With "
+        "image_type='future' this is a `lsst.images.VisitImage`, which carries its own "
+        "background; the separate input_background connection is dropped in that mode.",
         name="preliminary_visit_image",
         storageClass="Exposure",
         dimensions=["instrument", "visit", "detector"],
     )
     input_background = connectionTypes.Input(
-        doc="Background models estimated during calibration task; calibrated to be in nJy units.",
+        doc="Background models estimated during calibration task. Only used with image_type='legacy'.",
         name="preliminary_visit_image_background",
         storageClass="Background",
         dimensions=("instrument", "visit", "detector"),
     )
 
     # outputs
+    output_exposure = connectionTypes.Output(
+        doc="The input exposure with its DETECTED mask plane replaced by the detections made "
+        "in this task. The image and variance planes are identical to the input.",
+        name="visit_image",
+        storageClass="Exposure",
+        dimensions=["instrument", "visit", "detector"],
+    )
     sources = connectionTypes.Output(
         doc="Catalog of measured sources detected on the calibrated exposure.",
         name="single_visit_star_reprocessed_unstandardized",
@@ -65,15 +76,22 @@ class SingleFrameDetectAndMeasureConnections(
     )
     background = connectionTypes.Output(
         doc=(
-            "Total background model including new detections in this task. "
-            "Note that the background model has units of ADU, while the corresponding "
-            "image has units of nJy - the image must be 'uncalibrated' before the background "
-            "can be restored."
+            "Total background model: the input background plus the background fit in this task, "
+            "in the same units as the input exposure. The fit from this task is not subtracted "
+            "from output_exposure. Only written with image_type='legacy'."
         ),
         name="preliminary_visit_image_reprocessed_background",
         dimensions=("instrument", "visit", "detector"),
         storageClass="Background",
     )
+
+    def __init__(self, *, config=None):
+        super().__init__(config=config)
+        if config.image_type == "future":
+            self.exposure = dataclasses.replace(self.exposure, storageClass="VisitImage")
+            self.output_exposure = dataclasses.replace(self.output_exposure, storageClass="VisitImage")
+            del self.input_background
+            del self.background
 
 
 class SingleFrameDetectAndMeasureConfig(
@@ -118,6 +136,18 @@ class SingleFrameDetectAndMeasureConfig(
         dtype=bool,
         default=True,
         doc="Generate sky sources?",
+    )
+    image_type = pexConfig.ChoiceField[str](
+        "Which image type to read and write for the visit image.",
+        allowed={
+            "legacy": "Read and write an `lsst.afw.image.Exposure`, whose background is a separate "
+            "dataset, and write the total background as a separate dataset in turn.",
+            "future": "Read and write an `lsst.images.VisitImage`, which carries its own backgrounds. "
+            "The output keeps the input's subtracted background, and adds the total background "
+            "fit in this task as a background that is not subtracted.",
+        },
+        optional=False,
+        default="legacy",
     )
 
     def setDefaults(self):
@@ -209,7 +239,15 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
         id_generator = self.config.id_generator.apply(butlerQC.quantum.dataId)
 
         exposure = inputs.pop("exposure")
-        input_background = inputs.pop("input_background")
+        if self.config.image_type == "future":
+            # The background arrives as a component of the VisitImage rather
+            # than as its own input; it is combined with the background fit
+            # here when that fit is attached to the output image.
+            visit_image = exposure
+            exposure = visit_image.to_legacy()
+            input_background = None
+        else:
+            input_background = inputs.pop("input_background")
 
         # This should not happen with a properly configured execution context.
         assert not inputs, "runQuantum got more inputs than expected"
@@ -217,6 +255,7 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
         # Specify the fields that `annotate` needs below, to ensure they
         # exist, even as None.
         result = pipeBase.Struct(
+            output_exposure=None,
             sources=None,
             sources_footprints=None,
         )
@@ -234,12 +273,55 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
             butlerQC.put(result, outputRefs)
             raise error from e
 
+        if self.config.image_type == "future":
+            result.output_exposure = self._make_future_output(visit_image, result)
         butlerQC.put(result, outputRefs)
+
+    def _make_future_output(self, visit_image, result):
+        """Copy the outputs of `run` onto the input `lsst.images.VisitImage`.
+
+        Parameters
+        ----------
+        visit_image : `lsst.images.VisitImage`
+            The input image, modified in place. Its subtracted background is
+            kept as-is.
+        result : `lsst.pipe.base.Struct`
+            The result of `run`, with ``output_exposure`` and ``background``.
+
+        Returns
+        -------
+        visit_image : `lsst.images.VisitImage`
+            The input image, with its DETECTED mask plane replaced by the
+            detections made in `run`, and the total background attached as a
+            background that is not subtracted.
+        """
+        from lsst.images.fields import SumField, field_from_legacy_background
+
+        legacy_mask = result.output_exposure.mask
+        detected = legacy_mask.array & legacy_mask.getPlaneBitMask("DETECTED")
+        visit_image.mask.clear("DETECTED")
+        visit_image.mask.set("DETECTED", detected)
+
+        background = field_from_legacy_background(
+            result.background, bounds=visit_image.bbox, unit=visit_image.unit
+        )
+        # The new fit was made on the already-subtracted image, so add the
+        # subtracted background to give a total relative to the original
+        # image.
+        if visit_image.backgrounds.subtracted is not None:
+            background = SumField([visit_image.backgrounds.subtracted.field, background])
+        visit_image.backgrounds.add(
+            "sourceDetection",
+            background,
+            description="Total background fit when generating the reprocessed Source catalog. Not "
+            "subtracted from the image: restore the subtracted background before subtracting this one.",
+        )
+        return visit_image
 
     def run(
         self,
         exposure,
-        input_background,
+        input_background=None,
         id_generator=None,
         result=None,
     ):
@@ -252,7 +334,12 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
         ----------
         exposure : `lsst.afw.image.Exposure`
             Initial calibrated exposure.
-            The DETECTED mask plane will be modified in place.
+            The DETECTED mask plane will be modified in place; the image and
+            variance planes are not modified.
+        input_background : `lsst.afw.math.BackgroundList`, optional
+            Background already subtracted from ``exposure``; appended to with
+            the background fit here, so that the returned ``background`` is the
+            total. If `None`, only the background fit in this task is returned.
         id_generator : `lsst.meas.base.IdGenerator`, optional
             Object that generates source IDs and provides random seeds.
         result : `lsst.pipe.base.Struct`, optional
@@ -265,6 +352,9 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
         result : `lsst.pipe.base.Struct`
             Results as a struct with attributes:
 
+            ``output_exposure``
+                ``exposure``, with its DETECTED mask plane replaced by the
+                detections of ``sources``. (`lsst.afw.image.Exposure`)
             ``sources``
                 Sources that were measured on the exposure, with calibrated
                 fluxes and magnitudes. (`astropy.table.Table`)
@@ -272,9 +362,11 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
                 Footprints of sources that were measured on the exposure.
                 (`lsst.afw.table.SourceCatalog`)
             ``background``
-                Total background that was fit to, and subtracted from the
-                exposure when detecting ``sources``, in the same nJy units as
-                ``exposure``. (`lsst.afw.math.BackgroundList`)
+                ``input_background`` plus the background that was fit to the
+                exposure when detecting ``sources``, in the same units as
+                ``exposure``. The fit is not subtracted from
+                ``output_exposure``.
+                (`lsst.afw.math.BackgroundList`)
         """
         if exposure.apCorrMap is None:
             raise pipeBase.NoWorkFound("Exposure is missing an aperture correction map.")
@@ -286,6 +378,12 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
             id_generator = lsst.meas.base.IdGenerator()
 
         table = afwTable.SourceTable.make(self.schema, id_generator.make_table_id_factory())
+
+        # Detection subtracts its background fit from the image in place, so
+        # detect and measure on a copy to lmake sure the image and variance
+        # remain identical.
+        output_exposure = exposure
+        exposure = exposure.clone()
 
         detections = self.detection.run(
             table=table,
@@ -314,5 +412,10 @@ class SingleFrameDetectAndMeasureTask(pipeBase.PipelineTask):
         sources["detector"] = exposure.info.getDetector().getId()
         result.sources_footprints = sources
         result.sources = sources.asAstropy()
+
+        detected = output_exposure.mask.getPlaneBitMask("DETECTED")
+        output_exposure.mask.array &= ~detected
+        output_exposure.mask.array |= exposure.mask.array & detected
+        result.output_exposure = output_exposure
 
         return result
