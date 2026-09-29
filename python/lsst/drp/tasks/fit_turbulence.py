@@ -28,7 +28,8 @@ import numpy as np
 import treecorr
 import treegp
 from astropy.table import Table
-from scipy.interpolate import RectBivariateSpline
+from scipy.fft import fft2, ifft2, next_fast_len
+from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator, griddata
 
 import lsst.afw.geom as afwgeom
 import lsst.afw.table
@@ -143,6 +144,98 @@ def plot_visit(x, y, dx, dy, predx, predy):
     return fig
 
 
+def compute_div_curl_eb(coords, field, gridResolution):
+    """Compute the divergence, curl, and E/B Helmholtz decomposition of a
+    scattered 2D vector field, evaluated back at the input positions.
+
+    The field is interpolated onto a regular grid (cubic, NaN outside the
+    convex hull of the points). The divergence and curl are central
+    differences on that grid; they are the sources of the E and B modes
+    of the field (the Laplacians of the scalar and pseudo-scalar
+    potentials). The E (curl-free) and B (divergence-free) vector
+    components are obtained by projecting each Fourier mode of the
+    gridded field onto (E) and perpendicular to (B) its wave vector; the
+    k = 0 mode is assigned to E. The maps are zero-padded to twice their
+    size before the transform to soften the periodicity assumption, but
+    on a finite field the decomposition is not unique and some E/B
+    mixing near the field edges is unavoidable.
+
+    Parameters
+    ----------
+    coords : `numpy.ndarray`
+        Positions of the field samples, in degrees. (n_samples, 2)
+    field : `numpy.ndarray`
+        Vector field values at `coords`, in mas. (n_samples, 2)
+    gridResolution : `int`
+        Number of grid nodes per axis of the intermediate regular grid.
+
+    Returns
+    -------
+    div : `numpy.ndarray`
+        Divergence of the field at `coords`, in mas per degree.
+        NaN where the gridded field is not defined. (n_samples,)
+    curl : `numpy.ndarray`
+        Curl (z-component, a pseudo-scalar) of the field at `coords`,
+        in mas per degree. (n_samples,)
+    fieldE : `numpy.ndarray`
+        E-mode (curl-free) component of the field at `coords`, in mas.
+        (n_samples, 2)
+    fieldB : `numpy.ndarray`
+        B-mode (divergence-free) component of the field at `coords`,
+        in mas. (n_samples, 2)
+    """
+    xNodes = np.linspace(np.min(coords[:, 0]), np.max(coords[:, 0]), gridResolution)
+    yNodes = np.linspace(np.min(coords[:, 1]), np.max(coords[:, 1]), gridResolution)
+    xGrid, yGrid = np.meshgrid(xNodes, yNodes)
+    # Maps are indexed [iy, ix].
+    mapX = griddata(coords, field[:, 0], (xGrid, yGrid), method="cubic")
+    mapY = griddata(coords, field[:, 1], (xGrid, yGrid), method="cubic")
+    valid = np.isfinite(mapX) & np.isfinite(mapY)
+
+    dMapXdY, dMapXdX = np.gradient(mapX, yNodes, xNodes)
+    dMapYdY, dMapYdX = np.gradient(mapY, yNodes, xNodes)
+    divMap = dMapXdX + dMapYdY
+    curlMap = dMapYdX - dMapXdY
+
+    # Helmholtz decomposition in Fourier space, on zero-padded maps.
+    ny, nx = mapX.shape
+    nyPad = next_fast_len(2 * ny)
+    nxPad = next_fast_len(2 * nx)
+    padX = np.zeros((nyPad, nxPad))
+    padY = np.zeros((nyPad, nxPad))
+    padX[:ny, :nx] = np.where(valid, mapX, 0.0)
+    padY[:ny, :nx] = np.where(valid, mapY, 0.0)
+    kx = 2.0 * np.pi * np.fft.fftfreq(nxPad, d=xNodes[1] - xNodes[0])[np.newaxis, :]
+    ky = 2.0 * np.pi * np.fft.fftfreq(nyPad, d=yNodes[1] - yNodes[0])[:, np.newaxis]
+    kSquared = kx**2 + ky**2
+    kSquared[0, 0] = 1.0
+    hatX = fft2(padX)
+    hatY = fft2(padY)
+    kDotU = kx * hatX + ky * hatY
+    hatEX = kDotU * kx / kSquared
+    hatEY = kDotU * ky / kSquared
+    # The k = 0 mode has no direction; assign it to E by convention.
+    hatEX[0, 0] = hatX[0, 0]
+    hatEY[0, 0] = hatY[0, 0]
+    mapEX = ifft2(hatEX).real[:ny, :nx]
+    mapEY = ifft2(hatEY).real[:ny, :nx]
+    mapBX = np.where(valid, mapX, 0.0) - mapEX
+    mapBY = np.where(valid, mapY, 0.0) - mapEY
+
+    outputs = []
+    for outputMap in [divMap, curlMap, mapEX, mapEY, mapBX, mapBY]:
+        interpolator = RegularGridInterpolator(
+            (yNodes, xNodes),
+            np.where(valid, outputMap, np.nan),
+            method="linear",
+            bounds_error=False,
+            fill_value=np.nan,
+        )
+        outputs.append(interpolator(coords[:, ::-1]))
+    div, curl, ex, ey, bx, by = outputs
+    return div, curl, np.array([ex, ey]).T, np.array([bx, by]).T
+
+
 class SingularMatrixError(pipeBase.AlgorithmError):
     """Raised if the Gaussian Processes fit raises a Singular Matrix linear
     algebra error."""
@@ -221,7 +314,9 @@ class GaussianProcessesTurbulenceFitConnections(
     sourceTable = pipeBase.connectionTypes.Output(
         doc=(
             "Per-source table with positions, residuals, and Gaussian Processes predictions in tangent"
-            " plane and detector pixel coordinates, along with the training/validation split."
+            " plane and detector pixel coordinates, along with the training/validation split, and"
+            " optionally (config.saveDivCurl) the divergence, curl, and E/B decomposition of the"
+            " residual field."
         ),
         name="turbulence_fit_sources",
         storageClass="ArrowAstropy",
@@ -398,6 +493,25 @@ class GaussianProcessesTurbulenceFitConfig(
         ),
         default=False,
     )
+    saveDivCurl = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Add to the per-source table the divergence and curl of the residual field (the sources of"
+            " its E and B modes) and its Helmholtz decomposition into E (curl-free) and B"
+            " (divergence-free) vector components, for both the measured residuals and the Gaussian"
+            " Processes predictions, in tangent plane and detector pixel coordinates. Requires"
+            " saveSourceTable."
+        ),
+        default=False,
+    )
+    divCurlGridResolution = pexConfig.Field(
+        dtype=int,
+        doc=(
+            "Number of grid nodes per axis used to grid the residual field for the divergence, curl,"
+            " and E/B decomposition computation. Only used if saveDivCurl is set."
+        ),
+        default=100,
+    )
     maxTrainingPoints = pexConfig.Field(
         dtype=int,
         doc="Maximum number of points to use in the Gaussian Processes training.",
@@ -432,6 +546,12 @@ class GaussianProcessesTurbulenceFitConfig(
 
     def validate(self):
         super().validate()
+        if self.saveDivCurl and not self.saveSourceTable:
+            raise pexConfig.FieldValidationError(
+                self.__class__.saveDivCurl,
+                self,
+                "saveDivCurl requires saveSourceTable to be set.",
+            )
         if self.optimizer == "empirical-2pcf":
             if self.correlationSeparationMax is None:
                 raise pexConfig.FieldValidationError(
@@ -738,7 +858,11 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
             Gaussian Processes predictions in the tangent plane (mas), the
             training/validation flag, the detector pixel and focal plane
             (mm) positions, and the measured residuals and Gaussian
-            Processes predictions in detector pixel coordinates.
+            Processes predictions in detector pixel coordinates. If
+            ``config.saveDivCurl`` is set, also the divergence and curl of
+            the residual and predicted fields (mas per degree) and their
+            E/B vector components in tangent plane (mas) and detector
+            pixel coordinates (see `_makeDivCurlColumns`).
         """
         nSources = len(positions)
         isTraining = np.zeros(nSources, dtype=bool)
@@ -792,29 +916,117 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
             )
             pixelPredictions[detInd] = (pixObserved - pixPredicted).T
 
-        sourceTable = Table(
-            {
-                "visit": np.full(nSources, visit, dtype=np.int64),
-                "detector": positions["deviceName"].astype(int),
-                "xTP": allTPCoords[:, 0],
-                "yTP": allTPCoords[:, 1],
-                "dxTP": positions["xresw"],
-                "dyTP": positions["yresw"],
-                "dxTPGP": prediction[:, 0],
-                "dyTPGP": prediction[:, 1],
-                "isTraining": isTraining,
-                "xPix": positions["xpix"],
-                "yPix": positions["ypix"],
-                "fpX": focalPlaneCoords[:, 0],
-                "fpY": focalPlaneCoords[:, 1],
-                "dxPix": pixelResiduals[:, 0],
-                "dyPix": pixelResiduals[:, 1],
-                "dxPixGP": pixelPredictions[:, 0],
-                "dyPixGP": pixelPredictions[:, 1],
-            }
-        )
+        columns = {
+            "visit": np.full(nSources, visit, dtype=np.int64),
+            "detector": positions["deviceName"].astype(int),
+            "xTP": allTPCoords[:, 0],
+            "yTP": allTPCoords[:, 1],
+            "dxTP": positions["xresw"],
+            "dyTP": positions["yresw"],
+            "dxTPGP": prediction[:, 0],
+            "dyTPGP": prediction[:, 1],
+            "isTraining": isTraining,
+            "xPix": positions["xpix"],
+            "yPix": positions["ypix"],
+            "fpX": focalPlaneCoords[:, 0],
+            "fpY": focalPlaneCoords[:, 1],
+            "dxPix": pixelResiduals[:, 0],
+            "dyPix": pixelResiduals[:, 1],
+            "dxPixGP": pixelPredictions[:, 0],
+            "dyPixGP": pixelPredictions[:, 1],
+        }
+        if self.config.saveDivCurl:
+            columns.update(self._makeDivCurlColumns(positions, prediction, allTPCoords, inputWcs))
 
-        return sourceTable
+        return Table(columns)
+
+    def _makeDivCurlColumns(self, positions, prediction, allTPCoords, inputWcs):
+        """Build the divergence, curl, and E/B decomposition columns of the
+        per-source table, for both the measured residuals and the Gaussian
+        Processes predictions.
+
+        The divergence and curl (the sources of the E and B modes of the
+        field) are in mas per degree and, being rotation-invariant
+        (pseudo-)scalars, are only given in the tangent plane. The E
+        (curl-free) and B (divergence-free) vector components of the field
+        are given in the tangent plane (mas) and as offsets in detector
+        pixel coordinates, following the same convention as
+        ``dxPix``/``dxPixGP``. All columns are NaN where the gridded field
+        is not defined (outside the convex hull of the sources).
+
+        Parameters
+        ----------
+        positions : `astropy.table.Table`
+            Catalog of input positions with residuals to the best fit.
+        prediction : `numpy.ndarray`
+            Gaussian Processes predictions in the tangent plane, in mas.
+            (n_samples, 2)
+        allTPCoords : `numpy.ndarray`
+            Tangent plane coordinates of `positions` in degrees.
+            (n_samples, 2)
+        inputWcs : `lsst.afw.table.ExposureCatalog`
+            Catalog with WCSs for each detector of the input exposure.
+
+        Returns
+        -------
+        columns : `dict` [`str`, `numpy.ndarray`]
+            Mapping of column name to values, for the 20 divergence, curl,
+            and E/B columns.
+        """
+        nSources = len(positions)
+        residuals = np.array([positions["xresw"], positions["yresw"]]).T
+
+        columns = {}
+        vectorFields = {}
+        for label, field in [("", residuals), ("GP", prediction)]:
+            try:
+                div, curl, fieldE, fieldB = compute_div_curl_eb(
+                    allTPCoords, field, self.config.divCurlGridResolution
+                )
+            except Exception as e:
+                self.log.warning(
+                    "Divergence/curl computation failed for the %s field: %s",
+                    "Gaussian Processes" if label else "residual",
+                    e,
+                )
+                div = np.full(nSources, np.nan)
+                curl = np.full(nSources, np.nan)
+                fieldE = np.full((nSources, 2), np.nan)
+                fieldB = np.full((nSources, 2), np.nan)
+            columns[f"divTP{label}"] = div
+            columns[f"curlTP{label}"] = curl
+            for ebLabel, ebField in [("E", fieldE), ("B", fieldB)]:
+                columns[f"dxTP{label}{ebLabel}"] = ebField[:, 0]
+                columns[f"dyTP{label}{ebLabel}"] = ebField[:, 1]
+                vectorFields[label + ebLabel] = ebField
+
+        # Express the E/B vector components as offsets in detector pixel
+        # coordinates, with the same convention as the dxPix/dxPixGP
+        # columns: the pixel position with the component subtracted in the
+        # tangent plane, mapped back through the WCS.
+        pixelFields = {key: np.full((nSources, 2), np.nan) for key in vectorFields}
+        for detector in inputWcs:
+            detId = detector["id"]
+            detInd = np.flatnonzero(positions["deviceName"].astype(int) == detId)
+            if len(detInd) == 0:
+                continue
+            pixelsToTangentPlane = detector.wcs.getFrameDict().getMapping("PIXELS", "IWC")
+            for key, field in vectorFields.items():
+                good = detInd[np.all(np.isfinite(field[detInd]), axis=1)]
+                if len(good) == 0:
+                    continue
+                pixObserved = np.array([positions["xpix"][good], positions["ypix"][good]])
+                componentDeg = (field[good].T * u.mas).to(u.degree).value
+                # astshim mappings require C-contiguous arrays.
+                pixComponent = pixelsToTangentPlane.applyInverse(
+                    np.ascontiguousarray(allTPCoords[good].T - componentDeg)
+                )
+                pixelFields[key][good] = (pixObserved - pixComponent).T
+        for label in ["", "GP"]:
+            for ebLabel in ["E", "B"]:
+                columns[f"dxPix{label}{ebLabel}"] = pixelFields[label + ebLabel][:, 0]
+                columns[f"dyPix{label}{ebLabel}"] = pixelFields[label + ebLabel][:, 1]
+        return columns
 
     def predict(self, gpx, gpy, inputWcs, sourceCatalog):
         """Get the positions for sources after correction for atmospheric

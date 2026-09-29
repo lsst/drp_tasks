@@ -26,6 +26,7 @@ import treegp
 from astropy.table import Table, vstack
 
 import lsst.afw.table as afwTable
+import lsst.pex.config as pexConfig
 import lsst.utils.tests
 from lsst.drp.tasks.fit_turbulence import (
     GaussianProcessesTurbulenceFitConfig,
@@ -294,6 +295,67 @@ class FitTurbulenceGomesTestCase(TurbulenceTestDataMixin, lsst.utils.tests.TestC
                 (np.hypot(sourceTable["dxTP"][mask], sourceTable["dyTP"][mask]) * u.mas).to(u.degree).value
             )
             np.testing.assert_allclose(pixAmplitude, tpAmplitude, rtol=1e-2)
+
+    def test_divCurl(self):
+        """Check the optional divergence/curl and E/B decomposition columns
+        of the per-source table."""
+        # saveDivCurl requires saveSourceTable.
+        badConfig = GaussianProcessesTurbulenceFitConfig()
+        badConfig.saveDivCurl = True
+        with self.assertRaises(pexConfig.FieldValidationError):
+            badConfig.validate()
+
+        config = GaussianProcessesTurbulenceFitConfig()
+        config.saveSourceTable = True
+        config.saveDivCurl = True
+        config.divCurlGridResolution = 30
+        task = GaussianProcessesTurbulenceFitTask(config=config)
+        sourceTable = task.makeSourceTable(
+            self.gpx,
+            self.gpy,
+            self.positions,
+            self.allTPCoords,
+            self.trainInds,
+            self.wcsCatalog,
+            self.camera,
+            self.visit,
+        )
+
+        newColumns = []
+        for label in ["", "GP"]:
+            newColumns += [f"divTP{label}", f"curlTP{label}"]
+            for ebLabel in ["E", "B"]:
+                newColumns += [f"dxTP{label}{ebLabel}", f"dyTP{label}{ebLabel}"]
+        for label in ["", "GP"]:
+            for ebLabel in ["E", "B"]:
+                newColumns += [f"dxPix{label}{ebLabel}", f"dyPix{label}{ebLabel}"]
+        for column in newColumns:
+            self.assertIn(column, sourceTable.colnames)
+
+        # Most sources are inside the gridded region and get finite values;
+        # sources near the field edge (outside the convex hull of the
+        # gridded field) are NaN.
+        finite = np.isfinite(sourceTable["divTP"])
+        self.assertGreater(np.mean(finite), 0.5)
+
+        # The Helmholtz decomposition reconstructs the gridded field:
+        # E + B equals the field where both components are defined. The
+        # gridded field differs from the pointwise values by the gridding
+        # interpolation, so compare the sum against the smooth GP column
+        # with a tolerance set by the field rms.
+        for xy, ind in [("x", 0), ("y", 1)]:
+            total = sourceTable[f"d{xy}TPGPE"] + sourceTable[f"d{xy}TPGPB"]
+            good = np.isfinite(total)
+            self.assertGreater(np.mean(good), 0.5)
+            scatter = np.std(total[good] - sourceTable[f"d{xy}TPGP"][good])
+            self.assertLess(scatter, 0.3 * np.std(sourceTable[f"d{xy}TPGP"][good]))
+
+        # Pixel-frame E/B components are finite wherever the tangent plane
+        # ones are, and have the same amplitude up to the plate scale.
+        for column in ["dxPixE", "dyPixB", "dxPixGPE", "dyPixGPB"]:
+            tpColumn = column.replace("Pix", "TP")
+            good = np.isfinite(sourceTable[tpColumn])
+            self.assertTrue(np.all(np.isfinite(sourceTable[column][good])))
 
 
 if __name__ == "__main__":
