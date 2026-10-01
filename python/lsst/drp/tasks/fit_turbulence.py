@@ -145,7 +145,7 @@ def plot_visit(x, y, dx, dy, predx, predy):
     return fig
 
 
-def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=None):
+def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=None, deconvolve=True):
     """Compute the divergence, curl, and E/B Helmholtz decomposition of a
     scattered 2D vector field, evaluated back at the input positions.
 
@@ -184,10 +184,20 @@ def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=N
         Number of grid nodes per axis of the intermediate regular grid.
     smoothing : `float`, optional
         Gaussian smoothing scale applied to the gridded field, in
-        degrees. One grid cell if not given.
+        degrees. If not given, an adaptive default is used: 1.5 times
+        the mean sample separation (about 15 samples per kernel, so the
+        map shot-noise floor stays constant across sample densities),
+        floored at one grid cell.
     weights : `numpy.ndarray`, optional
         Per-sample weights for the gridding (typically inverse total
         variance). Uniform if not given. (n_samples,)
+    deconvolve : `bool`, optional
+        Whether to deconvolve the known gridding transfer function (the
+        bilinear deposit kernel times the Gaussian smoothing) from the
+        windowed maps, with a Wiener regularization that caps the boost
+        so that noise is not re-amplified. This corrects most of the
+        attenuation of the map correlation functions at scales near the
+        smoothing length. [default: True]
 
     Returns
     -------
@@ -236,7 +246,13 @@ def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=N
     # Mask-normalized Gaussian smoothing: denoises the maps and inpaints
     # coverage gaps up to about the smoothing length.
     if smoothing is None:
-        sigmaCells = 1.0
+        # Adaptive default: 1.5x the mean star separation puts ~15
+        # stars (2 pi 1.5^2) in every smoothing kernel at any density,
+        # keeping the map shot-noise floor sigma_n^2 / (rho A_kernel)
+        # roughly constant across visits; floored at one grid cell.
+        footprintArea = np.count_nonzero(denominator > 0.0) * xSpacing * ySpacing
+        meanSeparation = np.sqrt(footprintArea / nSamples)
+        sigmaCells = max(1.0, 1.5 * meanSeparation / (0.5 * (xSpacing + ySpacing)))
     else:
         sigmaCells = smoothing / (0.5 * (xSpacing + ySpacing))
     numeratorX = gaussian_filter(numeratorX, sigmaCells)
@@ -273,6 +289,25 @@ def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=N
     kSquared[0, 0] = 1.0
     hatX = fft2(padX)
     hatY = fft2(padY)
+    if deconvolve:
+        # Known transfer function of the gridding: the bilinear deposit
+        # is a convolution with a tent of base 2 cells (Fourier
+        # transform sinc^2), and the smoothing is a Gaussian. The
+        # Wiener regularization T / (T^2 + alpha^2) caps the
+        # deconvolution boost at 1 / (2 alpha), so the shot noise
+        # suppressed by the smoothing is not re-amplified (alpha tuned
+        # on DP2 visit 2026010100522: 0.1-0.3 all behave, 0.15 caps the
+        # boost at ~3.3 and recovers ~90% of the small-scale power).
+        alpha = 0.15
+        sigmaDeg = sigmaCells * 0.5 * (xSpacing + ySpacing)
+        transfer = (
+            np.sinc(kx * xSpacing / (2.0 * np.pi)) ** 2
+            * np.sinc(ky * ySpacing / (2.0 * np.pi)) ** 2
+            * np.exp(-0.5 * kSquared * sigmaDeg**2)
+        )
+        wiener = transfer / (transfer**2 + alpha**2)
+        hatX = hatX * wiener
+        hatY = hatY * wiener
     kDotU = kx * hatX + ky * hatY
     hatEX = kDotU * kx / kSquared
     hatEY = kDotU * ky / kSquared
@@ -281,8 +316,14 @@ def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=N
     hatEY[0, 0] = hatY[0, 0]
     mapEX = ifft2(hatEX).real[:ny, :nx]
     mapEY = ifft2(hatEY).real[:ny, :nx]
-    mapBX = windowedX - mapEX
-    mapBY = windowedY - mapEY
+    if deconvolve:
+        baseX = ifft2(hatX).real[:ny, :nx]
+        baseY = ifft2(hatY).real[:ny, :nx]
+    else:
+        baseX = windowedX
+        baseY = windowedY
+    mapBX = baseX - mapEX
+    mapBY = baseY - mapEY
 
     outputs = []
     for outputMap in [divMap, curlMap, mapEX, mapEY, mapBX, mapBY, window]:
@@ -575,15 +616,27 @@ class GaussianProcessesTurbulenceFitConfig(
             "Number of grid nodes per axis used to grid the residual field for the divergence, curl,"
             " and E/B decomposition computation. Only used if saveDivCurl is set."
         ),
-        default=100,
+        default=300,
+    )
+    divCurlDeconvolve = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Deconvolve the known gridding transfer function (bilinear deposit times Gaussian"
+            " smoothing) from the E/B maps, with a Wiener regularization capping the noise boost."
+            " Recovers most of the small-scale power attenuated by the smoothing. Only used if"
+            " saveDivCurl is set."
+        ),
+        default=True,
     )
     divCurlSmoothing = pexConfig.Field(
         dtype=float,
         doc=(
             "Gaussian smoothing scale in degrees applied to the gridded residual field before the"
             " divergence, curl, and E/B decomposition computation, to suppress the per-source shot"
-            " noise that gridding would otherwise turn into correlated E/B power. One grid cell if"
-            " not set. Only used if saveDivCurl is set."
+            " noise that gridding would otherwise turn into correlated E/B power. If not set, an"
+            " adaptive default of 1.5 times the mean source separation (floored at one grid cell)"
+            " keeps the map noise floor constant across source densities. Only used if saveDivCurl"
+            " is set."
         ),
         default=None,
         optional=True,
@@ -1067,6 +1120,7 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
                     self.config.divCurlGridResolution,
                     smoothing=self.config.divCurlSmoothing,
                     weights=np.asarray(weights, dtype=float),
+                    deconvolve=self.config.divCurlDeconvolve,
                 )
             except Exception as e:
                 self.log.warning(
