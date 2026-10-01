@@ -28,12 +28,15 @@ import numpy as np
 import treecorr
 import treegp
 from astropy.table import Table
-from scipy.interpolate import RectBivariateSpline
+from scipy.fft import fft2, ifft2, next_fast_len
+from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
+from scipy.ndimage import gaussian_filter
 
 import lsst.afw.geom as afwgeom
 import lsst.afw.table
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
+from lsst.afw.cameraGeom import FOCAL_PLANE, PIXELS
 
 # We need to explicitly turn off multiprocessing in treecorr which is used
 # by treegp.
@@ -142,6 +145,203 @@ def plot_visit(x, y, dx, dy, predx, predy):
     return fig
 
 
+def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=None, deconvolve=True):
+    """Compute the divergence, curl, and E/B Helmholtz decomposition of a
+    scattered 2D vector field, evaluated back at the input positions.
+
+    The field is gridded with a noise-aware estimator: a (optionally
+    inverse-variance weighted) bilinear deposit of the samples onto a
+    regular grid, followed by a mask-normalized Gaussian smoothing. An
+    exact interpolant must not be used here: it would carry the full
+    per-sample shot noise into the maps, where it becomes spatially
+    correlated and contaminates both E and B modes (pair-based
+    correlation estimators never see that noise at non-zero lag, map
+    estimators do). The smoothing also inpaints small coverage gaps
+    (detector gaps) up to about the smoothing length.
+
+    The divergence and curl are central differences on the smoothed
+    grid; they are the sources of the E and B modes of the field (the
+    Laplacians of the scalar and pseudo-scalar potentials). For the E
+    (curl-free) and B (divergence-free) vector components, the map is
+    first multiplied by a smooth apodization window built from the
+    coverage mask, so that the non-rectangular field boundary tapers to
+    zero instead of jumping (hard edges leak E power into B and vice
+    versa); each Fourier mode of the windowed, zero-padded map is then
+    projected onto (E) and perpendicular to (B) its wave vector, with
+    the k = 0 mode assigned to E. E + B reconstructs the windowed map,
+    i.e. the smoothed field wherever the window is 1. All outputs are
+    only reported where the sampled window exceeds 0.9 (NaN elsewhere);
+    even there, on a finite field the decomposition is not unique and
+    some residual E/B mixing of field-scale modes is unavoidable.
+
+    Parameters
+    ----------
+    coords : `numpy.ndarray`
+        Positions of the field samples, in degrees. (n_samples, 2)
+    field : `numpy.ndarray`
+        Vector field values at `coords`, in mas. (n_samples, 2)
+    gridResolution : `int`
+        Number of grid nodes per axis of the intermediate regular grid.
+    smoothing : `float`, optional
+        Gaussian smoothing scale applied to the gridded field, in
+        degrees. If not given, an adaptive default is used: 1.5 times
+        the mean sample separation (about 15 samples per kernel, so the
+        map shot-noise floor stays constant across sample densities),
+        floored at one grid cell.
+    weights : `numpy.ndarray`, optional
+        Per-sample weights for the gridding (typically inverse total
+        variance). Uniform if not given. (n_samples,)
+    deconvolve : `bool`, optional
+        Whether to deconvolve the known gridding transfer function (the
+        bilinear deposit kernel times the Gaussian smoothing) from the
+        windowed maps, with a Wiener regularization that caps the boost
+        so that noise is not re-amplified. This corrects most of the
+        attenuation of the map correlation functions at scales near the
+        smoothing length. [default: True]
+
+    Returns
+    -------
+    div : `numpy.ndarray`
+        Divergence of the field at `coords`, in mas per degree.
+        NaN outside the apodization window. (n_samples,)
+    curl : `numpy.ndarray`
+        Curl (z-component, a pseudo-scalar) of the field at `coords`,
+        in mas per degree. (n_samples,)
+    fieldE : `numpy.ndarray`
+        E-mode (curl-free) component of the field at `coords`, in mas.
+        (n_samples, 2)
+    fieldB : `numpy.ndarray`
+        B-mode (divergence-free) component of the field at `coords`,
+        in mas. (n_samples, 2)
+    """
+    nSamples = len(coords)
+    if weights is None:
+        weights = np.ones(nSamples)
+    xNodes = np.linspace(np.min(coords[:, 0]), np.max(coords[:, 0]), gridResolution)
+    yNodes = np.linspace(np.min(coords[:, 1]), np.max(coords[:, 1]), gridResolution)
+    xSpacing = xNodes[1] - xNodes[0]
+    ySpacing = yNodes[1] - yNodes[0]
+
+    # Weighted bilinear (cloud-in-cell) deposit of the samples onto the
+    # grid. Maps are indexed [iy, ix].
+    gx = np.clip((coords[:, 0] - xNodes[0]) / xSpacing, 0.0, gridResolution - 1.0)
+    gy = np.clip((coords[:, 1] - yNodes[0]) / ySpacing, 0.0, gridResolution - 1.0)
+    ix = np.clip(np.floor(gx).astype(np.intp), 0, gridResolution - 2)
+    iy = np.clip(np.floor(gy).astype(np.intp), 0, gridResolution - 2)
+    tx = gx - ix
+    ty = gy - iy
+    numeratorX = np.zeros((gridResolution, gridResolution))
+    numeratorY = np.zeros((gridResolution, gridResolution))
+    denominator = np.zeros((gridResolution, gridResolution))
+    for shiftX, shiftY, cellWeight in [
+        (0, 0, (1.0 - tx) * (1.0 - ty)),
+        (1, 0, tx * (1.0 - ty)),
+        (0, 1, (1.0 - tx) * ty),
+        (1, 1, tx * ty),
+    ]:
+        np.add.at(numeratorX, (iy + shiftY, ix + shiftX), weights * cellWeight * field[:, 0])
+        np.add.at(numeratorY, (iy + shiftY, ix + shiftX), weights * cellWeight * field[:, 1])
+        np.add.at(denominator, (iy + shiftY, ix + shiftX), weights * cellWeight)
+
+    # Mask-normalized Gaussian smoothing: denoises the maps and inpaints
+    # coverage gaps up to about the smoothing length.
+    if smoothing is None:
+        # Adaptive default: 1.5x the mean star separation puts ~15
+        # stars (2 pi 1.5^2) in every smoothing kernel at any density,
+        # keeping the map shot-noise floor sigma_n^2 / (rho A_kernel)
+        # roughly constant across visits; floored at one grid cell.
+        footprintArea = np.count_nonzero(denominator > 0.0) * xSpacing * ySpacing
+        meanSeparation = np.sqrt(footprintArea / nSamples)
+        sigmaCells = max(1.0, 1.5 * meanSeparation / (0.5 * (xSpacing + ySpacing)))
+    else:
+        sigmaCells = smoothing / (0.5 * (xSpacing + ySpacing))
+    numeratorX = gaussian_filter(numeratorX, sigmaCells)
+    numeratorY = gaussian_filter(numeratorY, sigmaCells)
+    denominatorSmooth = gaussian_filter(denominator, sigmaCells)
+    reference = np.median(denominatorSmooth[denominator > 0.0])
+    covered = denominatorSmooth > 0.05 * reference
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mapX = np.where(covered, numeratorX / denominatorSmooth, 0.0)
+        mapY = np.where(covered, numeratorY / denominatorSmooth, 0.0)
+
+    dMapXdY, dMapXdX = np.gradient(mapX, yNodes, xNodes)
+    dMapYdY, dMapYdX = np.gradient(mapY, yNodes, xNodes)
+    divMap = dMapXdX + dMapYdY
+    curlMap = dMapYdX - dMapXdY
+
+    # Smooth apodization window built from the (density-independent)
+    # coverage mask, tapering the field boundary and remaining holes.
+    window = np.clip(gaussian_filter(covered.astype(float), max(2.0 * sigmaCells, 2.0)), 0.0, 1.0)
+    windowedX = window * mapX
+    windowedY = window * mapY
+
+    # Helmholtz decomposition in Fourier space, on zero-padded maps.
+    ny, nx = mapX.shape
+    nyPad = next_fast_len(2 * ny)
+    nxPad = next_fast_len(2 * nx)
+    padX = np.zeros((nyPad, nxPad))
+    padY = np.zeros((nyPad, nxPad))
+    padX[:ny, :nx] = windowedX
+    padY[:ny, :nx] = windowedY
+    kx = 2.0 * np.pi * np.fft.fftfreq(nxPad, d=xSpacing)[np.newaxis, :]
+    ky = 2.0 * np.pi * np.fft.fftfreq(nyPad, d=ySpacing)[:, np.newaxis]
+    kSquared = kx**2 + ky**2
+    kSquared[0, 0] = 1.0
+    hatX = fft2(padX)
+    hatY = fft2(padY)
+    if deconvolve:
+        # Known transfer function of the gridding: the bilinear deposit
+        # is a convolution with a tent of base 2 cells (Fourier
+        # transform sinc^2), and the smoothing is a Gaussian. The
+        # Wiener regularization T / (T^2 + alpha^2) caps the
+        # deconvolution boost at 1 / (2 alpha), so the shot noise
+        # suppressed by the smoothing is not re-amplified (alpha tuned
+        # on DP2 visit 2026010100522: 0.1-0.3 all behave, 0.15 caps the
+        # boost at ~3.3 and recovers ~90% of the small-scale power).
+        alpha = 0.15
+        sigmaDeg = sigmaCells * 0.5 * (xSpacing + ySpacing)
+        transfer = (
+            np.sinc(kx * xSpacing / (2.0 * np.pi)) ** 2
+            * np.sinc(ky * ySpacing / (2.0 * np.pi)) ** 2
+            * np.exp(-0.5 * kSquared * sigmaDeg**2)
+        )
+        wiener = transfer / (transfer**2 + alpha**2)
+        hatX = hatX * wiener
+        hatY = hatY * wiener
+    kDotU = kx * hatX + ky * hatY
+    hatEX = kDotU * kx / kSquared
+    hatEY = kDotU * ky / kSquared
+    # The k = 0 mode has no direction; assign it to E by convention.
+    hatEX[0, 0] = hatX[0, 0]
+    hatEY[0, 0] = hatY[0, 0]
+    mapEX = ifft2(hatEX).real[:ny, :nx]
+    mapEY = ifft2(hatEY).real[:ny, :nx]
+    if deconvolve:
+        baseX = ifft2(hatX).real[:ny, :nx]
+        baseY = ifft2(hatY).real[:ny, :nx]
+    else:
+        baseX = windowedX
+        baseY = windowedY
+    mapBX = baseX - mapEX
+    mapBY = baseY - mapEY
+
+    outputs = []
+    for outputMap in [divMap, curlMap, mapEX, mapEY, mapBX, mapBY, window]:
+        interpolator = RegularGridInterpolator(
+            (yNodes, xNodes),
+            outputMap,
+            method="linear",
+            bounds_error=False,
+            fill_value=np.nan,
+        )
+        outputs.append(interpolator(coords[:, ::-1]))
+    div, curl, ex, ey, bx, by, windowAtCoords = outputs
+    bad = ~(windowAtCoords > 0.9)
+    for output in [div, curl, ex, ey, bx, by]:
+        output[bad] = np.nan
+    return div, curl, np.array([ex, ey]).T, np.array([bx, by]).T
+
+
 class SingularMatrixError(pipeBase.AlgorithmError):
     """Raised if the Gaussian Processes fit raises a Singular Matrix linear
     algebra error."""
@@ -217,9 +417,31 @@ class GaussianProcessesTurbulenceFitConnections(
         storageClass="ArrowAstropy",
         dimensions=("instrument", "visit", "healpix3"),
     )
+    sourceTable = pipeBase.connectionTypes.Output(
+        doc=(
+            "Per-source table with positions, residuals, and Gaussian Processes predictions in tangent"
+            " plane and detector pixel coordinates, along with the training/validation split, and"
+            " optionally (config.saveDivCurl) the divergence, curl, and E/B decomposition of the"
+            " residual field."
+        ),
+        name="turbulence_fit_sources",
+        storageClass="ArrowAstropy",
+        dimensions=("instrument", "visit", "healpix3"),
+    )
+    camera = pipeBase.connectionTypes.PrerequisiteInput(
+        doc="Input camera, used to transform source positions to the focal plane.",
+        name="camera",
+        storageClass="Camera",
+        dimensions=("instrument",),
+        isCalibration=True,
+    )
 
     def __init__(self, *, config=None):
         super().__init__(config=config)
+
+        if not self.config.saveSourceTable:
+            self.outputs.remove("sourceTable")
+            self.prerequisiteInputs.remove("camera")
 
         if not self.config.healpix:
             self.dimensions.remove("healpix3")
@@ -240,14 +462,37 @@ class GaussianProcessesTurbulenceFitConnections(
             self.hyperparameters = dataclasses.replace(
                 self.hyperparameters, dimensions=["instrument", "visit"] + extra_dimensions
             )
+            if self.config.saveSourceTable:
+                self.sourceTable = dataclasses.replace(
+                    self.sourceTable, dimensions=["instrument", "visit"] + extra_dimensions
+                )
 
 
 class GaussianProcessesTurbulenceFitConfig(
     pipeBase.PipelineTaskConfig, pipelineConnections=GaussianProcessesTurbulenceFitConnections
 ):
+    optimizer = pexConfig.ChoiceField(
+        dtype=str,
+        doc="Gaussian Processes method used to model the astrometric residuals.",
+        default="anisotropic",
+        allowed={
+            "anisotropic": (
+                "Fit the hyperparameters of a parametric kernel on the measured"
+                " 2-point correlation function (Leget et al. 2021, A&A 650, A81)."
+            ),
+            "empirical-2pcf": (
+                "Use the measured 2-point correlation function directly as the"
+                " kernel, with no hyperparameter fit (Gomes et al. 2025,"
+                " AJ 170:361)."
+            ),
+        },
+    )
     initKernel = pexConfig.Field(
         dtype=str,
-        doc="The type of function that will be used to modeled spatial correlation.",
+        doc=(
+            "The type of function that will be used to modeled spatial correlation."
+            " Only used by the 'anisotropic' optimizer."
+        ),
         default="15**2 * AnisotropicVonKarman(invLam=array([[1./0.8**2,0],[0,1./0.8**2]]))",
     )
     initAnisotropicCorrelationLength = pexConfig.ListField(
@@ -268,8 +513,132 @@ class GaussianProcessesTurbulenceFitConfig(
     )
     correlationSeparationMax = pexConfig.Field(
         dtype=float,
-        doc="Maximum distance separation in degrees in the computation of the 2-point correlation function.",
+        doc=(
+            "Maximum distance separation in degrees in the computation of the 2-point correlation function."
+            " For the 'empirical-2pcf' optimizer, this is also the half width of the 2-point correlation"
+            " function grid used as the kernel."
+        ),
         default=0.3,
+        optional=True,
+    )
+    correlationPixelSize = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Pixel size in degrees of the 2-point correlation function grid used as the kernel."
+            " Only used by the 'empirical-2pcf' optimizer."
+        ),
+        default=0.00556,
+    )
+    powerThreshold = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Signal-to-noise threshold below which Fourier modes of the measured 2-point correlation"
+            " function are set to zero. Only used by the 'empirical-2pcf' optimizer."
+        ),
+        default=2.5,
+    )
+    apodize = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Whether to apodize the measured 2-point correlation function before taking its Fourier"
+            " transform. Only used by the 'empirical-2pcf' optimizer."
+        ),
+        default=True,
+    )
+    apodWindow = pexConfig.ChoiceField(
+        dtype=str,
+        doc="Apodization window function. Only used by the 'empirical-2pcf' optimizer.",
+        default="hann",
+        allowed={
+            "hann": "Hann window; gentler taper at the price of more spectral leakage.",
+            "blackman-harris": "Blackman-Harris window, as used in Gomes et al. 2025.",
+        },
+    )
+    apodRadius = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Radius in degrees where the apodization window reaches zero. If None, the window reaches"
+            " zero at correlationSeparationMax. Only used by the 'empirical-2pcf' optimizer."
+        ),
+        default=0.278,
+        optional=True,
+    )
+    apodAnisotropy = pexConfig.ChoiceField(
+        dtype=str,
+        doc="Anisotropy of the apodization window. Only used by the 'empirical-2pcf' optimizer.",
+        default="auto",
+        allowed={
+            "auto": (
+                "Measure the anisotropy of the 2-point correlation function with adaptive"
+                " weighted second moments and use a matched elliptical window."
+            ),
+            "none": "Isotropic apodization window.",
+        },
+    )
+    apodGScale = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Factor multiplying the measured anisotropy of the apodization window when"
+            " apodAnisotropy='auto'. Only used by the 'empirical-2pcf' optimizer."
+        ),
+        default=1.0,
+    )
+    whiteNoise = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Additional white noise in mas added in quadrature to the residual errors; can regularize"
+            " the fit if the Cholesky decomposition fails. Only used by the 'empirical-2pcf' optimizer."
+        ),
+        default=0.0,
+    )
+    saveSourceTable = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Save the per-source table with positions, residuals, and Gaussian Processes predictions"
+            " in tangent plane and detector pixel coordinates."
+        ),
+        default=False,
+    )
+    saveDivCurl = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Add to the per-source table the divergence and curl of the residual field (the sources of"
+            " its E and B modes) and its Helmholtz decomposition into E (curl-free) and B"
+            " (divergence-free) vector components, for both the measured residuals and the Gaussian"
+            " Processes predictions, in tangent plane and detector pixel coordinates. Requires"
+            " saveSourceTable."
+        ),
+        default=False,
+    )
+    divCurlGridResolution = pexConfig.Field(
+        dtype=int,
+        doc=(
+            "Number of grid nodes per axis used to grid the residual field for the divergence, curl,"
+            " and E/B decomposition computation. Only used if saveDivCurl is set."
+        ),
+        default=300,
+    )
+    divCurlDeconvolve = pexConfig.Field(
+        dtype=bool,
+        doc=(
+            "Deconvolve the known gridding transfer function (bilinear deposit times Gaussian"
+            " smoothing) from the E/B maps, with a Wiener regularization capping the noise boost."
+            " Recovers most of the small-scale power attenuated by the smoothing. Only used if"
+            " saveDivCurl is set."
+        ),
+        default=True,
+    )
+    divCurlSmoothing = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Gaussian smoothing scale in degrees applied to the gridded residual field before the"
+            " divergence, curl, and E/B decomposition computation, to suppress the per-source shot"
+            " noise that gridding would otherwise turn into correlated E/B power. If not set, an"
+            " adaptive default of 1.5 times the mean source separation (floored at one grid cell)"
+            " keeps the map noise floor constant across source densities. Only used if saveDivCurl"
+            " is set."
+        ),
+        default=None,
         optional=True,
     )
     maxTrainingPoints = pexConfig.Field(
@@ -304,15 +673,47 @@ class GaussianProcessesTurbulenceFitConfig(
         default=0.1,
     )
 
+    def validate(self):
+        super().validate()
+        if self.saveDivCurl and not self.saveSourceTable:
+            raise pexConfig.FieldValidationError(
+                self.__class__.saveDivCurl,
+                self,
+                "saveDivCurl requires saveSourceTable to be set.",
+            )
+        if self.optimizer == "empirical-2pcf":
+            if self.correlationSeparationMax is None:
+                raise pexConfig.FieldValidationError(
+                    self.__class__.correlationSeparationMax,
+                    self,
+                    "correlationSeparationMax must be set for the 'empirical-2pcf' optimizer.",
+                )
+            if treegp.__version__ != "1.5.0":
+                raise NotImplementedError("G25 ++ solver is not supported yet (need treegp==1.5.0).")
+            if self.correlationSeparationMax / self.correlationPixelSize < 2:
+                raise pexConfig.FieldValidationError(
+                    self.__class__.correlationPixelSize,
+                    self,
+                    "correlationSeparationMax must span at least 2 pixels of correlationPixelSize"
+                    " for the 'empirical-2pcf' optimizer.",
+                )
+
 
 class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
     """Run Gaussian Processes on astrometric residuals with the assumption that
-    they are due to atmospheric turbulence."""
+    they are due to atmospheric turbulence.
+
+    Two methods are available, selected with `config.optimizer`: fitting the
+    hyperparameters of a parametric kernel on the measured 2-point correlation
+    function (Leget et al. 2021, A&A 650, A81), or using the measured 2-point
+    correlation function directly as the kernel (Gomes et al. 2025,
+    AJ 170:361).
+    """
 
     ConfigClass = GaussianProcessesTurbulenceFitConfig
     _DefaultName = "gaussianProcessesTurbulenceFit"
 
-    def run(self, inputWcs, inputPositions):
+    def run(self, inputWcs, inputPositions, camera=None):
         """Run Gaussian Processes on position residuals and subtract the fitted
         Gaussian Processes prediction from the WCS to account for atmospheric
         turbulence.
@@ -323,6 +724,9 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
             Catalog with WCSs for each detector of the input exposure.
         inputPositions : `astropy.table.Table`
             Catalog of input positions with residuals to the current best fit.
+        camera : `lsst.afw.cameraGeom.Camera`, optional
+            Camera object, used to transform source positions to the focal
+            plane. Only provided when `config.saveSourceTable` is set.
 
         Returns
         -------
@@ -332,39 +736,46 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
                 turbulence.
             ``hyperparameters`` : `astropy.table.Table`
                 Table of best-fit hyperparameters in x and y-directions.
+            ``sourceTable`` : `astropy.table.Table`
+                Per-source table with positions, residuals, and Gaussian
+                Processes predictions in tangent plane and detector pixel
+                coordinates. Only set when `config.saveSourceTable` is set.
         """
 
         visit = inputWcs[0]["visit"]
 
-        inputPositions = inputPositions.get(
-            parameters={
-                "columns": [
-                    "xworld",
-                    "yworld",
-                    "xresw",
-                    "yresw",
-                    "exposureName",
-                    "xpix",
-                    "ypix",
-                    "deviceName",
-                    "clip",
-                    "covTotalW_00",
-                    "covTotalW_11",
-                ]
-            }
-        )
+        columns = [
+            "xworld",
+            "yworld",
+            "xresw",
+            "yresw",
+            "exposureName",
+            "xpix",
+            "ypix",
+            "deviceName",
+            "clip",
+            "covTotalW_00",
+            "covTotalW_11",
+        ]
+        inputPositions = inputPositions.get(parameters={"columns": columns})
 
         visitPositions = inputPositions[
             (inputPositions["exposureName"] == str(visit)) & ~inputPositions["clip"]
         ]
 
-        gpx, gpy, trainInd, testInd, hyperparameters = self.runGP(inputWcs, visitPositions)
+        gpx, gpy, trainInd, testInd, hyperparameters, allTPCoords = self.runGP(inputWcs, visitPositions)
 
         self.evaluate(gpx, gpy, visitPositions, trainInd, testInd, inputWcs)
 
         wcsWithSpline = self.addGPToWcs(gpx, gpy, inputWcs)
 
-        return pipeBase.Struct(outputWcs=wcsWithSpline, hyperparameters=hyperparameters)
+        outputs = {"outputWcs": wcsWithSpline, "hyperparameters": hyperparameters}
+        if self.config.saveSourceTable:
+            outputs["sourceTable"] = self.makeSourceTable(
+                gpx, gpy, visitPositions, allTPCoords, trainInd, inputWcs, camera, visit
+            )
+
+        return pipeBase.Struct(**outputs)
 
     def runGP(self, inputWcs, positions):
         """Run Gaussian Processes in tangent plane coordinates.
@@ -386,7 +797,25 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
             Array of indices for points used in training.
         testInds : `numpy.ndarray`
             Array of indices for points not used in training.
+        hyperparameters : `astropy.table.Table`
+            Table with an ``x`` and a ``y`` column, one per residual
+            direction. For the 'anisotropic' optimizer, they hold the
+            best-fit kernel hyperparameters. For the 'empirical-2pcf'
+            optimizer, they hold diagnostics of the empirical kernel, in
+            the order [xi0, g1 measured, g2 measured, g1 applied,
+            g2 applied, pixel size, number of grid pixels], where xi0 is
+            the zero-lag variance in mas^2 and the g values describe the
+            anisotropy of the apodization window (NaN if not measured).
+        allTPCoords : `numpy.ndarray`
+            Tangent plane coordinates of the input positions in degrees.
+            (n_samples, 2)
         """
+        if self.config.optimizer == "empirical-2pcf" and not hasattr(treegp, "empirical_2pcf"):
+            raise RuntimeError(
+                "The version of treegp in this environment does not support the 'empirical-2pcf'"
+                " optimizer (Gomes et al. 2025); it requires the treegp branch tickets/DM-55875."
+            )
+
         dx = positions["xresw"]
         dy = positions["yresw"]
         dxErr = positions["covTotalW_00"] ** 0.5
@@ -414,30 +843,37 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
         trainInds = perm[:nTrain]
         testInds = perm[nTrain:]
 
-        # Solve Gaussian Processes in dx direction.
-        gpx = treegp.GPInterpolation(
-            kernel=self.config.initKernel,
-            optimizer="anisotropic",
-            normalize=True,
-            nbins=21,
-            min_sep=self.config.correlationSeparationMin,
-            max_sep=self.config.correlationSeparationMax,
-            p0=self.config.initAnisotropicCorrelationLength,
-        )
+        if self.config.optimizer == "anisotropic":
+            gpKwargs = dict(
+                kernel=self.config.initKernel,
+                optimizer="anisotropic",
+                normalize=True,
+                nbins=21,
+                min_sep=self.config.correlationSeparationMin,
+                max_sep=self.config.correlationSeparationMax,
+                p0=self.config.initAnisotropicCorrelationLength,
+            )
+        else:
+            gpKwargs = dict(
+                optimizer="empirical-2pcf",
+                normalize=True,
+                max_sep=self.config.correlationSeparationMax,
+                pixel_size=self.config.correlationPixelSize,
+                power_threshold=self.config.powerThreshold,
+                apodize=self.config.apodize,
+                apod_window=self.config.apodWindow,
+                apod_radius=self.config.apodRadius,
+                apod_anisotropy=("auto" if self.config.apodAnisotropy == "auto" else None),
+                apod_g_scale=self.config.apodGScale,
+                white_noise=self.config.whiteNoise,
+            )
 
+        # Solve Gaussian Processes in dx direction.
+        gpx = treegp.GPInterpolation(**gpKwargs)
         gpx.initialize(allTPCoords[trainInds], dx[trainInds], y_err=dxErr[trainInds])
 
         # Solve Gaussian Processes in dy direction.
-        gpy = treegp.GPInterpolation(
-            kernel=self.config.initKernel,
-            optimizer="anisotropic",
-            normalize=True,
-            nbins=21,
-            min_sep=self.config.correlationSeparationMin,
-            max_sep=self.config.correlationSeparationMax,
-            p0=self.config.initAnisotropicCorrelationLength,
-        )
-
+        gpy = treegp.GPInterpolation(**gpKwargs)
         gpy.initialize(allTPCoords[trainInds], dy[trainInds], y_err=dyErr[trainInds])
 
         try:
@@ -461,11 +897,275 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
             else:
                 raise
 
-        hyperparameters = Table(
-            {"x": np.array(gpx._optimizer._results_robust), "y": np.array(gpy._optimizer._results_robust)}
+        if self.config.optimizer == "anisotropic":
+            hyperparameters = Table(
+                {
+                    "x": np.array(gpx._optimizer._results_robust),
+                    "y": np.array(gpy._optimizer._results_robust),
+                }
+            )
+        else:
+            hyperparameters = Table(
+                {
+                    "x": self._empiricalDiagnostics(gpx),
+                    "y": self._empiricalDiagnostics(gpy),
+                }
+            )
+
+        return gpx, gpy, trainInds, testInds, hyperparameters, allTPCoords
+
+    @staticmethod
+    def _empiricalDiagnostics(gp):
+        """Summarize the empirical-2pcf kernel of a solved Gaussian Processes
+        interpolator as a fixed-order array of floats.
+
+        Parameters
+        ----------
+        gp : `treegp.gp_interp.GPInterpolation`
+            Solved interpolator with optimizer 'empirical-2pcf'.
+
+        Returns
+        -------
+        diagnostics : `numpy.ndarray`
+            [xi0, g1 measured, g2 measured, g1 applied, g2 applied,
+            pixel size, number of grid pixels].
+        """
+        solver = gp._optimizer
+        gMeasured = solver._apod_g_measured
+        if gMeasured is None:
+            gMeasured = (np.nan, np.nan)
+        gApplied = solver._apod_g_applied
+        return np.array(
+            [
+                gp.kernel.xi0,
+                gMeasured[0],
+                gMeasured[1],
+                gApplied[0],
+                gApplied[1],
+                solver.pixel_size,
+                solver.npix,
+            ],
+            dtype=float,
         )
 
-        return gpx, gpy, trainInds, testInds, hyperparameters
+    def makeSourceTable(self, gpx, gpy, positions, allTPCoords, trainInds, inputWcs, camera, visit):
+        """Build the per-source table with positions, residuals, and Gaussian
+        Processes predictions in tangent plane and detector pixel coordinates.
+
+        The pixel-frame offsets are expressed in each detector's own pixel
+        axes: the tangent plane residuals (and predictions) are mapped back
+        to detector pixels through the WCS, so that ``dxPix``/``dyPix`` match
+        the difference between the observed pixel position and the pixel
+        position of the model.
+
+        Parameters
+        ----------
+        gpx : `treegp.gp_interp.GPInterpolation`
+            Gaussian Processes interpolator for x-direction residuals.
+        gpy : `treegp.gp_interp.GPInterpolation`
+            Gaussian Processes interpolator for y-direction residuals.
+        positions : `astropy.table.Table`
+            Catalog of input positions with residuals to the best fit.
+        allTPCoords : `numpy.ndarray`
+            Tangent plane coordinates of `positions` in degrees.
+            (n_samples, 2)
+        trainInds : `numpy.ndarray`
+            Array of indices for points used in training.
+        inputWcs : `lsst.afw.table.ExposureCatalog`
+            Catalog with WCSs for each detector of the input exposure.
+        camera : `lsst.afw.cameraGeom.Camera`
+            Camera object, used to transform source positions to the focal
+            plane.
+        visit : `int`
+            Visit number.
+
+        Returns
+        -------
+        sourceTable : `astropy.table.Table`
+            Table with one row per source, containing the visit, detector,
+            tangent plane coordinates (degrees), measured residuals and
+            Gaussian Processes predictions in the tangent plane (mas), the
+            training/validation flag, the detector pixel and focal plane
+            (mm) positions, and the measured residuals and Gaussian
+            Processes predictions in detector pixel coordinates. If
+            ``config.saveDivCurl`` is set, also the divergence and curl of
+            the residual and predicted fields (mas per degree) and their
+            E/B vector components in tangent plane (mas) and detector
+            pixel coordinates (see `_makeDivCurlColumns`).
+        """
+        nSources = len(positions)
+        isTraining = np.zeros(nSources, dtype=bool)
+        isTraining[trainInds] = True
+
+        prediction = np.zeros((nSources, 2))
+        focalPlaneCoords = np.zeros((nSources, 2))
+        pixelResiduals = np.zeros((nSources, 2))
+        pixelPredictions = np.zeros((nSources, 2))
+
+        chunkSize = 10000
+        for detector in inputWcs:
+            detId = detector["id"]
+            detWCS = detector.wcs
+            detInd = np.flatnonzero(positions["deviceName"].astype(int) == detId)
+            if len(detInd) == 0:
+                continue
+
+            # Predict the Gaussian Processes in the tangent plane, in
+            # chunks to limit the size of the cross-covariance matrix.
+            for start in range(0, len(detInd), chunkSize):
+                ind = detInd[start : start + chunkSize]
+                prediction[ind, 0] = gpx.predict(allTPCoords[ind])
+                prediction[ind, 1] = gpy.predict(allTPCoords[ind])
+
+            pixObserved = np.array([positions["xpix"][detInd], positions["ypix"][detInd]])
+
+            # Positions on the focal plane, in mm.
+            pixelsToFocalPlane = camera[detId].getTransform(PIXELS, FOCAL_PLANE).getMapping()
+            focalPlaneCoords[detInd] = pixelsToFocalPlane.applyForward(pixObserved).T
+
+            # Express the tangent plane residuals and predictions as
+            # offsets in detector pixel coordinates: the pixel position of
+            # the model is the observed tangent plane position minus the
+            # residual, mapped back through the WCS.
+            pixelsToTangentPlane = detWCS.getFrameDict().getMapping("PIXELS", "IWC")
+            residDeg = (
+                (np.array([positions["xresw"][detInd], positions["yresw"][detInd]]) * u.mas)
+                .to(u.degree)
+                .value
+            )
+            # astshim mappings require C-contiguous arrays.
+            pixModel = pixelsToTangentPlane.applyInverse(
+                np.ascontiguousarray(allTPCoords[detInd].T - residDeg)
+            )
+            pixelResiduals[detInd] = (pixObserved - pixModel).T
+
+            predictionDeg = (prediction[detInd].T * u.mas).to(u.degree).value
+            pixPredicted = pixelsToTangentPlane.applyInverse(
+                np.ascontiguousarray(allTPCoords[detInd].T - predictionDeg)
+            )
+            pixelPredictions[detInd] = (pixObserved - pixPredicted).T
+
+        columns = {
+            "visit": np.full(nSources, visit, dtype=np.int64),
+            "detector": positions["deviceName"].astype(int),
+            "xTP": allTPCoords[:, 0],
+            "yTP": allTPCoords[:, 1],
+            "dxTP": positions["xresw"],
+            "dyTP": positions["yresw"],
+            "dxTPGP": prediction[:, 0],
+            "dyTPGP": prediction[:, 1],
+            "isTraining": isTraining,
+            "xPix": positions["xpix"],
+            "yPix": positions["ypix"],
+            "fpX": focalPlaneCoords[:, 0],
+            "fpY": focalPlaneCoords[:, 1],
+            "dxPix": pixelResiduals[:, 0],
+            "dyPix": pixelResiduals[:, 1],
+            "dxPixGP": pixelPredictions[:, 0],
+            "dyPixGP": pixelPredictions[:, 1],
+        }
+        if self.config.saveDivCurl:
+            columns.update(self._makeDivCurlColumns(positions, prediction, allTPCoords, inputWcs))
+
+        return Table(columns)
+
+    def _makeDivCurlColumns(self, positions, prediction, allTPCoords, inputWcs):
+        """Build the divergence, curl, and E/B decomposition columns of the
+        per-source table, for both the measured residuals and the Gaussian
+        Processes predictions.
+
+        The divergence and curl (the sources of the E and B modes of the
+        field) are in mas per degree and, being rotation-invariant
+        (pseudo-)scalars, are only given in the tangent plane. The E
+        (curl-free) and B (divergence-free) vector components of the field
+        are given in the tangent plane (mas) and as offsets in detector
+        pixel coordinates, following the same convention as
+        ``dxPix``/``dxPixGP``. All columns are NaN where the apodization
+        window of the gridded field is below 0.9 (near the field boundary
+        and large coverage holes; see `compute_div_curl_eb`).
+
+        Parameters
+        ----------
+        positions : `astropy.table.Table`
+            Catalog of input positions with residuals to the best fit.
+        prediction : `numpy.ndarray`
+            Gaussian Processes predictions in the tangent plane, in mas.
+            (n_samples, 2)
+        allTPCoords : `numpy.ndarray`
+            Tangent plane coordinates of `positions` in degrees.
+            (n_samples, 2)
+        inputWcs : `lsst.afw.table.ExposureCatalog`
+            Catalog with WCSs for each detector of the input exposure.
+
+        Returns
+        -------
+        columns : `dict` [`str`, `numpy.ndarray`]
+            Mapping of column name to values, for the 20 divergence, curl,
+            and E/B columns.
+        """
+        nSources = len(positions)
+        residuals = np.array([positions["xresw"], positions["yresw"]]).T
+        # Inverse total variance of the displacement amplitude, used to
+        # weight the gridding of both fields (harmless for the smooth
+        # Gaussian Processes field).
+        weights = 1.0 / (positions["covTotalW_00"] + positions["covTotalW_11"])
+
+        columns = {}
+        vectorFields = {}
+        for label, field in [("", residuals), ("GP", prediction)]:
+            try:
+                div, curl, fieldE, fieldB = compute_div_curl_eb(
+                    allTPCoords,
+                    field,
+                    self.config.divCurlGridResolution,
+                    smoothing=self.config.divCurlSmoothing,
+                    weights=np.asarray(weights, dtype=float),
+                    deconvolve=self.config.divCurlDeconvolve,
+                )
+            except Exception as e:
+                self.log.warning(
+                    "Divergence/curl computation failed for the %s field: %s",
+                    "Gaussian Processes" if label else "residual",
+                    e,
+                )
+                div = np.full(nSources, np.nan)
+                curl = np.full(nSources, np.nan)
+                fieldE = np.full((nSources, 2), np.nan)
+                fieldB = np.full((nSources, 2), np.nan)
+            columns[f"divTP{label}"] = div
+            columns[f"curlTP{label}"] = curl
+            for ebLabel, ebField in [("E", fieldE), ("B", fieldB)]:
+                columns[f"dxTP{label}{ebLabel}"] = ebField[:, 0]
+                columns[f"dyTP{label}{ebLabel}"] = ebField[:, 1]
+                vectorFields[label + ebLabel] = ebField
+
+        # Express the E/B vector components as offsets in detector pixel
+        # coordinates, with the same convention as the dxPix/dxPixGP
+        # columns: the pixel position with the component subtracted in the
+        # tangent plane, mapped back through the WCS.
+        pixelFields = {key: np.full((nSources, 2), np.nan) for key in vectorFields}
+        for detector in inputWcs:
+            detId = detector["id"]
+            detInd = np.flatnonzero(positions["deviceName"].astype(int) == detId)
+            if len(detInd) == 0:
+                continue
+            pixelsToTangentPlane = detector.wcs.getFrameDict().getMapping("PIXELS", "IWC")
+            for key, field in vectorFields.items():
+                good = detInd[np.all(np.isfinite(field[detInd]), axis=1)]
+                if len(good) == 0:
+                    continue
+                pixObserved = np.array([positions["xpix"][good], positions["ypix"][good]])
+                componentDeg = (field[good].T * u.mas).to(u.degree).value
+                # astshim mappings require C-contiguous arrays.
+                pixComponent = pixelsToTangentPlane.applyInverse(
+                    np.ascontiguousarray(allTPCoords[good].T - componentDeg)
+                )
+                pixelFields[key][good] = (pixObserved - pixComponent).T
+        for label in ["", "GP"]:
+            for ebLabel in ["E", "B"]:
+                columns[f"dxPix{label}{ebLabel}"] = pixelFields[label + ebLabel][:, 0]
+                columns[f"dyPix{label}{ebLabel}"] = pixelFields[label + ebLabel][:, 1]
+        return columns
 
     def predict(self, gpx, gpy, inputWcs, sourceCatalog):
         """Get the positions for sources after correction for atmospheric
@@ -605,7 +1305,7 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
                 kx=self.config.splineDegree - 1,
                 ky=self.config.splineDegree - 1,
             )
-            (tx, ty) = splineX.get_knots()
+            tx, ty = splineX.get_knots()
             coeffsX = splineX.get_coeffs()
 
             yPred = (gpy.predict(inArray) * u.mas).to(u.degree).value
