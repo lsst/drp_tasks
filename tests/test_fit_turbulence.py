@@ -308,7 +308,9 @@ class FitTurbulenceGomesTestCase(TurbulenceTestDataMixin, lsst.utils.tests.TestC
         config = GaussianProcessesTurbulenceFitConfig()
         config.saveSourceTable = True
         config.saveDivCurl = True
-        config.divCurlGridResolution = 30
+        # Coarse grid: the DummyCam test catalog is sparse, and the
+        # cloud-in-cell gridding needs a few sources per cell.
+        config.divCurlGridResolution = 20
         task = GaussianProcessesTurbulenceFitTask(config=config)
         sourceTable = task.makeSourceTable(
             self.gpx,

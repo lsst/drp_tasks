@@ -29,7 +29,8 @@ import treecorr
 import treegp
 from astropy.table import Table
 from scipy.fft import fft2, ifft2, next_fast_len
-from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator, griddata
+from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
+from scipy.ndimage import gaussian_filter
 
 import lsst.afw.geom as afwgeom
 import lsst.afw.table
@@ -144,21 +145,34 @@ def plot_visit(x, y, dx, dy, predx, predy):
     return fig
 
 
-def compute_div_curl_eb(coords, field, gridResolution):
+def compute_div_curl_eb(coords, field, gridResolution, smoothing=None, weights=None):
     """Compute the divergence, curl, and E/B Helmholtz decomposition of a
     scattered 2D vector field, evaluated back at the input positions.
 
-    The field is interpolated onto a regular grid (cubic, NaN outside the
-    convex hull of the points). The divergence and curl are central
-    differences on that grid; they are the sources of the E and B modes
-    of the field (the Laplacians of the scalar and pseudo-scalar
-    potentials). The E (curl-free) and B (divergence-free) vector
-    components are obtained by projecting each Fourier mode of the
-    gridded field onto (E) and perpendicular to (B) its wave vector; the
-    k = 0 mode is assigned to E. The maps are zero-padded to twice their
-    size before the transform to soften the periodicity assumption, but
-    on a finite field the decomposition is not unique and some E/B
-    mixing near the field edges is unavoidable.
+    The field is gridded with a noise-aware estimator: a (optionally
+    inverse-variance weighted) bilinear deposit of the samples onto a
+    regular grid, followed by a mask-normalized Gaussian smoothing. An
+    exact interpolant must not be used here: it would carry the full
+    per-sample shot noise into the maps, where it becomes spatially
+    correlated and contaminates both E and B modes (pair-based
+    correlation estimators never see that noise at non-zero lag, map
+    estimators do). The smoothing also inpaints small coverage gaps
+    (detector gaps) up to about the smoothing length.
+
+    The divergence and curl are central differences on the smoothed
+    grid; they are the sources of the E and B modes of the field (the
+    Laplacians of the scalar and pseudo-scalar potentials). For the E
+    (curl-free) and B (divergence-free) vector components, the map is
+    first multiplied by a smooth apodization window built from the
+    coverage mask, so that the non-rectangular field boundary tapers to
+    zero instead of jumping (hard edges leak E power into B and vice
+    versa); each Fourier mode of the windowed, zero-padded map is then
+    projected onto (E) and perpendicular to (B) its wave vector, with
+    the k = 0 mode assigned to E. E + B reconstructs the windowed map,
+    i.e. the smoothed field wherever the window is 1. All outputs are
+    only reported where the sampled window exceeds 0.9 (NaN elsewhere);
+    even there, on a finite field the decomposition is not unique and
+    some residual E/B mixing of field-scale modes is unavoidable.
 
     Parameters
     ----------
@@ -168,12 +182,18 @@ def compute_div_curl_eb(coords, field, gridResolution):
         Vector field values at `coords`, in mas. (n_samples, 2)
     gridResolution : `int`
         Number of grid nodes per axis of the intermediate regular grid.
+    smoothing : `float`, optional
+        Gaussian smoothing scale applied to the gridded field, in
+        degrees. One grid cell if not given.
+    weights : `numpy.ndarray`, optional
+        Per-sample weights for the gridding (typically inverse total
+        variance). Uniform if not given. (n_samples,)
 
     Returns
     -------
     div : `numpy.ndarray`
         Divergence of the field at `coords`, in mas per degree.
-        NaN where the gridded field is not defined. (n_samples,)
+        NaN outside the apodization window. (n_samples,)
     curl : `numpy.ndarray`
         Curl (z-component, a pseudo-scalar) of the field at `coords`,
         in mas per degree. (n_samples,)
@@ -184,18 +204,60 @@ def compute_div_curl_eb(coords, field, gridResolution):
         B-mode (divergence-free) component of the field at `coords`,
         in mas. (n_samples, 2)
     """
+    nSamples = len(coords)
+    if weights is None:
+        weights = np.ones(nSamples)
     xNodes = np.linspace(np.min(coords[:, 0]), np.max(coords[:, 0]), gridResolution)
     yNodes = np.linspace(np.min(coords[:, 1]), np.max(coords[:, 1]), gridResolution)
-    xGrid, yGrid = np.meshgrid(xNodes, yNodes)
-    # Maps are indexed [iy, ix].
-    mapX = griddata(coords, field[:, 0], (xGrid, yGrid), method="cubic")
-    mapY = griddata(coords, field[:, 1], (xGrid, yGrid), method="cubic")
-    valid = np.isfinite(mapX) & np.isfinite(mapY)
+    xSpacing = xNodes[1] - xNodes[0]
+    ySpacing = yNodes[1] - yNodes[0]
+
+    # Weighted bilinear (cloud-in-cell) deposit of the samples onto the
+    # grid. Maps are indexed [iy, ix].
+    gx = np.clip((coords[:, 0] - xNodes[0]) / xSpacing, 0.0, gridResolution - 1.0)
+    gy = np.clip((coords[:, 1] - yNodes[0]) / ySpacing, 0.0, gridResolution - 1.0)
+    ix = np.clip(np.floor(gx).astype(np.intp), 0, gridResolution - 2)
+    iy = np.clip(np.floor(gy).astype(np.intp), 0, gridResolution - 2)
+    tx = gx - ix
+    ty = gy - iy
+    numeratorX = np.zeros((gridResolution, gridResolution))
+    numeratorY = np.zeros((gridResolution, gridResolution))
+    denominator = np.zeros((gridResolution, gridResolution))
+    for shiftX, shiftY, cellWeight in [
+        (0, 0, (1.0 - tx) * (1.0 - ty)),
+        (1, 0, tx * (1.0 - ty)),
+        (0, 1, (1.0 - tx) * ty),
+        (1, 1, tx * ty),
+    ]:
+        np.add.at(numeratorX, (iy + shiftY, ix + shiftX), weights * cellWeight * field[:, 0])
+        np.add.at(numeratorY, (iy + shiftY, ix + shiftX), weights * cellWeight * field[:, 1])
+        np.add.at(denominator, (iy + shiftY, ix + shiftX), weights * cellWeight)
+
+    # Mask-normalized Gaussian smoothing: denoises the maps and inpaints
+    # coverage gaps up to about the smoothing length.
+    if smoothing is None:
+        sigmaCells = 1.0
+    else:
+        sigmaCells = smoothing / (0.5 * (xSpacing + ySpacing))
+    numeratorX = gaussian_filter(numeratorX, sigmaCells)
+    numeratorY = gaussian_filter(numeratorY, sigmaCells)
+    denominatorSmooth = gaussian_filter(denominator, sigmaCells)
+    reference = np.median(denominatorSmooth[denominator > 0.0])
+    covered = denominatorSmooth > 0.05 * reference
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mapX = np.where(covered, numeratorX / denominatorSmooth, 0.0)
+        mapY = np.where(covered, numeratorY / denominatorSmooth, 0.0)
 
     dMapXdY, dMapXdX = np.gradient(mapX, yNodes, xNodes)
     dMapYdY, dMapYdX = np.gradient(mapY, yNodes, xNodes)
     divMap = dMapXdX + dMapYdY
     curlMap = dMapYdX - dMapXdY
+
+    # Smooth apodization window built from the (density-independent)
+    # coverage mask, tapering the field boundary and remaining holes.
+    window = np.clip(gaussian_filter(covered.astype(float), max(2.0 * sigmaCells, 2.0)), 0.0, 1.0)
+    windowedX = window * mapX
+    windowedY = window * mapY
 
     # Helmholtz decomposition in Fourier space, on zero-padded maps.
     ny, nx = mapX.shape
@@ -203,10 +265,10 @@ def compute_div_curl_eb(coords, field, gridResolution):
     nxPad = next_fast_len(2 * nx)
     padX = np.zeros((nyPad, nxPad))
     padY = np.zeros((nyPad, nxPad))
-    padX[:ny, :nx] = np.where(valid, mapX, 0.0)
-    padY[:ny, :nx] = np.where(valid, mapY, 0.0)
-    kx = 2.0 * np.pi * np.fft.fftfreq(nxPad, d=xNodes[1] - xNodes[0])[np.newaxis, :]
-    ky = 2.0 * np.pi * np.fft.fftfreq(nyPad, d=yNodes[1] - yNodes[0])[:, np.newaxis]
+    padX[:ny, :nx] = windowedX
+    padY[:ny, :nx] = windowedY
+    kx = 2.0 * np.pi * np.fft.fftfreq(nxPad, d=xSpacing)[np.newaxis, :]
+    ky = 2.0 * np.pi * np.fft.fftfreq(nyPad, d=ySpacing)[:, np.newaxis]
     kSquared = kx**2 + ky**2
     kSquared[0, 0] = 1.0
     hatX = fft2(padX)
@@ -219,20 +281,23 @@ def compute_div_curl_eb(coords, field, gridResolution):
     hatEY[0, 0] = hatY[0, 0]
     mapEX = ifft2(hatEX).real[:ny, :nx]
     mapEY = ifft2(hatEY).real[:ny, :nx]
-    mapBX = np.where(valid, mapX, 0.0) - mapEX
-    mapBY = np.where(valid, mapY, 0.0) - mapEY
+    mapBX = windowedX - mapEX
+    mapBY = windowedY - mapEY
 
     outputs = []
-    for outputMap in [divMap, curlMap, mapEX, mapEY, mapBX, mapBY]:
+    for outputMap in [divMap, curlMap, mapEX, mapEY, mapBX, mapBY, window]:
         interpolator = RegularGridInterpolator(
             (yNodes, xNodes),
-            np.where(valid, outputMap, np.nan),
+            outputMap,
             method="linear",
             bounds_error=False,
             fill_value=np.nan,
         )
         outputs.append(interpolator(coords[:, ::-1]))
-    div, curl, ex, ey, bx, by = outputs
+    div, curl, ex, ey, bx, by, windowAtCoords = outputs
+    bad = ~(windowAtCoords > 0.9)
+    for output in [div, curl, ex, ey, bx, by]:
+        output[bad] = np.nan
     return div, curl, np.array([ex, ey]).T, np.array([bx, by]).T
 
 
@@ -511,6 +576,17 @@ class GaussianProcessesTurbulenceFitConfig(
             " and E/B decomposition computation. Only used if saveDivCurl is set."
         ),
         default=100,
+    )
+    divCurlSmoothing = pexConfig.Field(
+        dtype=float,
+        doc=(
+            "Gaussian smoothing scale in degrees applied to the gridded residual field before the"
+            " divergence, curl, and E/B decomposition computation, to suppress the per-source shot"
+            " noise that gridding would otherwise turn into correlated E/B power. One grid cell if"
+            " not set. Only used if saveDivCurl is set."
+        ),
+        default=None,
+        optional=True,
     )
     maxTrainingPoints = pexConfig.Field(
         dtype=int,
@@ -951,8 +1027,9 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
         (curl-free) and B (divergence-free) vector components of the field
         are given in the tangent plane (mas) and as offsets in detector
         pixel coordinates, following the same convention as
-        ``dxPix``/``dxPixGP``. All columns are NaN where the gridded field
-        is not defined (outside the convex hull of the sources).
+        ``dxPix``/``dxPixGP``. All columns are NaN where the apodization
+        window of the gridded field is below 0.9 (near the field boundary
+        and large coverage holes; see `compute_div_curl_eb`).
 
         Parameters
         ----------
@@ -975,13 +1052,21 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
         """
         nSources = len(positions)
         residuals = np.array([positions["xresw"], positions["yresw"]]).T
+        # Inverse total variance of the displacement amplitude, used to
+        # weight the gridding of both fields (harmless for the smooth
+        # Gaussian Processes field).
+        weights = 1.0 / (positions["covTotalW_00"] + positions["covTotalW_11"])
 
         columns = {}
         vectorFields = {}
         for label, field in [("", residuals), ("GP", prediction)]:
             try:
                 div, curl, fieldE, fieldB = compute_div_curl_eb(
-                    allTPCoords, field, self.config.divCurlGridResolution
+                    allTPCoords,
+                    field,
+                    self.config.divCurlGridResolution,
+                    smoothing=self.config.divCurlSmoothing,
+                    weights=np.asarray(weights, dtype=float),
                 )
             except Exception as e:
                 self.log.warning(
