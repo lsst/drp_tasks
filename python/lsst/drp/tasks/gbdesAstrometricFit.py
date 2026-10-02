@@ -2468,15 +2468,18 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 continue
 
             visitMaps = wcsf.mapCollection.orderAtoms(f"{visit}")
-            if self.config.useColor:
-                colorMap = visitMaps.pop(visitMaps.index(f"{visit}/dcr"))
-                colorFits[visit] = mapParams[colorMap]
             visitMap = visitMaps[0]
             visitMapType = wcsf.mapCollection.getMapType(visitMap)
             if (visitMap not in mapParams) and (visitMapType != "Identity"):
                 self.log.warning("Visit %d was dropped because of an insufficient amount of data.", visit)
                 partialOutputs = True
                 continue
+
+            if self.config.useColor:
+                if f"{visit}/dcr" not in visitMaps:
+                    raise RuntimeError("DCR map missing for visit %s", visit)
+                colorMap = visitMaps.pop(visitMaps.index(f"{visit}/dcr"))
+                colorFits[visit] = mapParams[colorMap]
 
             catalog = lsst.afw.table.ExposureCatalog(schema)
             catalog.resize(len(exposureInfo.detectors))
