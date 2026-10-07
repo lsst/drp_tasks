@@ -360,9 +360,19 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
 
         gpx, gpy, trainInd, testInd, hyperparameters = self.runGP(inputWcs, visitPositions)
 
-        self.evaluate(gpx, gpy, visitPositions, trainInd, testInd, inputWcs)
-
-        wcsWithSpline = self.addGPToWcs(gpx, gpy, inputWcs)
+        try:
+            self.evaluate(gpx, gpy, visitPositions, trainInd, testInd, inputWcs)
+            wcsWithSpline = self.addGPToWcs(gpx, gpy, inputWcs)
+        except np.linalg.LinAlgError as e:
+            if "not positive definite" in str(e):
+                error = pipeBase.AnnotatedPartialOutputsError.annotate(
+                    NotPositiveDefiniteMatrixError(trainInd.sum()),
+                    self,
+                    log=self.log,
+                )
+                raise error from e
+            else:
+                raise
 
         return pipeBase.Struct(outputWcs=wcsWithSpline, hyperparameters=hyperparameters)
 
