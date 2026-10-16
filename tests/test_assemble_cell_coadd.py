@@ -36,6 +36,7 @@ import lsst.afw.image as afwImage
 import lsst.pipe.base as pipeBase
 import lsst.utils.tests
 from lsst.cell_coadds import CoaddUnits, CommonComponents, PatchIdentifiers
+from lsst.daf.butler import DataCoordinate
 from lsst.drp.tasks.assemble_cell_coadd import (
     AssembleCellCoaddConfig,
     AssembleCellCoaddTask,
@@ -275,6 +276,19 @@ class AssembleCellCoaddTestCase(lsst.utils.tests.TestCase):
         self.result = None  # so tearDown has something.
         with self.assertRaises(pipeBase.NoWorkFound, msg="No cells could be populated for the cell coadd."):
             self.runTask(warpRefList=[], maskedFractionRefList=[], noise0RefList=[], visitSummaryList=[])
+
+    def test_mixed_instruments_raises(self):
+        """Warps made from more than one instrument are rejected."""
+        self.result = None  # so tearDown has something.
+        handle = self.handleList[0]
+        otherDataId = DataCoordinate.standardize(
+            {**handle.dataId.required, "instrument": "OtherCam"}, universe=handle.dataId.universe
+        )
+        otherHandle = pipeBase.InMemoryDatasetHandle(
+            handle.get(), storageClass="ExposureF", copy=True, dataId=otherDataId
+        )
+        with self.assertRaisesRegex(ValueError, "more than one instrument"):
+            self.runTask(warpRefList=[otherHandle] + self.handleList[1:])
 
     def test_assemble_without_visitSummary(self):
         """Test that AssembleCellCoaddTask calculates detector weights and

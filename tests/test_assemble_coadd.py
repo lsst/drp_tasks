@@ -215,6 +215,22 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         self.handleList = testData.makeDataRefList(exposures, patch=patch, tract=tract)
         self.handleListPsfMatched = testData.makeDataRefList(matchedExposures, patch=patch, tract=tract)
         self.skyInfo = makeMockSkyInfo(testData.bbox, testData.wcs, patch=patch)
+        self.testData = testData
+
+    def makeHandles(self, instruments):
+        """Make direct and PSF-matched warp handles for one visit per entry
+        of ``instruments``, observed with that instrument.
+        """
+        exposures = {}
+        matchedExposures = {}
+        for expId, instrument in enumerate(instruments, start=200):
+            exposures[expId], matchedExposures[expId] = self.testData.makeTestImage(
+                expId, instrument=instrument
+            )
+        return (
+            self.testData.makeDataRefList(exposures, patch=42, tract=0),
+            self.testData.makeDataRefList(matchedExposures, patch=42, tract=0),
+        )
 
     def checkRun(self, assembleTask, warpType="direct"):
         """Check that the task runs successfully."""
@@ -248,6 +264,41 @@ class AssembleCoaddTestCase(lsst.utils.tests.TestCase):
         config = MockDcrAssembleCoaddConfig()
         assembleTask = MockDcrAssembleCoaddTask(config=config)
         self.checkRun(assembleTask)
+
+    def testAssembleInstrument(self):
+        """The coadd visit info records the instrument shared by the inputs,
+        ignoring inputs that record none.
+        """
+        handleList, handleListPsfMatched = self.makeHandles(["TestCam", None, "TestCam"])
+        for assembleTask in (
+            MockAssembleCoaddTask(config=MockAssembleCoaddConfig()),
+            MockCompareWarpAssembleCoaddTask(config=MockCompareWarpAssembleCoaddConfig()),
+        ):
+            with self.subTest(task=type(assembleTask).__name__):
+                result = assembleTask.runQuantum(
+                    self.skyInfo, handleList, psfMatchedWarpRefList=handleListPsfMatched
+                )
+                visitInfo = result.coaddExposure.getInfo().getVisitInfo()
+                self.assertEqual(visitInfo.getInstrumentLabel(), "TestCam")
+
+        # Inputs that record no instrument leave the label empty.
+        result = MockAssembleCoaddTask(config=MockAssembleCoaddConfig()).runQuantum(
+            self.skyInfo, self.handleList
+        )
+        self.assertEqual(result.coaddExposure.getInfo().getVisitInfo().getInstrumentLabel(), "")
+
+    def testAssembleMixedInstrumentsRaises(self):
+        """Warps made from more than one instrument are rejected."""
+        handleList, handleListPsfMatched = self.makeHandles(["TestCam", "TestCam", "OtherCam"])
+        for assembleTask in (
+            MockAssembleCoaddTask(config=MockAssembleCoaddConfig()),
+            MockCompareWarpAssembleCoaddTask(config=MockCompareWarpAssembleCoaddConfig()),
+        ):
+            with self.subTest(task=type(assembleTask).__name__):
+                with self.assertRaisesRegex(ValueError, "more than one instrument: OtherCam .*, TestCam"):
+                    assembleTask.runQuantum(
+                        self.skyInfo, handleList, psfMatchedWarpRefList=handleListPsfMatched
+                    )
 
     def testOnlineCoadd(self):
         config = MockInputMapAssembleCoaddConfig()
