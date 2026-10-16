@@ -351,6 +351,8 @@ class AssembleCellCoaddTask(PipelineTask):
         Raised if no input warps are provided, or no cells could be populated.
     RuntimeError
         Raised if the skymap is not cell-based.
+    ValueError
+        Raised if the warps were made from more than one instrument.
 
     Notes
     -----
@@ -576,6 +578,10 @@ class AssembleCellCoaddTask(PipelineTask):
         skyInfo,
         visitSummaryList: list | None = None,
     ):
+        instruments = {warp_input.dataId["instrument"] for warp_input in inputs.values()}
+        if len(instruments) > 1:
+            raise ValueError(f"Warps were made from more than one instrument: {sorted(instruments)}.")
+
         for mask_plane in self.config.bad_mask_planes:
             afwImage.Mask.addMaskPlane(mask_plane)
         for mask_plane in self.config.mask_propagation_thresholds:

@@ -842,7 +842,9 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
     def assembleMetadata(self, coaddExposure, warpRefList, weightList, psfMatchedWarpRefList=None):
         """Set the metadata for the coadd.
 
-        This basic implementation sets the filter from the first input.
+        This basic implementation sets the filter from the first input, and
+        the instrument label of the visit info from the instrument shared by
+        all inputs.
 
         Parameters
         ----------
@@ -859,6 +861,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         ------
         AssertionError
             Raised if there is a length mismatch.
+        ValueError
+            Raised if the warps were made from more than one instrument.
         """
         assert len(warpRefList) == len(weightList), "Length mismatch"
 
@@ -872,6 +876,8 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         bbox = geom.Box2I(coaddExposure.getBBox().getMin(), geom.Extent2I(1, 1))
 
         warpList = [warpRef.get(parameters={"bbox": bbox}) for warpRef in warpRefList]
+        instrument = self._getInstrument(warpList, warpRefList)
+        coaddExposure.getInfo().setVisitInfo(afwImage.VisitInfo(instrumentLabel=instrument))
 
         numCcds = sum(len(warp.getInfo().getCoaddInputs().ccds) for warp in warpList)
 
@@ -920,6 +926,42 @@ class AssembleCoaddTask(CoaddBaseTask, pipeBase.PipelineTask):
         if self.config.doAttachTransmissionCurve:
             transmissionCurve = measAlg.makeCoaddTransmissionCurve(coaddExposure.getWcs(), coaddInputs.ccds)
             coaddExposure.getInfo().setTransmissionCurve(transmissionCurve)
+
+    @staticmethod
+    def _getInstrument(warpList, warpRefList):
+        """Return the instrument whose observations were warped to make the
+        warps.
+
+        Parameters
+        ----------
+        warpList : `list` [`lsst.afw.image.Exposure`]
+            Warps whose input records are read.
+        warpRefList : `list`
+            Dataset handles (data references) to the warps, for the error
+            message.
+
+        Returns
+        -------
+        instrument : `str`
+            Instrument label recorded by the inputs of the warps, or an empty
+            string if no input records one.
+
+        Raises
+        ------
+        ValueError
+            Raised if the warps were made from more than one instrument.
+        """
+        # Map each instrument label to the first warp that records it.
+        instruments = {}
+        for warp, warpRef in zip(warpList, warpRefList):
+            for record in warp.getInfo().getCoaddInputs().ccds:
+                visitInfo = record.getVisitInfo()
+                if visitInfo is not None and visitInfo.getInstrumentLabel():
+                    instruments.setdefault(visitInfo.getInstrumentLabel(), warpRef.dataId)
+        if len(instruments) > 1:
+            found = ", ".join(f"{label} (first in {dataId})" for label, dataId in sorted(instruments.items()))
+            raise ValueError(f"Warps were made from more than one instrument: {found}.")
+        return next(iter(instruments), "")
 
     def assembleSubregion(
         self,

@@ -315,7 +315,7 @@ class MockCoaddTestData:
         wcs = afwGeom.makeSkyWcs(crpix=crpix, crval=crval, cdMatrix=cdMatrix)
         return wcs
 
-    def makeDummyVisitInfo(self, exposureId, randomizeTime=False):
+    def makeDummyVisitInfo(self, exposureId, randomizeTime=False, instrument=None):
         """Make a self-consistent visitInfo object for testing.
 
         Parameters
@@ -324,6 +324,8 @@ class MockCoaddTestData:
             Unique integer identifier for this observation.
         randomizeTime : `bool`, optional
             Add a random offset within a 6 hour window to the observation time.
+        instrument : `str`, optional
+            Instrument label of the observation; left empty if not set.
 
         Returns
         -------
@@ -365,6 +367,7 @@ class MockCoaddTestData:
             tracking_radec=radec,
             altaz_begin=radec.altaz,
             observation_type="science",
+            instrument=instrument,
         )
         visitInfo = MakeRawVisitInfoViaObsInfo.observationInfo2visitInfo(obsInfo)
         return visitInfo
@@ -410,6 +413,7 @@ class MockCoaddTestData:
         backgroundLevel=None,
         detectionSigma=5.0,
         badRegionBox=None,
+        instrument=None,
     ):
         """Make a reproduceable PSF-convolved masked image for testing.
 
@@ -427,12 +431,14 @@ class MockCoaddTestData:
             Threshold amplitude of the image to set the "DETECTED" mask.
         badRegionBox : `lsst.geom.Box2I`, optional
             Add a bad region bounding box (set to "BAD").
+        instrument : `str`, optional
+            Instrument label of the observation; left empty if not set.
         """
         if backgroundLevel is None:
             backgroundLevel = self.backgroundLevel
         if noiseLevel is None:
             noiseLevel = 5.0
-        visitInfo = self.makeDummyVisitInfo(expId, randomizeTime=True)
+        visitInfo = self.makeDummyVisitInfo(expId, randomizeTime=True, instrument=instrument)
 
         if psfSize is None:
             psfSize = self.rngMods.random() * (self.maxPsfSize - self.minPsfSize) + self.minPsfSize
