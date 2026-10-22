@@ -854,7 +854,10 @@ class MetadetectionShearTask(PipelineTask):
             bbox = grid.bbox_of(cell_id).dilatedBy(dilate_by)
             cell_coadds = []
             for patch_coadd in patch_coadds.values():
-                cell_coadds.append(patch_coadd[Box.from_legacy(bbox)])
+                try:
+                  cell_coadds.append(patch_coadd[Box.from_legacy(bbox)])
+                except:
+                  self.log.warning("Couldn't include the cell in %s", bbox)
             self.log.debug("Processing cell %s %s", nx, ny)
 
             try:
