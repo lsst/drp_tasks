@@ -34,7 +34,6 @@ from typing import Any, ClassVar
 import esutil as eu
 import numpy as np
 import pyarrow as pa
-from metadetect.lsst.masking import apply_apodized_bright_masks_mbexp, apply_apodized_edge_masks_mbexp
 from metadetect.lsst.metacal_exposures import STEP as SHEAR_STEP
 from metadetect.lsst.metadetect import MetadetectTask
 from metadetect.lsst.util import extract_multiband_coadd_data
@@ -789,65 +788,6 @@ class MetadetectionShearTask(PipelineTask):
             raise AnnotatedPartialOutputsError.annotate(err, self, log=self.log) from err
         qc.put(outputs, outputRefs)
 
-    @staticmethod
-    def convert_refcat_to_bright_info(ref_cat) -> Mapping[str, np.ndarray] | None:
-        """Convert a reference catalog to a bright object info dictionary.
-
-        Parameters
-        ----------
-        ref_cat : `lsst.afw.table.SimpleCatalog`
-            Reference catalog to convert.
-
-        Returns
-        -------
-        bright_info : `dict` [ `str`, `numpy.ndarray` ] or `None`
-            Dictionary containing the right ascension and declination of the
-            bright objects in the reference catalog, or `None` if no bright
-            objects are found.
-        """
-        # We take in the whole ref_cat not just a particular flux to have the
-        # flexibility to adjust the mapping based on other columns if needed.
-        mag = -2.5 * np.log10(ref_cat["phot_g_mean_flux"]) + 31.4
-        if not (cuts := (mag <= 17)).any():
-            return None
-
-        # The radius_pixel calculation is not customizable fully, and needs to
-        # happen in tandem with the pixelMargin config field. We adopt the
-        # DES mapping for now, and revisit for DR1.
-        mag = mag[cuts]
-
-        radius_pixels = 100.0 * np.ones_like(mag)  # mag <= 17
-        radius_pixels[mag <= 14] = 200.0
-        radius_pixels[mag <= 11] = 450.0
-
-        bright_info = {"radius_pixels": radius_pixels}
-
-        # Metadetect expects RA, DEC to be in degrees, while the LSST Science
-        # Pipelines typically work in radians.
-        # TODO: it is more efficient to convert it to pixel coordinates here
-        # to avoid multiple WCS calls and pass those entries that are close
-        # enough to a given cell. This change needs to happen in the
-        # metadetect package as well.
-        bright_info["ra"] = ref_cat[cuts]["coord_ra"] * 180.0 / np.pi
-        bright_info["dec"] = ref_cat[cuts]["coord_dec"] * 180.0 / np.pi
-
-        return bright_info
-
-    @staticmethod
-    def magnitude_to_radius_desy6(mag, pixel_scale=0.2):
-        radius_arcsec = 10 ** (0.004432 * mag**2 - 0.2257 * mag + 2.996)
-        radius_arcsec[radius_arcsec < 5] = 5
-        radius_pixel = radius_arcsec / pixel_scale
-        return radius_pixel
-
-    @staticmethod
-    def magnitude_to_radius_anacal(mag):
-        radius_pixels = np.zeros_like(mag)
-        radius_pixels[mag <= 17] = 100.0
-        radius_pixels[mag <= 14] = 200.0
-        radius_pixels[mag <= 11] = 450.0
-        return radius_pixels
-
     def run(
         self,
         *,
@@ -904,11 +844,6 @@ class MetadetectionShearTask(PipelineTask):
         # lsst_cells_v1 has overlapping cells, so we need to undo the padding.
         grid = grid.from_bbox_shape(bbox=grid.bbox, shape=grid.shape, padding=0)
 
-        if ref_cat is not None:
-            bright_info = self.convert_refcat_to_bright_info(ref_cat)
-        else:
-            bright_info = None
-
         nx_cells, ny_cells = grid.shape
         single_cell_tables: list[pa.Table] = []
         for nx, ny in product(
@@ -921,7 +856,7 @@ class MetadetectionShearTask(PipelineTask):
             self.log.debug("Processing cell %s %s", nx, ny)
 
             try:
-                res = self.process_cell(cell_coadds, cell_id=cell_id, border=border, bright_info=bright_info)
+                res = self.process_cell(cell_coadds, cell_id=cell_id, border=border, ref_cat=ref_cat)
             except Exception as e:
                 self.log.error("Failed to process cell %s %s: %s", nx, ny, e)
                 continue
@@ -962,7 +897,7 @@ class MetadetectionShearTask(PipelineTask):
         cell_coadds: Sequence[StitchedCoadd],
         cell_id: Index2D,
         border: int = 0,
-        bright_info: Mapping[str, np.ndarray] | None = None,
+        ref_cat: SimpleCatalog | None = None,
     ) -> pa.Table:
         """Run metadetection on a single cell.
 
@@ -977,9 +912,10 @@ class MetadetectionShearTask(PipelineTask):
         border : `int`, optional
             If positive, detections whose centroids lie ``border`` pixels away
             from the edges of the cells will be excluded.
-        bright_info: `~collections.abc.Mapping` [ `str`, `numpy.ndarray` ] | `None`
-            Bright object information for apodization. It contains "ra", "dec"
-            (in degrees) and "radius_pixels" as keys.
+        ref_cat : `lsst.afw.table.SimpleCatalog`, optional
+            Reference catalog used to mask bright objects. Apodization (edge
+            and, when ``ref_cat`` is provided, bright-object masking) is
+            applied inside ``metadetect.run``.
 
         Returns
         -------
@@ -990,17 +926,8 @@ class MetadetectionShearTask(PipelineTask):
 
         coadd_data = self._cell_to_coadd_data(cell_coadds)
 
-        apply_apodized_edge_masks_mbexp(**coadd_data)
-
-        if bright_info:
-            apply_apodized_bright_masks_mbexp(bright_info=bright_info, **coadd_data)
-
-        mask_frac = _get_mask_frac(
-            coadd_data["mfrac_mbexp"],
-            trim_pixels=0,
-        )
-
-        res = self.metadetect.run(rng=self.rng, border=border, **coadd_data)
+        res = self.metadetect.run(rng=self.rng, border=border, ref_cat=ref_cat, **coadd_data)
+        mask_frac = res.pop("mask_frac", None)
         diagnostics = res.pop("_diagnostics", None)
         self.log.debug("Diagnostics: %s", diagnostics)
 
@@ -1217,21 +1144,3 @@ def _make_comb_data(
         output = []
 
     return output
-
-
-def _get_mask_frac(mfrac_mbexp, trim_pixels=0):
-    """
-    get the average mask frac for each band and then return the max of those
-    """
-
-    mask_fracs = []
-    for mfrac_exp in mfrac_mbexp:
-        mfrac = mfrac_exp.image.array
-        dim = mfrac.shape[0]
-        mfrac = mfrac[
-            trim_pixels : dim - trim_pixels - 1,
-            trim_pixels : dim - trim_pixels - 1,
-        ]
-        mask_fracs.append(mfrac.mean())
-
-    return max(mask_fracs)
