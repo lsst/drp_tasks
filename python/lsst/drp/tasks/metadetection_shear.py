@@ -953,7 +953,6 @@ class MetadetectionShearTask(PipelineTask):
         if not single_cell_tables:
             raise MetadetectionProcessingError("No objects found in any cell")
 
-        # TODO: DM-53796 De-duplicate objects before concatenation.
         return Struct(
             metadetect_catalog=pa.concat_tables(single_cell_tables),
         )
