@@ -752,6 +752,23 @@ class GaussianProcessesTurbulenceFitTask(pipeBase.PipelineTask):
         visitPositions = inputPositions[
             (inputPositions["exposureName"] == str(visit)) & ~inputPositions["clip"]
         ]
+        validPositions = (
+            np.isfinite(visitPositions["xresw"])
+            & np.isfinite(visitPositions["yresw"])
+            & np.isfinite(visitPositions["covTotalW_00"])
+            & np.isfinite(visitPositions["covTotalW_11"])
+            & (visitPositions["covTotalW_00"] > 0)
+            & (visitPositions["covTotalW_11"] > 0)
+        )
+        nInvalid = len(visitPositions) - np.sum(validPositions)
+        if nInvalid:
+            self.log.warning(
+                "Removing %d of %d sources with non-finite residuals or non-positive position "
+                "covariances from the turbulence fit input.",
+                nInvalid,
+                len(visitPositions),
+            )
+            visitPositions = visitPositions[validPositions]
 
         gpx, gpy, trainInd, testInd, hyperparameters, allTPCoords = self.runGP(inputWcs, visitPositions)
 
