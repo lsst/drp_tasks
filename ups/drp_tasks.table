@@ -20,6 +20,8 @@ setupRequired(meas_extensions_shapeHSM)
 setupRequired(metadetect)
 setupRequired(pipe_tasks)
 
+setupOptional(obs_subaru)
+
 # The following is boilerplate for all packages.
 # See https://dmtn-001.lsst.io for details on LSST_LIBRARY_PATH.
 envPrepend(PYTHONPATH, ${PRODUCT_DIR}/python)

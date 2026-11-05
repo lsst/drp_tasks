@@ -27,10 +27,10 @@ import numpy as np
 import scipy.optimize
 
 import lsst.pex.config
-from lsst.afw.cameraGeom import FIELD_ANGLE, FOCAL_PLANE, Camera
+from lsst.afw.cameraGeom import FIELD_ANGLE, FOCAL_PLANE, PIXELS, Camera
 from lsst.afw.geom import TransformPoint2ToPoint2
 from lsst.geom import degrees
-from lsst.pipe.base import Task
+from lsst.pipe.base import Struct, Task
 
 __all__ = [
     "BuildCameraFromAstrometryConfig",
@@ -204,13 +204,13 @@ class BuildCameraFromAstrometryTask(Task):
         super().__init__(**kwargs)
 
         # The gbdes model normalizes the pixel positions to the range -1 - +1.
-        X = np.arange(-1, 1, 0.1)
-        Y = np.arange(-1, 1, 0.1)
-        x, y = np.meshgrid(X, Y)
+        self.X = np.linspace(-1, 1, 10)
+        self.Y = np.linspace(-1, 1, 10)
+        x, y = np.meshgrid(self.X, self.Y)
         self.x = x.ravel()
         self.y = y.ravel()
 
-    def run(self, mapParams, mapTemplate, detectorList, visitList, inputCamera, rotationAngle):
+    def run(self, mapParams, mapTemplate, detectorList, visitList, inputCamera):
         """Convert the model parameters into a Camera object.
 
         Parameters
@@ -237,40 +237,54 @@ class BuildCameraFromAstrometryTask(Task):
             Camera object with transformations set by the input mapParams.
         """
 
-        # Normalize the model.
-        newParams, newTPx, newTPy = self._normalize_model(mapParams, mapTemplate, detectorList, visitList)
+        # Align the model with the obs_* model camera.
+        recenteredParams = self._recenter_model(mapParams, mapTemplate, detectorList, inputCamera)
 
         if self.config.modelSplitting == "basic":
             # Put all of the camera distortion into the pixels->focal plane
             # part of the distortion model, with the focal plane->tangent plane
             # part only used for scaling between the focal plane and sky.
-            pixToFocalPlane, focalPlaneToTangentPlane = self._basic_model(newParams, detectorList)
+            pixToFocalPlane, focalPlaneToTangentPlane = self._basic_model(
+                recenteredParams.newDeviceArray, detectorList
+            )
 
         else:
             # Fit two polynomials, such that the first describes the pixel->
             # focal plane part of the model, and the second describes the focal
             # plane->tangent plane part of the model, with the goal of
             # generating a more physically-motivated distortion model.
-            pixToFocalPlane, focalPlaneToTangentPlane = self._split_model(newTPx, newTPy, detectorList)
+            pixToFocalPlane, focalPlaneToTangentPlane = self._split_model(
+                recenteredParams.newTPx, recenteredParams.newTPy, detectorList
+            )
+
+        xScale = int(mapTemplate["BAND/DEVICE/poly"]["XMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["XMin"])
+        yScale = int(mapTemplate["BAND/DEVICE/poly"]["YMax"]) - int(mapTemplate["BAND/DEVICE/poly"]["YMin"])
 
         # Turn the mappings into a Camera object.
         camera = self._translate_to_afw(
-            pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle
+            pixToFocalPlane,
+            focalPlaneToTangentPlane,
+            detectorList,
+            inputCamera,
+            xScale,
+            yScale,
         )
 
         return camera
 
-    def _normalize_model(self, mapParams, mapTemplate, detectorList, visitList):
-        """Normalize the camera mappings, such that they correspond to the
-        average visit.
+    def _recenter_model(self, mapParams, mapTemplate, detectorList, camera, transform="affine"):
+        """Normalize and recenter the camera mappings, such that they
+        correspond to the average visit.
 
         In order to break degeneracies, `gbdes` sets one visit to have the
         identity for the per-visit part of its model. This visit is thus
         imprinted in the per-detector part of the model. This function
-        normalizes the model such that the parameters correspond instead to the
-        average per-visit behavior. This step assumes that the per-visit part
-        of the model is a first-order polynomial, in which case this conversion
-        can be done without loss of information.
+        normalizes and recenters the model such that the parameters correspond
+        instead to the average per-visit behavior. This step assumes that the
+        per-visit part of the model is a first-order polynomial, in which case
+        this conversion can be done without loss of information. If `normalize`
+        is false, the model is just recentered so that the average offset is
+        zero.
 
         Parameters
         ----------
@@ -282,22 +296,39 @@ class BuildCameraFromAstrometryTask(Task):
             following the convention in `gbdes`.
         detectorList : `list` [`int`]
             List of detector ids.
-        visitList : `list` [`int`]
-            List of ids for visits that were used to train the input model.
+        camera: `lsst.afw.cameraGeom.Camera`
+            Existing camera model ontoo which the new model will be normalized.
+        transform: `str`
+            Method for recentering the camera.
+                - ``"affine"``: The camera parameters are shifted by a linear
+                function to minimize the difference between this camera model
+                and a preexisting model.
+                - ``"rigid"`: The camera parameters are shifted by a
+                translation and rotation to minimize the difference between
+                this camera model and a preexisting model. TODO: DM-56786 This
+                needs to be combined with a model for other causes of shifts,
+                like refraction or camera flexure, in order to be
+                scientifically useful.
 
         Returns
         -------
-        newDeviceArray : `np.ndarray`
-            Array of NxM, where N is the number of detectors, and M is the
-            number of coefficients for each per-detector mapping.
-        newTPx, newTPy : `np.ndarray`
-            Projection of `self.x` and `self.y` onto the tangent plane, given
-            the normalized mapping.
+        result : `lsst.pipe.base.Struct`
+            A struct object with the following attributes:
+            ``newDeviceArray`` : `np.ndarray`
+                Array of NxM, where N is the number of detectors, and M is the
+                number of coefficients for each per-detector mapping.
+            ``newTPx``, ``newTPy`` : `np.ndarray`
+                Projection of `self.x` and `self.y` onto the tangent plane for
+                each detector, given the normalized mapping.
+            ``inputCoords`` : `np.ndarray`
+                Projection of `self.x` and `self.y` onto the tangent plane for
+                each detector using the input camera.
+            ``targetCoords`` : `np.ndarray`
+                Projection of `self.x` and `self.y` onto the tangent plane for
+                each detector using the target preexisting camera.
         """
-
-        # Get the per-device and per-visit parts of the model.
+        # Get the per-device part of the model.
         deviceParams = []
-        visitParams = []
         for element in mapTemplate["BAND/DEVICE"]["Elements"]:
             for detector in detectorList:
                 detectorTemplate = element.replace("DEVICE", str(detector))
@@ -307,47 +338,115 @@ class BuildCameraFromAstrometryTask(Task):
                         deviceParams.append(params)
         deviceArray = np.vstack(deviceParams)
 
-        for element in mapTemplate["EXPOSURE"]["Elements"]:
-            for visit in visitList:
-                visitTemplate = element.replace("EXPOSURE", str(visit))
-                for k, params in mapParams.items():
-                    if re.fullmatch(visitTemplate, k):
-                        visitParams.append(params)
-        identityVisitParams = np.array([0, 1, 0, 0, 0, 1])
-        visitParams.append(identityVisitParams)
-        expoArray = np.vstack(visitParams)
+        inputTPx = []
+        inputTPy = []
+        targetTPx = []
+        targetTPy = []
+        xMax = max([det.getBBox().endX for det in camera]) - 1
+        yMax = max([det.getBBox().endY for det in camera]) - 1
 
-        expoMean = expoArray.mean(axis=0)
+        for d, deviceMap in enumerate(deviceArray):
+            detector = detectorList[d]
+            obsDet = camera[detector]
+            detBBox = obsDet.getBBox()
 
-        # Shift the per-device part of the model to correspond with the mean
-        # per-visit behavior.
-        newDeviceArray = np.zeros(deviceArray.shape)
-        nCoeffsDev = deviceArray.shape[1] // 2
-        newDeviceArray[:, :nCoeffsDev] = (
-            deviceArray[:, :nCoeffsDev] * expoMean[1] + deviceArray[:, nCoeffsDev:] * expoMean[2]
-        )
-        newDeviceArray[:, nCoeffsDev:] = (
-            deviceArray[:, :nCoeffsDev] * expoMean[4] + deviceArray[:, nCoeffsDev:] * expoMean[5]
-        )
-        newDeviceArray[:, 0] += expoMean[0]
-        newDeviceArray[:, nCoeffsDev] += expoMean[3]
-
-        # Then get the tangent plane positions from the new device model:
-        newTPx = []
-        newTPy = []
-        for deviceMap in newDeviceArray:
             nCoeffsDev = len(deviceMap) // 2
             deviceDegree = int(-1.5 + 0.5 * (1 + 8 * nCoeffsDev) ** 0.5)
 
-            intX = _z_function(deviceMap[:nCoeffsDev], self.x, self.y, order=deviceDegree)
-            intY = _z_function(deviceMap[nCoeffsDev:], self.x, self.y, order=deviceDegree)
-            newTPx.append(intX)
-            newTPy.append(intY)
+            x = ((detBBox.endX - 1) / xMax) * (self.x + 1) - 1
+            y = ((detBBox.endY - 1) / yMax) * (self.y + 1) - 1
 
-        newTPx = np.array(newTPx).ravel()
-        newTPy = np.array(newTPy).ravel()
+            intX = _z_function(deviceMap[:nCoeffsDev], x, y, order=deviceDegree)
+            intY = _z_function(deviceMap[nCoeffsDev:], x, y, order=deviceDegree)
+            inputTPx.append(intX)
+            inputTPy.append(intY)
 
-        return newDeviceArray, newTPx, newTPy
+            # Get the tangent plane mapping for the same points from the target
+            # camera model.
+            dX = np.linspace(detBBox.beginX, detBBox.endX - 1, len(self.X))
+            dY = np.linspace(detBBox.beginY, detBBox.endY - 1, len(self.Y))
+            detX, detY = np.meshgrid(dX, dY)
+            detX = detX.ravel()
+            detY = detY.ravel()
+            mapping = obsDet.getTransform(PIXELS, FIELD_ANGLE).getMapping()
+            faX, faY = mapping.applyForward(np.array([detX, detY]))
+            targetTPx.append(np.degrees(faX))
+            targetTPy.append(np.degrees(faY))
+
+        inputCoords = np.array([np.concatenate(inputTPx), np.concatenate(inputTPy)])
+        targetCoords = np.array([np.concatenate(targetTPx), np.concatenate(targetTPy)])
+
+        if transform == "rigid":
+            # Find the best rigid transformation matching the new model to the
+            # input camera model using the method described in
+            # https://igl.ethz.ch/projects/ARAP/svd_rot.pdf.
+            inputAve = inputCoords.mean(axis=1)
+            targetAve = targetCoords.mean(axis=1)
+
+            xVec = inputCoords - inputAve.reshape(-1, 1)
+            yVec = targetCoords - targetAve.reshape(-1, 1)
+
+            # Now do SVD:
+            SMatrix = xVec.dot(yVec.T)
+            U, S, VTrans = np.linalg.svd(SMatrix)
+
+            rotationMatrix = (VTrans.T).dot(U.T)
+            translation = targetAve.reshape(-1, 1) - rotationMatrix.dot(inputAve.reshape(-1, 1))
+
+            # Convert the tangent plane coordinates already calculated.
+            matchedTPCoords = rotationMatrix.dot(inputCoords) + translation
+
+            # Convert the device map coefficients.
+            nCoeffsDev = deviceArray.shape[1] // 2
+            newDeviceArray = np.zeros(deviceArray.shape)
+            newDeviceArray[:, :nCoeffsDev] = (
+                deviceArray[:, :nCoeffsDev] * rotationMatrix[0, 0]
+                + deviceArray[:, nCoeffsDev:] * rotationMatrix[0, 1]
+            )
+            newDeviceArray[:, 0] += translation[0]
+            newDeviceArray[:, nCoeffsDev:] = (
+                deviceArray[:, :nCoeffsDev] * rotationMatrix[1, 0]
+                + deviceArray[:, nCoeffsDev:] * rotationMatrix[1, 1]
+            )
+            newDeviceArray[:, nCoeffsDev] += translation[1]
+
+        elif transform == "affine":
+            # Find the transformation parameters by minimizing
+            # (target coords - transforms X input coords)**2.
+            x = np.vstack([np.ones_like(inputCoords[0]), inputCoords])
+            A = x.dot(x.T)
+            AInv = np.linalg.inv(A)
+            bx = (x * targetCoords[0]).sum(axis=1)
+            by = (x * targetCoords[1]).sum(axis=1)
+            transformX = AInv.dot(bx)
+            transformY = AInv.dot(by)
+
+            matchedTPCoords = np.array([transformX, transformY]).dot(x)
+
+            # Convert the device map coefficients.
+            nCoeffsDev = deviceArray.shape[1] // 2
+            newDeviceArray = np.zeros(deviceArray.shape)
+            newDeviceArray[:, :nCoeffsDev] = (
+                deviceArray[:, :nCoeffsDev] * transformX[1] + deviceArray[:, nCoeffsDev:] * transformX[2]
+            )
+            newDeviceArray[:, 0] += transformX[0]
+            newDeviceArray[:, nCoeffsDev:] = (
+                deviceArray[:, :nCoeffsDev] * transformY[1] + deviceArray[:, nCoeffsDev:] * transformY[2]
+            )
+            newDeviceArray[:, nCoeffsDev] += transformY[0]
+
+        else:
+            raise RuntimeError("Transform '%s' is not supported", transform)
+
+        newTPx, newTPy = matchedTPCoords
+
+        return Struct(
+            newDeviceArray=newDeviceArray,
+            newTPx=newTPx,
+            newTPy=newTPy,
+            inputCoords=inputCoords,
+            targetCoords=targetCoords,
+        )
 
     def _basic_model(self, modelParameters, detectorList):
         """This will just convert the pix->fp parameters into the right format,
@@ -676,7 +775,7 @@ class BuildCameraFromAstrometryTask(Task):
         return polyArray
 
     def _translate_to_afw(
-        self, pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, rotationAngle
+        self, pixToFocalPlane, focalPlaneToTangentPlane, detectorList, inputCamera, xScale, yScale
     ):
         """Convert the model parameters to a Camera object.
 
@@ -688,8 +787,6 @@ class BuildCameraFromAstrometryTask(Task):
             polynomials.
         focalPlaneToTangentPlane : `dict` [`string`, `float`]
             Dictionary giving the focal plane to tangent plane mapping.
-        rotationAngle : `float`
-            Value in radians of the average rotation angle of the input visits.
 
         Returns
         -------
@@ -713,10 +810,6 @@ class BuildCameraFromAstrometryTask(Task):
         forwardCoeffs = self.make_ast_polymap_coeffs(
             tpDegree, focalPlaneToTangentPlane["x"], focalPlaneToTangentPlane["y"]
         )
-        # Reverse rotation from input visits and flip x-axis.
-        cosRot = np.cos(-rotationAngle)
-        sinRot = np.sin(-rotationAngle)
-        rotateAndFlipCoeffs = self.make_ast_polymap_coeffs(1, [0, cosRot, -sinRot], [0, -sinRot, cosRot])
 
         ccdZoom = ast.ZoomMap(2, 1 / scaleConvert)
         ccdToSky = ast.PolyMap(
@@ -725,15 +818,9 @@ class BuildCameraFromAstrometryTask(Task):
             "IterInverse=1, TolInverse=%s, NIterInverse=%s"
             % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
         )
-        rotateAndFlip = ast.PolyMap(
-            rotateAndFlipCoeffs,
-            2,
-            "IterInverse=1, TolInverse=%s, NIterInverse=%s"
-            % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
-        )
         toRadians = ast.ZoomMap(2, (1 * degrees).asRadians())
 
-        fullMapping = ccdZoom.then(rotateAndFlip).then(ccdToSky).then(rotateAndFlip).then(toRadians)
+        fullMapping = ccdZoom.then(ccdToSky).then(toRadians)
         focalPlaneToTPMapping = TransformPoint2ToPoint2(fullMapping)
         cameraBuilder.setTransformFromFocalPlaneTo(FIELD_ANGLE, focalPlaneToTPMapping)
 
@@ -752,7 +839,9 @@ class BuildCameraFromAstrometryTask(Task):
                 detectorBuilder.append(amp.rebuild())
 
             normCoeffs = self.make_ast_polymap_coeffs(
-                1, [-1.0, 2 / detector.getBBox().getWidth(), 0], [-1.0, 0, 2 / detector.getBBox().getHeight()]
+                1,
+                [-1.0, 2 / xScale, 0],
+                [-1.0, 0, 2 / yScale],
             )
             normMap = ast.PolyMap(
                 normCoeffs,
@@ -770,7 +859,7 @@ class BuildCameraFromAstrometryTask(Task):
                 % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
             )
             zoomMap = ast.ZoomMap(2, scaleConvert)
-            fullDetMap = normMap.then(ccdToFP).then(rotateAndFlip).then(zoomMap)
+            fullDetMap = normMap.then(ccdToFP).then(zoomMap)
             ccdToFPMapping = TransformPoint2ToPoint2(fullDetMap)
             detectorBuilder.setTransformFromPixelsTo(FOCAL_PLANE, ccdToFPMapping)
 
