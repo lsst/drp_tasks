@@ -45,6 +45,7 @@ from lsst.afw.image import ExposureF
 from lsst.afw.table import SimpleCatalog
 from lsst.cell_coadds import MultipleCellCoadd, StitchedCoadd
 from lsst.daf.butler import DataCoordinate, DatasetRef
+from lsst.images import Box
 from lsst.meas.algorithms import LoadReferenceObjectsConfig, ReferenceObjectLoader
 from lsst.meas.base import FullIdGenerator, SkyMapIdGeneratorConfig
 from lsst.pex.config import ConfigField, ConfigurableField, Field, FieldValidationError, ListField
@@ -78,8 +79,8 @@ class MetadetectionShearConnections(PipelineTaskConnections, dimensions={"patch"
     """Definitions of inputs and outputs for MetadetectionShearTask."""
 
     input_coadds = cT.Input(
-        "deep_coadd_cell_predetection",
-        storageClass="MultipleCellCoadd",
+        "future_deep_coadd",
+        storageClass="CellCoadd",
         doc="Per-band deep coadds.",
         multiple=True,
         dimensions={"patch", "band"},
@@ -770,6 +771,10 @@ class MetadetectionShearTask(PipelineTask):
             if ref.dataId["band"] in self.config.photometry_bands
         }
 
+        # Restore the predetection coadds
+        for coadd in coadds_by_band.values():
+            coadd.apply_background(None)
+
         try:
             outputs = self.run(
                 patch_coadds=coadds_by_band,
@@ -833,7 +838,7 @@ class MetadetectionShearTask(PipelineTask):
         dilate_by = self.config.border or sky_map.config.tractBuilder.active.cellBorder
         border = dilate_by if self.config.do_cull_peaks_in_cell_borders else 0
 
-        grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid
+        grid = patch_coadds[self.config.metadetect.shear_bands[0]].grid.to_legacy()
         # Undo any padding that was applied when creating the grid.
         # We only support metadetection on non-overlapping single cells.
         # lsst_cells_v1 has overlapping cells, so we need to undo the padding.
@@ -847,7 +852,9 @@ class MetadetectionShearTask(PipelineTask):
         ):
             cell_id = Index2D(nx, ny)
             bbox = grid.bbox_of(cell_id).dilatedBy(dilate_by)
-            cell_coadds = [patch_coadd.stitch(bbox) for patch_coadd in patch_coadds.values()]
+            cell_coadds = []
+            for patch_coadd in patch_coadds.values():
+                cell_coadds.append(patch_coadd[Box.from_legacy(bbox)])
             self.log.debug("Processing cell %s %s", nx, ny)
 
             try:
@@ -948,10 +955,11 @@ class MetadetectionShearTask(PipelineTask):
         coadd_data_list = []
         for cell_coadd in cell_coadds:
             coadd_data = {}
-            coadd_data["coadd_exp"] = cell_coadd.asExposure()
-            coadd_data["coadd_noise_exp"] = cell_coadd.asExposure(noise_index=0)
+            coadd_data["coadd_exp"] = cell_coadd.to_legacy()
+            coadd_data["coadd_noise_exp"] = ExposureF(coadd_data["coadd_exp"], deep=True)
+            coadd_data["coadd_noise_exp"].image = cell_coadd.noise_realizations[0].to_legacy()
             coadd_data["coadd_mfrac_exp"] = ExposureF(coadd_data["coadd_exp"], deep=True)
-            coadd_data["coadd_mfrac_exp"].image = cell_coadd.mask_fractions
+            coadd_data["coadd_mfrac_exp"].image = cell_coadd.mask_fractions['rejected'].to_legacy()
             coadd_data_list.append(coadd_data)
 
         return extract_multiband_coadd_data(coadd_data_list)
@@ -1046,7 +1054,6 @@ def _make_comb_data(
     bands,
     cell_id,
 ):
-    idinfo = cell_coadd.identifiers
 
     copy_dt = [
         # we will copy out of arrays to these
@@ -1127,9 +1134,9 @@ def _make_comb_data(
                 newdata["gauss_band_flux_%s" % b] = newdata["gauss_band_flux"]
                 newdata["gauss_band_flux_err_%s" % b] = newdata["gauss_band_flux_err"]
 
-            newdata["tract"] = idinfo.tract
-            newdata["patch_x"] = idinfo.patch.x
-            newdata["patch_y"] = idinfo.patch.y
+            newdata["tract"] = cell_coadd.tract
+            newdata["patch_x"] = cell_coadd.patch.index.x
+            newdata["patch_y"] = cell_coadd.patch.index.y
             newdata["cell_x"] = cell_id.x
             newdata["cell_y"] = cell_id.y
 
