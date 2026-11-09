@@ -221,13 +221,13 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
 
         config = BuildCameraFromAstrometryConfig()
         config.modelSplitting = "basic"
+        config.includeMissingDetectors = False
         task = BuildCameraFromAstrometryTask(config=config)
 
         camera = task.run(
             self.mapParams,
             self.mapTemplate,
             self.detectorList,
-            self.visitList,
             self.camera,
         )
         testX, testY = [], []
@@ -250,12 +250,12 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
         config = BuildCameraFromAstrometryConfig()
         config.modelSplitting = "physical"
         config.modelSplittingTolerance = 1e-6
+        config.includeMissingDetectors = False
         task = BuildCameraFromAstrometryTask(config=config)
         camera = task.run(
             self.mapParams,
             self.mapTemplate,
             self.detectorList,
-            self.visitList,
             self.camera,
         )
 
@@ -275,6 +275,35 @@ class TestBuildCameraFromAstrometry(lsst.utils.tests.TestCase):
         # reconstruct the input field angles perfectly.
         self.assertFloatsAlmostEqual(self.originalFieldAngleX, testX, atol=1e-4)
         self.assertFloatsAlmostEqual(self.originalFieldAngleY, testY, atol=1e-4)
+
+    def test_replacement_detectors(self):
+
+        astrometry_camera = self.task.run(
+            self.mapParams,
+            self.mapTemplate,
+            self.detectorList,
+            self.camera,
+        )
+
+        for obsDetector in self.camera:
+            detId = obsDetector.getId()
+            if detId in self.detectorList:
+                continue
+
+            # Detectors for which there was no astrometry fit should have been
+            # filled in using the obs_* model, so their mappings should match
+            # the obs_* camera mapping.
+            obsMapping = obsDetector.getTransform(PIXELS, FIELD_ANGLE).getMapping()
+            obsFieldAngleX, obsFieldAngleY = obsMapping.applyForward(np.array([self.xPix, self.yPix]))
+
+            astromDetector = astrometry_camera[detId]
+            astromMapping = astromDetector.getTransform(PIXELS, FIELD_ANGLE).getMapping()
+            astromFieldAngleX, astromFieldAngleY = astromMapping.applyForward(
+                np.array([self.xPix, self.yPix])
+            )
+
+            self.assertFloatsAlmostEqual(obsFieldAngleX, astromFieldAngleX)
+            self.assertFloatsAlmostEqual(obsFieldAngleY, astromFieldAngleY)
 
 
 def setup_module(module):
