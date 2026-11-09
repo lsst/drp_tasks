@@ -200,8 +200,10 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
         super().setDefaults()
         self.metadetect.shear_bands = ["r", "i", "z"]
         self.metadetect.metacal.types = ["noshear", "1p", "1m", "2p", "2m"]
-        # pixelMargin has to be at least the size of the maximum pixel_radius.
-        self.ref_loader.pixelMargin = 450
+        # pixelMargin has to be at least the size of the maximum mask radius
+        # produced by the active magnitude-to-radius relation. Derive it from
+        # that relation so the two cannot drift.
+        self.ref_loader.pixelMargin = int(self.metadetect.mag_radius_relation.target.max_radius_pixels)
 
     def validate(self):
         super().validate()
@@ -212,6 +214,14 @@ class MetadetectionShearConfig(PipelineTaskConfig, pipelineConnections=Metadetec
                 self.__class__.metadetect,
                 self,
                 "photometry_bands must be a list of bands that is a superset of metadetect.shear_bands",
+            )
+        max_radius_pixels = self.metadetect.mag_radius_relation.target.max_radius_pixels
+        if self.ref_loader.pixelMargin < max_radius_pixels:
+            raise FieldValidationError(
+                self.__class__.ref_loader,
+                self,
+                f"ref_loader.pixelMargin ({self.ref_loader.pixelMargin}) must be >= the active "
+                f"mag_radius_relation max_radius_pixels ({max_radius_pixels})",
             )
 
 
