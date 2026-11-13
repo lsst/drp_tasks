@@ -30,7 +30,7 @@ import lsst.pex.config
 from lsst.afw.cameraGeom import FIELD_ANGLE, FOCAL_PLANE, PIXELS, Camera
 from lsst.afw.geom import TransformPoint2ToPoint2
 from lsst.geom import degrees
-from lsst.pipe.base import Struct, Task
+import lsst.pipe.base as pipeBase
 
 __all__ = [
     "BuildCameraFromAstrometryConfig",
@@ -136,6 +136,104 @@ def _z_function_dy(params, x, y, order=4):
     return z
 
 
+class AstrometryCameraInputSelectionConnections(pipeBase.PipelineTaskConnections, dimensions=("instrument")):
+    visit_detector_table = pipeBase.connectionTypes.Input(
+        doc="Table with estimate of seeing for each detector.",
+        name="preliminary_visit_detector_table",
+        storageClass="ArrowAstropy",
+        dimensions=("instrument",),
+    )
+    isolated_star_association = pipeBase.connnectionTypes.Input(
+        doc="Catalog of isolated stars",
+        name="isolated_star_associations",
+        storageClass="ArrowAstropy",
+        dimensions=("instrument", "tract", "skymap"),
+        deferLoad=True,
+        multiple=True,
+    )
+    isolated_star = pipeBase.connnectionTypes.Input(
+        doc="Catalog of individual sources for isolated stars",
+        name="isolated_star",
+        storageClass="ArrowAstropy",
+        dimensions=("instrument", "tract", "skymap"),
+        deferLoad=True,
+        multiple=True,
+    )
+
+class AstrometryCameraInputSelectionConfig(pipeBase.PipelineTaskConfig,
+                                           pipelineConnections=AstrometryCameraInputSelectionConnections):
+    """Configuration for AstrometryCameraInputSelectionTask."""
+
+    nStarPerTract = lsst.pex.Config.Field(
+        doc=('Threshold for number of stars per tract. Default is approximately 100 stars per LSSTCam'
+             'detector.'),
+        dtype=int,
+        default=4000,
+    )
+    seeingThreshold = lsst.pex.Config.Field(
+        doc="Median seeing threshold above which visits will be rejected."
+        dtype=float,
+        default=1.8,
+    )
+    nVisits = lsst.pex.Config.Field(
+        doc=("Minimum number of overlapping visits required to include a given field.")
+        dtype=int,
+        default=20,
+    )
+    nDetectors = lsst.pex.Config.Field(
+        doc="Minimum number of detectors per visit with sources that can be included in fit.",
+        dtype=int,
+        default=120,
+    )
+    nSourceColumn = lsst.pex.Config.Field(
+        doc="TODO",
+        dtype=float,
+        default="nsource_",
+    )
+
+
+class AstrometryCameraInputSelectionTask(pipeBase.PipelineTask):
+    """Select input visits for fitting the astrometry_camera."""
+    ConfigClass = AstrometryCameraInputSelectionConfig
+    _DefaultName = 'astrometryCameraInputSelection'
+
+    def runQuantum(self, butlerQC, inputRefs, outputRefs):
+
+        inputs = butlerQC.get(inputRefs)
+
+        isolated_star_association = inputs.pop("isolated_star_association")
+        input_tracts = np.array([inputCat.dataId["tract"] for inputCat in isolated_star_association])
+        isolated_star_association = [isolated_star_association[t] for t in input_tracts.argsort()]
+
+        isolated_star = inputs.pop("isolated_star")
+        input_tracts = np.array([inputCat.dataId["tract"] for inputCat in isolated_star])
+        isolated_star = [isolated_star[t] for t in input_tracts.argsort()]
+
+        output = self.run(inputs, isolated_star_association, isolated_star)
+        # Do I need to loop over bands?
+        butlerQC.put(output, outputRefs)
+
+    def run(self, visit_detector_table, isolated_star_association, isolated_star):
+
+        all_association_columns = catalog_ref.makeComponentRef("columns").get()
+        needed_columns = [col for col in all_association_columns if self.config.nSourceCol in col]
+        possibleTracts = []
+        goodBands = []
+        for tract, catalog_ref in isolated_star_association.items():
+            if tract % 5 == 0:
+                print(f"processing tract {tract}")
+            # First, check if this tract has enough sources to be useful:
+            preliminary_catalog = catalog_ref.get(parameters={"columns": needed_columns})
+            if len(preliminary_catalog) < self.config.nSourcesPerTract:
+                continue
+            if preliminary_catalog.max < self.config.nVisits:
+                # No band has enough visits to be useful.
+                continue
+            possibleTracts.append(tract)
+            goodBands.append(preliminary_catalog.max(axis=0) > self.config.nVisits)
+
+        import ipdb; ipdb.set_trace()
+
 class BuildCameraFromAstrometryConfig(lsst.pex.config.Config):
     """Configuration for BuildCameraTask."""
 
@@ -188,7 +286,7 @@ class BuildCameraFromAstrometryConfig(lsst.pex.config.Config):
     )
 
 
-class BuildCameraFromAstrometryTask(Task):
+class BuildCameraFromAstrometryTask(pipeBase.Task):
     """Build an `lsst.afw.cameraGeom.Camera` object out of the `gbdes`
     polynomials mapping from pixels to the tangent plane.
 
@@ -440,7 +538,7 @@ class BuildCameraFromAstrometryTask(Task):
 
         newTPx, newTPy = matchedTPCoords
 
-        return Struct(
+        return pipeBase.Struct(
             newDeviceArray=newDeviceArray,
             newTPx=newTPx,
             newTPy=newTPy,
