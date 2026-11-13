@@ -186,6 +186,14 @@ class BuildCameraFromAstrometryConfig(lsst.pex.config.Config):
         doc="Average error in model splitting minimization acceptable for convergence.",
         default=1e-8,
     )
+    includeMissingDetectors = lsst.pex.config.Field(
+        dtype=bool,
+        doc=(
+            "Use mappings from input obs_* camera to fill in any detectors that are not included in the "
+            "provided astrometry mappings."
+        ),
+        default=True,
+    )
 
 
 class BuildCameraFromAstrometryTask(Task):
@@ -210,7 +218,7 @@ class BuildCameraFromAstrometryTask(Task):
         self.x = x.ravel()
         self.y = y.ravel()
 
-    def run(self, mapParams, mapTemplate, detectorList, visitList, inputCamera):
+    def run(self, mapParams, mapTemplate, detectorList, inputCamera):
         """Convert the model parameters into a Camera object.
 
         Parameters
@@ -223,8 +231,6 @@ class BuildCameraFromAstrometryTask(Task):
             following the convention in `gbdes`.
         detectorList : `list` [`int`]
             List of detector ids.
-        visitList : `list` [`int`]
-            List of ids for visits that were used to train the input model.
         camera : `lsst.afw.cameraGeom.Camera`
             Camera object from which to take pupil function, name, and other
             properties.
@@ -827,9 +833,7 @@ class BuildCameraFromAstrometryTask(Task):
         # Convert pix->fp to AST format:
         for detector in inputCamera:
             d = detector.getId()
-            if d not in pixToFocalPlane:
-                # This camera will not include detectors that were not used in
-                # astrometric fit.
+            if (not self.config.includeMissingDetectors) and (d not in pixToFocalPlane):
                 continue
 
             detectorBuilder = cameraBuilder.add(detector.getName(), detector.getId())
@@ -838,30 +842,43 @@ class BuildCameraFromAstrometryTask(Task):
             for amp in detector.getAmplifiers():
                 detectorBuilder.append(amp.rebuild())
 
-            normCoeffs = self.make_ast_polymap_coeffs(
-                1,
-                [-1.0, 2 / xScale, 0],
-                [-1.0, 0, 2 / yScale],
-            )
-            normMap = ast.PolyMap(
-                normCoeffs,
-                2,
-                "IterInverse=1, TolInverse=%s, NIterInverse=%s"
-                % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
-            )
-            forwardDetCoeffs = self.make_ast_polymap_coeffs(
-                fpDegree, pixToFocalPlane[d]["x"], pixToFocalPlane[d]["y"]
-            )
-            ccdToFP = ast.PolyMap(
-                forwardDetCoeffs,
-                2,
-                "IterInverse=1, TolInverse=%s, NIterInverse=%s"
-                % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
-            )
             zoomMap = ast.ZoomMap(2, scaleConvert)
-            fullDetMap = normMap.then(ccdToFP).then(zoomMap)
-            ccdToFPMapping = TransformPoint2ToPoint2(fullDetMap)
-            detectorBuilder.setTransformFromPixelsTo(FOCAL_PLANE, ccdToFPMapping)
+
+            if d not in pixToFocalPlane:
+                # Copy the existing transforms, but scale them so that when the
+                # focalPlaneToTPMapping is applied, it is at the right scale.
+                # We cannot use just the PIXELS to FOCAL_PLANE part, because
+                # the FOCAL_PLANE to FIELD_ANGLE may also contain physically
+                # meaningful information.
+                ccdToFAMapping = detector.getTransform(PIXELS, FIELD_ANGLE).getMapping()
+                faToFPMapping = fullMapping.inverted()
+                ccdToFPMapping = TransformPoint2ToPoint2(ccdToFAMapping.then(faToFPMapping))
+                detectorBuilder.setTransformFromPixelsTo(FOCAL_PLANE, ccdToFPMapping)
+            else:
+                normCoeffs = self.make_ast_polymap_coeffs(
+                    1,
+                    [-1.0, 2 / xScale, 0],
+                    [-1.0, 0, 2 / yScale],
+                )
+                normMap = ast.PolyMap(
+                    normCoeffs,
+                    2,
+                    "IterInverse=1, TolInverse=%s, NIterInverse=%s"
+                    % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
+                )
+                forwardDetCoeffs = self.make_ast_polymap_coeffs(
+                    fpDegree, pixToFocalPlane[d]["x"], pixToFocalPlane[d]["y"]
+                )
+                ccdToFP = ast.PolyMap(
+                    forwardDetCoeffs,
+                    2,
+                    "IterInverse=1, TolInverse=%s, NIterInverse=%s"
+                    % (self.config.astInversionTolerance / 2.0, self.config.astInversionMaxIter),
+                )
+                zoomMap = ast.ZoomMap(2, scaleConvert)
+                fullDetMap = normMap.then(ccdToFP).then(zoomMap)
+                ccdToFPMapping = TransformPoint2ToPoint2(fullDetMap)
+                detectorBuilder.setTransformFromPixelsTo(FOCAL_PLANE, ccdToFPMapping)
 
         outputCamera = cameraBuilder.finish()
 

@@ -2418,7 +2418,6 @@ class GbdesAstrometricFitTask(pipeBase.PipelineTask):
                 mapParams,
                 mapTemplate,
                 exposureInfo.detectors,
-                exposureInfo.visits,
                 inputCamera,
             )
         else:
