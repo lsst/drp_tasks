@@ -31,10 +31,16 @@ from lsst.afw.cameraGeom import FIELD_ANGLE, FOCAL_PLANE, PIXELS, Camera
 from lsst.afw.geom import TransformPoint2ToPoint2
 from lsst.geom import degrees
 import lsst.pipe.base as pipeBase
+from collections import defaultdict
+from astropy.table import Table, vstack
+
 
 __all__ = [
     "BuildCameraFromAstrometryConfig",
     "BuildCameraFromAstrometryTask",
+    "AstrometryCameraInputSelectionConfig",
+    "AstrometryCameraInputSelectionConnections",
+    "AstrometryCameraInputSelectionTask",
 ]
 
 # Set up global variable to use in minimization callback.
@@ -136,22 +142,23 @@ def _z_function_dy(params, x, y, order=4):
     return z
 
 
-class AstrometryCameraInputSelectionConnections(pipeBase.PipelineTaskConnections, dimensions=("instrument")):
+class AstrometryCameraInputSelectionConnections(pipeBase.PipelineTaskConnections, dimensions=("instrument",)):
     visit_detector_table = pipeBase.connectionTypes.Input(
         doc="Table with estimate of seeing for each detector.",
         name="preliminary_visit_detector_table",
         storageClass="ArrowAstropy",
         dimensions=("instrument",),
+        deferLoad=True,
     )
-    isolated_star_association = pipeBase.connnectionTypes.Input(
+    isolated_star_association = pipeBase.connectionTypes.Input(
         doc="Catalog of isolated stars",
-        name="isolated_star_associations",
+        name="isolated_star_association",
         storageClass="ArrowAstropy",
         dimensions=("instrument", "tract", "skymap"),
         deferLoad=True,
         multiple=True,
     )
-    isolated_star = pipeBase.connnectionTypes.Input(
+    isolated_star = pipeBase.connectionTypes.Input(
         doc="Catalog of individual sources for isolated stars",
         name="isolated_star",
         storageClass="ArrowAstropy",
@@ -159,35 +166,42 @@ class AstrometryCameraInputSelectionConnections(pipeBase.PipelineTaskConnections
         deferLoad=True,
         multiple=True,
     )
+    selectedVisits = pipeBase.connectionTypes.Output(
+        doc="Selected input visits for building the astrometry camera.",
+        name="astrometry_camera_input",
+        storageClass="ArrowAstropy",
+        dimensions=("instrument", "physical_filter"),
+        multiple=True,
+    )
 
 class AstrometryCameraInputSelectionConfig(pipeBase.PipelineTaskConfig,
                                            pipelineConnections=AstrometryCameraInputSelectionConnections):
     """Configuration for AstrometryCameraInputSelectionTask."""
 
-    nStarPerTract = lsst.pex.Config.Field(
+    nStarPerTract = lsst.pex.config.Field(
         doc=('Threshold for number of stars per tract. Default is approximately 100 stars per LSSTCam'
              'detector.'),
         dtype=int,
         default=4000,
     )
-    seeingThreshold = lsst.pex.Config.Field(
-        doc="Median seeing threshold above which visits will be rejected."
+    seeingThreshold = lsst.pex.config.Field(
+        doc="Median seeing threshold above which visits will be rejected.",
         dtype=float,
-        default=1.8,
+        default=1.2,
     )
-    nVisits = lsst.pex.Config.Field(
-        doc=("Minimum number of overlapping visits required to include a given field.")
+    nVisits = lsst.pex.config.Field(
+        doc=("Minimum number of overlapping visits required to include a given field."),
         dtype=int,
         default=20,
     )
-    nDetectors = lsst.pex.Config.Field(
+    nDetectors = lsst.pex.config.Field(
         doc="Minimum number of detectors per visit with sources that can be included in fit.",
         dtype=int,
-        default=120,
+        default=130,
     )
-    nSourceColumn = lsst.pex.Config.Field(
+    nSourceColumn = lsst.pex.config.Field(
         doc="TODO",
-        dtype=float,
+        dtype=str,
         default="nsource_",
     )
 
@@ -202,37 +216,131 @@ class AstrometryCameraInputSelectionTask(pipeBase.PipelineTask):
         inputs = butlerQC.get(inputRefs)
 
         isolated_star_association = inputs.pop("isolated_star_association")
-        input_tracts = np.array([inputCat.dataId["tract"] for inputCat in isolated_star_association])
-        isolated_star_association = [isolated_star_association[t] for t in input_tracts.argsort()]
+        input_tracts_isa = np.array([inputCat.dataId["tract"] for inputCat in isolated_star_association])
+        isolated_star_association = [isolated_star_association[t] for t in input_tracts_isa.argsort()]
+        inputs['isolated_star_association'] = isolated_star_association
 
         isolated_star = inputs.pop("isolated_star")
-        input_tracts = np.array([inputCat.dataId["tract"] for inputCat in isolated_star])
-        isolated_star = [isolated_star[t] for t in input_tracts.argsort()]
+        input_tracts_is = np.array([inputCat.dataId["tract"] for inputCat in isolated_star])
+        isolated_star = [isolated_star[t] for t in input_tracts_is.argsort()]
+        inputs['isolated_star'] = isolated_star
+        if not (input_tracts_isa == input_tracts_is).all():
+            raise RuntimeError("these should match")
 
-        output = self.run(inputs, isolated_star_association, isolated_star)
-        # Do I need to loop over bands?
-        butlerQC.put(output, outputRefs)
+        output = self.run(**inputs)
+        missingFilters = []
+        import ipdb; ipdb.set_trace()
+        outputRefDict = {outputRef.dataId['physical_filter']: outputRef for outputRef in outputRefs}
+        for outputFilter, outputTable in output:
+            if len(output[outputFilter]) > 0:
+                butlerQC.put(outputTable, outputRefDict[outputFilter])
+            else:
+                missingFilters.append(outputFilter)
+
+        if missingFilters:
+            e = RuntimeError(f"Filter(s) {','.join(missingFilters)} have an insufficient number of visits meeting the quality cuts")
+            error = pipeBase.AnnotatedPartialOutputsError.annotate(e, self, log=self.log)
+            raise error from e
 
     def run(self, visit_detector_table, isolated_star_association, isolated_star):
 
-        all_association_columns = catalog_ref.makeComponentRef("columns").get()
-        needed_columns = [col for col in all_association_columns if self.config.nSourceCol in col]
-        possibleTracts = []
-        goodBands = []
-        for tract, catalog_ref in isolated_star_association.items():
-            if tract % 5 == 0:
+        all_association_columns = isolated_star_association[0].get().colnames
+        needed_columns = [col for col in all_association_columns if self.config.nSourceColumn in col]
+        needed_columns.append('isolated_star_id')
+
+        candidateVisitDetectors = defaultdict(list)
+        for c, catalog_ref in enumerate(isolated_star_association):
+            tract = catalog_ref.dataId['tract']
+            if tract % 50 == 0:
                 print(f"processing tract {tract}")
             # First, check if this tract has enough sources to be useful:
             preliminary_catalog = catalog_ref.get(parameters={"columns": needed_columns})
-            if len(preliminary_catalog) < self.config.nSourcesPerTract:
+            if len(preliminary_catalog) < self.config.nStarPerTract:
+                self.log.debug(f"Tract {tract} has too few stars: {len(preliminary_catalog)}")
                 continue
-            if preliminary_catalog.max < self.config.nVisits:
+            perBandMax = np.array([preliminary_catalog[col].max() for col in preliminary_catalog.columns])
+            if perBandMax.max() < self.config.nVisits:
                 # No band has enough visits to be useful.
+                self.log.debug(f"Tract {tract} has too few visits per star: {perBandMax.max()}")
                 continue
-            possibleTracts.append(tract)
-            goodBands.append(preliminary_catalog.max(axis=0) > self.config.nVisits)
 
-        import ipdb; ipdb.set_trace()
+            # If the tract passes cuts, load the sources:
+            isolated_star_cat = isolated_star[c].get(parameters={"columns": ['visit', 'detector', 'obj_index', 'band', 'physical_filter']})
+            isolated_star_cat['isolated_star_id'] = preliminary_catalog[isolated_star_cat['obj_index']]['isolated_star_id']
+            for band in np.unique(isolated_star_cat['physical_filter']):
+                bandInds = isolated_star_cat['physical_filter'] == band
+                visitDetectorSourceCounts = preliminary_catalog[isolated_star_cat[bandInds]['obj_index']][self.config.nSourceColumn + band]
+                goodSources = visitDetectorSourceCounts > self.config.nVisits
+                candidateVisitDetectors[band].append(isolated_star_cat[bandInds][goodSources][['visit', 'detector', 'isolated_star_id']])
+    
+        visDetTable = visit_detector_table.get(parameters={"columns": ['visitId', 'detectorId', 'seeing']})
+        visDetTable.add_index(['visitId', 'detectorId'])
+
+        outputTables = {}
+        for band, sourceList in candidateVisitDetectors.items():
+            bandSources = vstack(sourceList)
+            bandVisitDetectors = np.unique(bandSources[['visit', 'detector']])
+            self.log.info(f"Processing {band} band with {len(np.unique(bandVisitDetectors['visit']))} initial visits.")
+
+            bandVisDetInfo = visDetTable.loc.with_index("visitId", "detectorId")[list(map(tuple, bandVisitDetectors))]
+            goodSeeingInds = bandVisDetInfo['seeing'] < self.config.seeingThreshold
+            self.log.info(f"Keeping {goodSeeingInds.sum()} out of {len(goodSeeingInds)} detectors with seeing below {self.config.seeingThreshold} asec.")
+            
+            visits, detectorInverse, detectorCounts = np.unique(bandVisitDetectors[goodSeeingInds]['visit'], return_inverse=True, return_counts=True, sorted=True)
+            meanSeeing = np.zeros(len(visits))
+            np.add.at(meanSeeing, detectorInverse, bandVisDetInfo[goodSeeingInds]['seeing'])
+            meanSeeing /= detectorCounts
+            
+            selectedVisits = visits[detectorCounts > self.config.nDetectors]
+            self.log.info(f"Keeping {len(selectedVisits)} out of {len(visits)} visits with data from at least {self.config.nDetectors} detectors per visit.")
+
+            # Each visit needs to share stars with lots of other visits. Find the average number of times
+            # that a visit's stars have been observed, and iteratively cut any that do not meet the 
+            # config threshold.
+            nCutVisits = 1
+            interimSelectedVisits = selectedVisits.copy()
+            while nCutVisits > 0:
+                # Calculate how many times each star is observed.
+                selectedBandSources = bandSources[np.isin(bandSources['visit'], interimSelectedVisits)]
+                sources, sourceInverse, sourceCounts = np.unique(selectedBandSources['isolated_star_id'], return_inverse=True, return_counts=True)
+                bandSourceCounts = sourceCounts[sourceInverse]
+
+                # Get the mean for each visit.
+                reorderedSelectedVisits, visitId = np.unique(selectedBandSources['visit'], return_inverse=True)
+                perVisitMeanCounts = np.zeros(len(interimSelectedVisits))
+                nSources = np.zeros(len(interimSelectedVisits))
+                np.add.at(perVisitMeanCounts, visitId, bandSourceCounts)
+                np.add.at(nSources, visitId, 1)
+                perVisitMeanCounts /= nSources
+
+                # Cut visits whose stars are not in enough other visits.
+                tooFewVisits = perVisitMeanCounts < self.config.nVisits
+                nCutVisits = tooFewVisits.sum()
+                if nCutVisits > 0:
+                    try:
+                        self.log.info("Cutting visits " + ",".join(reorderedSelectedVisits[tooFewVisits].value.astype(str)))
+                    except:
+                        import ipdb; ipdb.set_trace()
+                interimSelectedVisits = reorderedSelectedVisits[~tooFewVisits]
+            
+            finalVisits = interimSelectedVisits
+            if len(finalVisits) < self.config.nVisits:
+                self.log.warning(f"Band {band} does not have enough visits meeting the required thresholds.")
+            self.log.info(f"Keeping {len(finalVisits)} out of {len(selectedVisits)} with an average of at least {self.config.nVisits} matches per source.")
+            selectedInds = np.searchsorted(visits, finalVisits, side='left')
+            finalDetectorCounts = detectorCounts[selectedInds]
+            finalSeeing = meanSeeing[selectedInds]
+
+            bandTable = Table({'visit': finalVisits,
+                               'nDetectors': finalDetectorCounts,
+                               'meanSeeing': finalSeeing,
+                               'meanOverlap': perVisitMeanCounts})
+            outputTables[band] = bandTable
+        return outputTables
+
+
+
+
 
 class BuildCameraFromAstrometryConfig(lsst.pex.config.Config):
     """Configuration for BuildCameraTask."""
